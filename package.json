@@ -1,0 +1,14 @@
+{
+  "name": "strategy-runtime-tooling",
+  "private": true,
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "openspec": "openspec",
+    "openspec:validate": "openspec validate --all --strict --no-interactive"
+  },
+  "devDependencies": {
+    "@fission-ai/openspec": "1.6.0"
+  }
+}
