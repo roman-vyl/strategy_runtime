@@ -57,7 +57,10 @@ The router SHALL select the Engine use case from `position_open`.
 ### Requirement: Live-entry mapping and result are exact
 The router SHALL build the live-entry request from the current processing unit
 without transmitting Runtime-owned instance identity and SHALL preserve
-Engine's `plans_by_side` calculation as one typed recipe.
+Engine's `plans_by_side` calculation as one typed recipe. Every non-null
+`LiveEntryPlan` SHALL contain a non-empty, finite, positive exact-decimal
+`initial_take_price`; a missing or null take SHALL be rejected before the plan
+can enter projected Runtime state or future ABI reconciliation.
 
 #### Scenario: Map the live-entry request
 - **WHEN** a closed position is routed
@@ -70,7 +73,23 @@ Engine's `plans_by_side` calculation as one typed recipe.
 - **THEN** the projection's long plan comes from the `long` mapping entry
 - **AND** its short plan comes from the `short` mapping entry
 - **AND** absent or null side entries remain null
+- **AND** every present plan contains canonical positive initial take text
 - **AND** the source processing item is retained
+
+#### Scenario: Reject a null initial take
+- **WHEN** an Engine payload contains a live-entry plan whose `initial_take_price` is null
+- **THEN** Runtime rejects the plan as malformed
+- **AND** no entry recipe can be sent to ABI reconciliation
+
+#### Scenario: Reject a missing initial take
+- **WHEN** an Engine payload contains a live-entry plan without `initial_take_price`
+- **THEN** Runtime rejects the plan as malformed
+- **AND** no entry recipe can be sent to ABI reconciliation
+
+#### Scenario: Reject an invalid initial take decimal
+- **WHEN** an Engine payload contains an empty, non-finite, zero, or negative `initial_take_price`
+- **THEN** Runtime rejects the plan as malformed
+- **AND** no entry recipe can be sent to ABI reconciliation
 
 ### Requirement: Open-trade mapping requires frozen entry context
 The router SHALL call open-trade projection only when the runtime state and

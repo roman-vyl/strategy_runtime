@@ -265,6 +265,12 @@ ReconcileDesiredEntryPackage
 
 `desired_entry = null` means no pending entry package should remain for this intent.
 
+An existing plan always contains a positive exact-decimal
+`initial_take_price`. Missing or null take is malformed Engine output, not an
+alternative entry mode. Runtime must fail closed before forming an `APPLY` or
+`REPLACE` command, so reconciliation never sends ABI an entry package without
+take.
+
 ABI decides whether the exchange implementation requires create, amend, cancel-and-recreate, or another sequence.
 
 ## 14. Atomic attached entry package
@@ -278,6 +284,9 @@ entry order
 ```
 
 Runtime sends the desired entry, stop, take, side, and `risk_multiplier` as one semantic unit.
+
+The package is indivisible: entry without initial take is architecturally
+invalid in the first version.
 
 ABI owns:
 

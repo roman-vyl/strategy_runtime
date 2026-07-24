@@ -195,6 +195,10 @@ EntryRecipe
 ```
 
 `long_plan` and `short_plan` are each a complete Engine plan or `null`.
+Every present plan contains mandatory entry, stop, and take prices.
+`initial_take_price` is canonical positive exact-decimal text; missing, null,
+empty, non-finite, zero, or negative values fail closed at `LiveEntryPlan`
+construction.
 
 When the future state applier accepts this projection, the new response will
 replace the complete mutable recipe snapshot. A returned `null` side explicitly

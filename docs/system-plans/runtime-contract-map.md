@@ -204,9 +204,22 @@ Engine port response:
 ```text
 LiveEntryProjectionResponse
 └── plans_by_side
-    ├── long
-    └── short
+    ├── long: LiveEntryPlan | null
+    └── short: LiveEntryPlan | null
+
+LiveEntryPlan
+├── side
+├── source_plan_bar_open_time_ms
+├── planned_entry_price
+├── initial_stop_price
+├── initial_take_price
+└── locked_exit_profile
 ```
+
+`initial_take_price` is required canonical positive exact-decimal text. A side
+may have no plan, but an existing plan cannot omit take or carry a null, empty,
+non-finite, zero, or negative take. Malformed plans fail before projected
+Runtime state is created.
 
 The scalar router binds the calculation to its existing local source and
 returns:

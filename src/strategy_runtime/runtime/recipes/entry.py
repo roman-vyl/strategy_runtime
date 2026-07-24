@@ -1,6 +1,7 @@
 """Immutable potential-entry recipe models returned by Strategy Engine."""
 
 from dataclasses import dataclass
+from decimal import Decimal
 
 from strategy_runtime.shared.decimal_text import normalize_decimal_text
 
@@ -11,7 +12,7 @@ class LiveEntryPlan:
     source_plan_bar_open_time_ms: int
     planned_entry_price: str
     initial_stop_price: str
-    initial_take_price: str | None
+    initial_take_price: str
     locked_exit_profile: str
 
     def __post_init__(self) -> None:
@@ -25,10 +26,10 @@ class LiveEntryPlan:
         object.__setattr__(
             self, "initial_stop_price", normalize_decimal_text(self.initial_stop_price)
         )
-        if self.initial_take_price is not None:
-            object.__setattr__(
-                self, "initial_take_price", normalize_decimal_text(self.initial_take_price)
-            )
+        initial_take_price = normalize_decimal_text(self.initial_take_price)
+        if Decimal(initial_take_price) <= 0:
+            raise ValueError("initial_take_price must be positive")
+        object.__setattr__(self, "initial_take_price", initial_take_price)
         if not self.locked_exit_profile.strip():
             raise ValueError("locked_exit_profile must be non-empty")
 
