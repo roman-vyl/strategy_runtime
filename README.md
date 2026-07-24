@@ -1,81 +1,114 @@
 # Strategy Runtime
 
-`strategy_runtime` is the live orchestration service of the new BBB architecture.
+`strategy_runtime` provides the production-composed committed-bar utility
+contour and an independently callable semantic core through Strategy Engine
+projection.
 
-It does not calculate strategies, store market candles, run backtests, or communicate with the exchange directly. Its role is to coordinate active live strategy specs:
+## Current planning documents
+
+The active high-level design is indexed in
+[`docs/system-plans/README.md`](docs/system-plans/README.md). The current semantic
+Runtime sequence is defined by the master plan, state/lifecycle plan, contract
+map, and the active OpenSpec changes for the state repository, open-position
+resolver, and use-case router.
+
+## Production composition boundary
 
 ```text
-Market Data Service
-        |
-        | closed canonical bar webhook
-        v
-Strategy Runtime
-        |
-        | active spec + configured ticker/timeframe
-        v
-Strategy Engine
-        |
-        | current-bar calculation result
-        v
-Strategy Runtime
-        |
-        | every successful current-point result
-        v
-ABI Executor
-        | reconcile desired result with current orders/positions
-        v
-Bybit
+MDS committed-bar webhook
+→ Deployment Catalog
+→ Deployment Selector
+→ CommittedBarOrchestrator
+→ StrategyCycleHandoffBoundary
 ```
 
-The repository currently contains only the architecture and contract boundaries that have been agreed. Runtime v1 binds each active spec only to its explicitly supplied `ticker + timeframe` base stream; non-base stream readiness is a documented limitation. Implementation structure, persistence, retries, idempotency, deployment, and framework choices are intentionally not fixed yet.
+The final boundary emits one immutable `StrategyBarProcessingUnit` for every deployment whose required `enabled` flag is `true` that exactly matches the committed bar's instrument and base timeframe.
 
-Documents:
+The utility contour deliberately does not decide or execute:
 
-- `docs/architecture/intent.md`
-- `docs/architecture/system-interactions.md`
-- `docs/architecture/contracts.md`
+- Strategy Engine routes or requests;
+- ABI state interpretation;
+- position lifecycle;
+- trading commands or exchange operations.
 
-## Architecture documents
+A downstream sink can be attached to `StrategyCycleHandoffBoundary` without
+changing the utility contour. The default production composition does not attach
+the semantic core and therefore treats this boundary as its terminal acceptance
+point.
 
-- `docs/architecture/intent.md`
-- `docs/architecture/system-interactions.md`
-- `docs/architecture/contracts.md`
-- `docs/architecture/open-questions.md`
-- `docs/architecture/api-and-data-structure-audit.md`
-- `docs/architecture/implementation-gates.md`
-- `docs/architecture/runtime-journal.md`
+## Implemented components
 
-## Pre-implementation gate
+- FastAPI service bootstrap and health endpoints;
+- committed-bar webhook ingress with background processing;
+- immutable filesystem deployment catalog;
+- deployment-local `enabled` control embedded in each Runtime deployment config;
+- exact committed-bar deployment selection;
+- deterministic per-deployment fan-out and failure isolation;
+- best-effort append-only JSONL processing journal;
+- terminal strategy-cycle handoff boundary.
 
-`Implementation Gate 01` is mandatory: before Strategy Runtime implementation begins, the Strategy Engine runtime-facing request and neutral current-point response contracts must be designed and approved. See `docs/architecture/api-and-data-structure-audit.md`.
+## Local setup
 
-## Cross-repository gates
+```bash
+make install-dev
+make verify
+make run
+```
 
-Strategy Runtime implementation is blocked by explicit gates for Strategy Engine contract adaptation, ABI current-point reconciliation and execution-lifecycle audit, MDS stream-state transition notification, ABI scoped cancellation, and recovery after a stream returns to `ready`. See `docs/architecture/implementation-gates.md`.
+`make install-dev` creates a repository-local `.venv` with Python 3.12.
+All other Make targets require that exact environment and never fall back to a
+system `python` or `python3`.
 
-## V1 activation behaviour
+Default configuration is documented in `config/runtime.env.example`.
 
-- Deactivating a strategy removes it from future Engine routing and requests cancellation of its pending entry orders in ABI.
-- Open positions and their protective orders are preserved.
-- Reactivating a strategy does not trigger an immediate calculation in v1; it waits for the next webhook of its configured base stream.
+## HTTP surface
 
-## V1 file-backed registry
+```text
+GET  /health/live
+GET  /health/ready
+POST /v1/webhooks/closed-bar
+```
 
-- Strategy specs are discovered from a configured folder.
-- A separate JSON activation registry persists `is_active` overrides.
-- A newly discovered spec receives `is_active=true` by default during the next webhook reconciliation.
-- Explicit API deactivation persists across restarts and overrides that default.
-- Manual spec-file removal is observed only on the next MDS webhook reconciliation.
-- V1 has no managed delete operation; the future lifecycle is `deactivate via is_active -> cancel pending entries -> delete through API/frontend -> remove file`.
-- Runtime v1 has no standalone semantic spec validator; the initial smoke test relies on specs prepared and validated by the existing Workbench/frontend or CLI path. Extraction of an independent configurator/validator is tracked as an implementation gate.
-- `strategy_id` identifies a strategy family, `instance_id` is the stable live-instance key used by the activation registry, and `config_hash` fingerprints the current configuration without controlling activation.
-## V1 runtime journal
+Example webhook:
 
-- Runtime writes typed append-only JSONL events rather than free-form text records.
-- One incoming webhook creates one `flow_id`; the semantic path is represented by multiple immutable events linked by that flow.
-- Events are classified as `trading` or `technical` and carry an independent severity.
-- The local journal is a future-compatible event source for a standalone Central Journal, but it is not used to restore Runtime state.
-- Runtime journals only its own orchestration boundaries; Engine internals remain in Strategy Engine and exchange execution remains in ABI.
+```bash
+curl -X POST http://127.0.0.1:8093/v1/webhooks/closed-bar \
+  -H 'content-type: application/json' \
+  -d '{"instrument":"BTCUSDT.P","timeframe":"5m","open_time_ms":1784106300000}'
+```
 
+The webhook acknowledges accepted work before background orchestration completes.
 
-- [Architecture master plan](docs/architecture/master-plan.md)
+## Documentation
+
+- [`docs/system-plans/README.md`](docs/system-plans/README.md) — current
+  architecture index.
+- [`docs/system-plans/runtime-master-plan.md`](docs/system-plans/runtime-master-plan.md)
+  — Runtime boundaries, implemented stopping point, and open architecture gates.
+- [`docs/system-plans/runtime-state-and-lifecycle-plan.md`](docs/system-plans/runtime-state-and-lifecycle-plan.md)
+  — state ownership and lifecycle design.
+- [`docs/system-plans/runtime-contract-map.md`](docs/system-plans/runtime-contract-map.md)
+  — current module-to-module contracts.
+
+## Implemented semantic core boundary
+
+The implemented Runtime core now covers the complete forward semantic path from one utility-selected deployment/bar unit through Strategy Engine projection:
+
+```text
+StrategyBarProcessingUnit
+→ StrategyInstanceRuntimeStateRepository.get_or_create
+→ ABI open-position lookup
+→ route by position_open
+→ live-entry or open-trade Strategy Engine projection
+→ validated typed projection result
+```
+
+This boundary stops before applying Engine results. The semantic core does not
+mutate `StrategyInstanceRuntimeState`, persist entry or management recipes,
+construct ABI execution commands, or call ABI execution endpoints. State
+application and execution behavior are outside the implemented semantic core and
+remain explicit architecture gates in the System Plans.
+
+The semantic core and ports are implemented and tested. The production
+composition contains no ABI or Strategy Engine HTTP adapters and no physical
+SQLite state repository.
