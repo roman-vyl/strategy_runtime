@@ -175,6 +175,11 @@ OpenTradeProjectedStrategyInstance
     └── diagnostics
 ```
 
+The open-trade Engine request carries the frozen entry recipe and
+`entry_bar_open_time_ms`. Engine v1 uses the recipe's `planned_entry_price` for
+position-management calculation. ABI-supplied `executed_entry_price` remains a
+Runtime execution fact and is not transmitted to Engine.
+
 These projected objects are the terminal result of the currently implemented
 semantic contour.
 

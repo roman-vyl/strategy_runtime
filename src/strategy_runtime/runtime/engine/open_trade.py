@@ -18,7 +18,6 @@ class OpenTradeProjectionRequest:
     target_bar_open_time_ms: int
     entry_recipe: EntryRecipe
     entry_bar_open_time_ms: int
-    executed_entry_price: str
 
 
 @dataclass(frozen=True, slots=True)

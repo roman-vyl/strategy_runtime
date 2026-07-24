@@ -66,13 +66,14 @@ OpenTradeProjectionRequest
     ├── source_plan_bar_open_time_ms
     ├── entry_bar_open_time_ms
     ├── planned_entry_price
-    ├── executed_entry_price
     ├── initial_stop_price
     ├── initial_take_price
     └── locked_exit_profile
 ```
 
-It contains no Runtime trade-cycle identity.
+It contains no Runtime trade-cycle identity. Engine v1 calculates position
+management from frozen `planned_entry_price`; `executed_entry_price` remains a
+Runtime/ABI execution fact and does not cross this seam.
 
 ### 4.2 Open-trade response
 

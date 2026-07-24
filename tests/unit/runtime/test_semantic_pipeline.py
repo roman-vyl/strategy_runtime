@@ -3,7 +3,10 @@ from dataclasses import replace
 import pytest
 
 from strategy_runtime.runtime.engine.live_entry import LiveEntryProjectionResponse
-from strategy_runtime.runtime.engine.open_trade import OpenTradeProjectionResponse
+from strategy_runtime.runtime.engine.open_trade import (
+    OpenTradeProjectionRequest,
+    OpenTradeProjectionResponse,
+)
 from strategy_runtime.runtime.open_position.errors import (
     OpenPositionLookupProtocolError,
     OpenPositionLookupUnavailable,
@@ -281,7 +284,24 @@ def test_router_projects_one_open_trade_from_frozen_entry_context() -> None:
     assert open_engine.requests[0].strategy_id == "ema_pullback"
     assert open_engine.requests[0].target_bar_open_time_ms == 1000
     assert open_engine.requests[0].entry_recipe == state.current_trade_cycle.entry_recipe
+    assert not hasattr(open_engine.requests[0], "executed_entry_price")
     assert state.current_trade_cycle.position_management_recipe is None
+
+
+def test_open_trade_request_contract_rejects_executed_entry_price() -> None:
+    payload = {
+        "strategy_id": "ema_pullback",
+        "raw_spec": {"ema": 200},
+        "ticker": "BTCUSDT.P",
+        "base_timeframe": "5m",
+        "target_bar_open_time_ms": 1000,
+        "entry_recipe": EntryRecipe(plan("long"), None),
+        "entry_bar_open_time_ms": 950,
+        "executed_entry_price": "100.5",
+    }
+
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        OpenTradeProjectionRequest(**payload)
 
 
 def test_router_does_not_call_engine_when_open_trade_context_is_missing() -> None:

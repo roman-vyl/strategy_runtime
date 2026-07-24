@@ -70,7 +70,6 @@ class StrategyUseCaseRouter:
             target_bar_open_time_ms=unit.committed_bar.open_time_ms,
             entry_recipe=cycle.entry_recipe,
             entry_bar_open_time_ms=resolved.entry_bar_open_time_ms,
-            executed_entry_price=resolved.executed_entry_price,
         )
         open_trade_response = self._open_trade_engine.project_open_trade(open_trade_request)
         return OpenTradeProjectedStrategyInstance(

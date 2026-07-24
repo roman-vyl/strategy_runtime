@@ -257,13 +257,17 @@ OpenTradeProjectionRequest
 ├── base_timeframe
 ├── target_bar_open_time_ms
 ├── entry_recipe
-├── entry_bar_open_time_ms
-└── executed_entry_price
+└── entry_bar_open_time_ms
 ```
 
 The request contains no `trade_id` and no `trade_cycle_id`. The Runtime cycle
 identity is not required by the synchronous Engine calculation and remains
 inside `CurrentTradeCycle`.
+
+Strategy Engine v1 calculates position management from the frozen plan's
+`planned_entry_price`. The resolver-supplied `executed_entry_price` remains a
+Runtime/ABI execution fact and an open-position invariant, but it does not cross
+the Runtime → Engine boundary.
 
 Engine port response:
 

@@ -94,7 +94,9 @@ can enter projected Runtime state or future ABI reconciliation.
 ### Requirement: Open-trade mapping requires frozen entry context
 The router SHALL call open-trade projection only when the runtime state and
 resolved facts contain complete immutable entry context, and it SHALL NOT send
-Runtime-owned instance identity to Engine.
+Runtime-owned instance identity or `executed_entry_price` to Engine. Strategy
+Engine SHALL calculate position management from the frozen
+`planned_entry_price`; the executed price remains a Runtime/ABI execution fact.
 
 #### Scenario: Reject missing context before Engine
 - **WHEN** the current trade cycle is absent, its entry recipe is not frozen, or either execution fact is absent
@@ -105,7 +107,9 @@ Runtime-owned instance identity to Engine.
 - **WHEN** an open position has complete context
 - **THEN** the request contains strategy ID, raw spec, market, base timeframe, and target bar
 - **AND** contains the frozen entry recipe
-- **AND** contains resolver-supplied entry bar and executed entry price
+- **AND** contains the resolver-supplied entry bar
+- **AND** uses the frozen recipe's planned entry price as Engine calculation input
+- **AND** does not contain executed entry price
 - **AND** contains no Runtime strategy-instance ID, Runtime cycle ID, or exchange identifier
 
 ### Requirement: Position-management diagnostics are opaque and immutable
