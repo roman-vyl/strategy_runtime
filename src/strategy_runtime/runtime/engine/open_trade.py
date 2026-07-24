@@ -12,7 +12,6 @@ from strategy_runtime.utility.deployment_catalog.models import FrozenJsonValue
 @dataclass(frozen=True, slots=True)
 class OpenTradeProjectionRequest:
     strategy_id: str
-    instance_id: str
     raw_spec: Mapping[str, FrozenJsonValue]
     ticker: str
     base_timeframe: str
@@ -24,11 +23,6 @@ class OpenTradeProjectionRequest:
 
 @dataclass(frozen=True, slots=True)
 class OpenTradeProjectionResponse:
-    strategy_id: str
-    instance_id: str
-    ticker: str
-    base_timeframe: str
-    target_bar_open_time_ms: int
     desired_protection: DesiredProtection
     close_signal: CloseSignal
     diagnostics: Mapping[str, FrozenJsonValue]

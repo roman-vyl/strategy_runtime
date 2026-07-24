@@ -17,7 +17,6 @@ from strategy_runtime.runtime.orchestrator.orchestrator import StrategyRuntimeOr
 from strategy_runtime.runtime.recipes.entry import EntryRecipe, LiveEntryPlan
 from strategy_runtime.runtime.recipes.position_management import CloseSignal, DesiredProtection
 from strategy_runtime.runtime.routing.errors import (
-    EngineResponseBindingError,
     OpenTradeContextUnavailable,
     StrategyEngineProjectionUnavailable,
     StrategyInstanceBindingError,
@@ -109,32 +108,20 @@ class LiveEngine:
     def __init__(
         self,
         *,
-        mismatch_field: str | None = None,
         error: Exception | None = None,
     ) -> None:
         self.requests: list[object] = []
-        self.mismatch_field = mismatch_field
         self.error = error
 
     def project_live_entry(self, request):
         self.requests.append(request)
         if self.error is not None:
             raise self.error
-        values = {
-            "strategy_id": request.strategy_id,
-            "instance_id": request.instance_id,
-            "ticker": request.ticker,
-            "base_timeframe": request.base_timeframe,
-            "target_bar_open_time_ms": request.target_bar_open_time_ms,
-        }
-        if self.mismatch_field is not None:
-            values[self.mismatch_field] = (
-                -1 if self.mismatch_field == "target_bar_open_time_ms" else "mismatch"
-            )
         return LiveEntryProjectionResponse(
-            **values,
-            long_plan=plan("long"),
-            short_plan=None,
+            plans_by_side={
+                "long": plan("long"),
+                "short": None,
+            }
         )
 
 
@@ -143,31 +130,17 @@ class OpenEngine:
         self,
         *,
         diagnostics=None,
-        mismatch_field: str | None = None,
         error: Exception | None = None,
     ) -> None:
         self.requests: list[object] = []
         self.diagnostics = diagnostics or {"phase": "protected", "bars_in_trade": 3}
-        self.mismatch_field = mismatch_field
         self.error = error
 
     def project_open_trade(self, request):
         self.requests.append(request)
         if self.error is not None:
             raise self.error
-        values = {
-            "strategy_id": request.strategy_id,
-            "instance_id": request.instance_id,
-            "ticker": request.ticker,
-            "base_timeframe": request.base_timeframe,
-            "target_bar_open_time_ms": request.target_bar_open_time_ms,
-        }
-        if self.mismatch_field is not None:
-            values[self.mismatch_field] = (
-                -1 if self.mismatch_field == "target_bar_open_time_ms" else "mismatch"
-            )
         return OpenTradeProjectionResponse(
-            **values,
             desired_protection=DesiredProtection("99.5", None),
             close_signal=CloseSignal(False),
             diagnostics=self.diagnostics,
@@ -281,8 +254,13 @@ def test_router_projects_one_live_entry_without_mutating_state() -> None:
     result = router(live_engine=live_engine).route(item)
 
     assert isinstance(result, LiveEntryProjectedStrategyInstance)
+    assert result.source is item
     assert result.entry_recipe.long_plan == plan("long")
+    assert result.entry_recipe.short_plan is None
     assert len(live_engine.requests) == 1
+    assert not hasattr(live_engine.requests[0], "instance_id")
+    assert live_engine.requests[0].strategy_id == "ema_pullback"
+    assert live_engine.requests[0].target_bar_open_time_ms == 1000
     assert state.current_trade_cycle is None
 
 
@@ -297,7 +275,11 @@ def test_router_projects_one_open_trade_from_frozen_entry_context() -> None:
     result = router(open_engine=open_engine).route(item)
 
     assert isinstance(result, OpenTradeProjectedStrategyInstance)
+    assert result.source is item
     assert len(open_engine.requests) == 1
+    assert not hasattr(open_engine.requests[0], "instance_id")
+    assert open_engine.requests[0].strategy_id == "ema_pullback"
+    assert open_engine.requests[0].target_bar_open_time_ms == 1000
     assert open_engine.requests[0].entry_recipe == state.current_trade_cycle.entry_recipe
     assert state.current_trade_cycle.position_management_recipe is None
 
@@ -380,31 +362,27 @@ def test_router_does_not_mask_engine_programming_errors() -> None:
 
 @pytest.mark.parametrize(
     "field",
-    [
-        "strategy_id",
-        "instance_id",
-        "ticker",
-        "base_timeframe",
-        "target_bar_open_time_ms",
-    ],
+    ["strategy_id", "instance_id", "ticker", "base_timeframe", "target_bar_open_time_ms"],
 )
 @pytest.mark.parametrize("branch", ["live", "open"])
-def test_router_rejects_each_engine_echo_mismatch(branch, field) -> None:
+def test_clean_engine_response_dtos_reject_obsolete_echo_fields(branch, field) -> None:
     if branch == "live":
-        item = PositionResolvedStrategyInstance(
-            processing_unit(),
-            resolved_state(position_open=False),
-        )
-        target_router = router(live_engine=LiveEngine(mismatch_field=field))
+        payload = {
+            "plans_by_side": {"long": plan("long"), "short": None},
+            field: "obsolete",
+        }
+        response_type = LiveEntryProjectionResponse
     else:
-        item = PositionResolvedStrategyInstance(
-            processing_unit(),
-            resolved_state(position_open=True, state=frozen_trade_state()),
-        )
-        target_router = router(open_engine=OpenEngine(mismatch_field=field))
+        payload = {
+            "desired_protection": DesiredProtection("99.5", None),
+            "close_signal": CloseSignal(False),
+            "diagnostics": {},
+            field: "obsolete",
+        }
+        response_type = OpenTradeProjectionResponse
 
-    with pytest.raises(EngineResponseBindingError, match=field):
-        target_router.route(item)
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        response_type(**payload)
 
 
 def test_open_trade_diagnostics_are_opaque_and_recursively_immutable() -> None:

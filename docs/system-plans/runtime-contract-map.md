@@ -59,13 +59,12 @@ strategy_id
 - `trade_cycle_id` identifies one Runtime-owned entry-to-close cycle and remains
   internal to Runtime.
 
-The Engine transport field `instance_id` is populated with the exact
-`strategy_instance_id`. It is a field-name alias at the transport boundary, not
-another identity.
+`strategy_instance_id` remains internal to Runtime and ABI and does not cross
+the Strategy Engine live-projection boundary.
 
 No ID is introduced to correlate synchronous repository, resolver, router, or
-Engine projection calls. Typed object containment and the current call stack
-provide that association.
+Engine projection calls. Typed object containment, the scalar call stack, and
+the source `PositionResolvedStrategyInstance` provide that association.
 
 ## 4. State repository contract
 
@@ -191,7 +190,6 @@ Request sent to the Engine port:
 ```text
 LiveEntryProjectionRequest
 ├── strategy_id
-├── instance_id = strategy_instance_id
 ├── raw_spec
 ├── ticker
 ├── base_timeframe
@@ -205,16 +203,13 @@ Engine port response:
 
 ```text
 LiveEntryProjectionResponse
-├── strategy_id
-├── instance_id
-├── ticker
-├── base_timeframe
-├── target_bar_open_time_ms
-├── long_plan
-└── short_plan
+└── plans_by_side
+    ├── long
+    └── short
 ```
 
-After echo validation, the router returns:
+The scalar router binds the calculation to its existing local source and
+returns:
 
 ```text
 LiveEntryProjectedStrategyInstance
@@ -244,7 +239,6 @@ Request sent to the Engine port:
 ```text
 OpenTradeProjectionRequest
 ├── strategy_id
-├── instance_id = strategy_instance_id
 ├── raw_spec
 ├── ticker
 ├── base_timeframe
@@ -262,17 +256,13 @@ Engine port response:
 
 ```text
 OpenTradeProjectionResponse
-├── strategy_id
-├── instance_id
-├── ticker
-├── base_timeframe
-├── target_bar_open_time_ms
 ├── desired_protection
 ├── close_signal
 └── diagnostics
 ```
 
-After echo validation, the router returns:
+The scalar router binds the calculation to its existing local source and
+returns:
 
 ```text
 OpenTradeProjectedStrategyInstance
@@ -286,21 +276,21 @@ OpenTradeProjectedStrategyInstance
 The router copies Engine-owned calculation output without interpreting or
 persisting it.
 
-## 9. Engine response binding
+## 9. Engine calculation-result binding
 
-For both Engine paths, Runtime compares:
+Both Engine paths are scalar and synchronous:
 
-- `strategy_id`;
-- `instance_id`;
-- `ticker`;
-- `base_timeframe`;
-- `target_bar_open_time_ms`.
+```text
+PositionResolvedStrategyInstance
+→ Engine call
+→ calculation-only response
+→ projected object retaining the same source
+```
 
-Every field must equal the originating request. A mismatch raises
-`EngineResponseBindingError`.
-
-Echo fields validate the synchronous response. They are not copied into recipes,
-used to locate source objects, or treated as additional correlation IDs.
+Engine responses contain no strategy, instance, market, timeframe, or
+target-bar echoes. Strict DTO decoding rejects the obsolete echo-bearing shape.
+Runtime's pre-call identity-chain validation remains responsible for binding the
+processing unit, deployment, and runtime state before Engine is invoked.
 
 ## 10. Removed and prohibited contract fields
 
@@ -309,6 +299,7 @@ provenance zoo:
 
 - no `stable_deployment_id`;
 - no manually supplied deployment `strategy_instance_id`;
+- no Runtime `strategy_instance_id` or `instance_id` sent to Engine;
 - no Engine `trade_id`;
 - no Engine-bound `trade_cycle_id`;
 - no `strategy_version` or `compatibility_profile`;

@@ -13,9 +13,5 @@ class StrategyEngineProjectionUnavailable(StrategyProjectionError):
     code = "strategy_engine_projection_unavailable"
 
 
-class EngineResponseBindingError(StrategyProjectionError):
-    code = "engine_response_binding_error"
-
-
 class OpenTradeContextUnavailable(StrategyProjectionError):
     code = "open_trade_context_unavailable"

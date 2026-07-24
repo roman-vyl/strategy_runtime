@@ -11,7 +11,6 @@ from strategy_runtime.utility.deployment_catalog.models import FrozenJsonValue
 @dataclass(frozen=True, slots=True)
 class LiveEntryProjectionRequest:
     strategy_id: str
-    instance_id: str
     raw_spec: Mapping[str, FrozenJsonValue]
     ticker: str
     base_timeframe: str
@@ -20,13 +19,7 @@ class LiveEntryProjectionRequest:
 
 @dataclass(frozen=True, slots=True)
 class LiveEntryProjectionResponse:
-    strategy_id: str
-    instance_id: str
-    ticker: str
-    base_timeframe: str
-    target_bar_open_time_ms: int
-    long_plan: LiveEntryPlan | None
-    short_plan: LiveEntryPlan | None
+    plans_by_side: Mapping[str, LiveEntryPlan | None]
 
 
 class StrategyEngineLiveEntryPort(Protocol):

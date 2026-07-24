@@ -51,7 +51,8 @@ The following semantic components are implemented and tested:
 - `StrategyUseCaseRouter`;
 - typed live-entry and open-trade Engine requests and responses;
 - immutable entry and position-management recipe objects;
-- mandatory Engine response echo validation.
+- strict calculation-only Engine response DTOs bound through local synchronous
+  call context.
 
 The orchestrator remains the coordinator. Each submodule returns to the same
 orchestration method and does not independently advance the pipeline.
@@ -151,8 +152,8 @@ position_open = true
 The router does not interpret the strategy result into ABI commands.
 
 For the live-entry path, the Engine port returns
-`LiveEntryProjectionResponse`. Runtime validates its mandatory echo fields and
-returns:
+`LiveEntryProjectionResponse` containing only `plans_by_side`. Runtime binds
+that calculation to the exact source object held by the scalar call and returns:
 
 ```text
 LiveEntryProjectedStrategyInstance
@@ -162,8 +163,9 @@ LiveEntryProjectedStrategyInstance
 ```
 
 For the open-trade path, the Engine port returns
-`OpenTradeProjectionResponse`. Runtime validates its mandatory echo fields and
-returns:
+`OpenTradeProjectionResponse` containing only desired protection, close signal,
+and diagnostics. Runtime binds that calculation to the same local source object
+and returns:
 
 ```text
 OpenTradeProjectedStrategyInstance
@@ -224,14 +226,17 @@ complete prior management recipe, including explicit `false` and `null` values.
 Both Engine request paths retain:
 
 - strategy identity;
-- `instance_id` mapped from `strategy_instance_id`;
 - `raw_spec`;
 - market ticker and base timeframe;
 - exact `target_bar_open_time_ms`.
 
 The target bar is required for deterministic calculation against the exact committed-bar event.
 
-Engine response identity, market, and target-bar fields are mandatory echo fields. Runtime must compare them to the originating request and reject a mismatched response. Echo fields are not duplicated inside recipes.
+Runtime-owned `strategy_instance_id` does not cross the Engine boundary.
+Live-entry response contains only `plans_by_side`; open-trade response contains
+only desired protection, close signal, and diagnostics. Old responses carrying
+identity, market, timeframe, or target-bar echoes are rejected by strict DTO
+decoding.
 
 No specification, deployment, source-configuration, or market-data hash crosses the Runtime ↔ Engine boundary.
 
@@ -243,13 +248,12 @@ strategy_instance_id
 trade_cycle_id
 ```
 
-`instance_id` in the current Engine transport is only the serialized
-`strategy_instance_id`. It is not independently generated or persisted.
 `target_bar_open_time_ms`, `source_plan_bar_open_time_ms`, and
 `entry_bar_open_time_ms` are temporal coordinates, not business identities.
 
 Runtime does not add IDs or hashes merely to correlate synchronous enrichment
-stages. The call stack and containing typed objects preserve that association.
+stages. The scalar call stack and the source
+`PositionResolvedStrategyInstance` preserve that association.
 
 The following fields are removed from, or prohibited at, the Runtime ↔ Engine
 boundary:

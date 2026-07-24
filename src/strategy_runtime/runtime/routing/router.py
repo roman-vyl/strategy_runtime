@@ -11,7 +11,6 @@ from strategy_runtime.runtime.engine.open_trade import (
 from strategy_runtime.runtime.recipes.entry import EntryRecipe
 from strategy_runtime.runtime.recipes.position_management import PositionManagementRecipe
 from strategy_runtime.runtime.routing.errors import (
-    EngineResponseBindingError,
     OpenTradeContextUnavailable,
     StrategyInstanceBindingError,
 )
@@ -41,19 +40,17 @@ class StrategyUseCaseRouter:
         if not resolved.position_open:
             live_request = LiveEntryProjectionRequest(
                 strategy_id=deployment.strategy_id,
-                instance_id=unit.strategy_instance_id,
                 raw_spec=deployment.raw_spec,
                 ticker=deployment.instrument,
                 base_timeframe=deployment.base_timeframe,
                 target_bar_open_time_ms=unit.committed_bar.open_time_ms,
             )
             live_response = self._live_entry_engine.project_live_entry(live_request)
-            self._validate_echo(live_request, live_response)
             return LiveEntryProjectedStrategyInstance(
                 source=item,
                 entry_recipe=EntryRecipe(
-                    live_response.long_plan,
-                    live_response.short_plan,
+                    live_response.plans_by_side.get("long"),
+                    live_response.plans_by_side.get("short"),
                 ),
             )
 
@@ -67,7 +64,6 @@ class StrategyUseCaseRouter:
             raise OpenTradeContextUnavailable(unit.strategy_instance_id)
         open_trade_request = OpenTradeProjectionRequest(
             strategy_id=deployment.strategy_id,
-            instance_id=unit.strategy_instance_id,
             raw_spec=deployment.raw_spec,
             ticker=deployment.instrument,
             base_timeframe=deployment.base_timeframe,
@@ -77,7 +73,6 @@ class StrategyUseCaseRouter:
             executed_entry_price=resolved.executed_entry_price,
         )
         open_trade_response = self._open_trade_engine.project_open_trade(open_trade_request)
-        self._validate_echo(open_trade_request, open_trade_response)
         return OpenTradeProjectedStrategyInstance(
             source=item,
             position_management_recipe=PositionManagementRecipe(
@@ -100,15 +95,3 @@ class StrategyUseCaseRouter:
             raise StrategyInstanceBindingError(
                 "processing unit and runtime state strategy_instance_id mismatch"
             )
-
-    @staticmethod
-    def _validate_echo(request: object, response: object) -> None:
-        for name in (
-            "strategy_id",
-            "instance_id",
-            "ticker",
-            "base_timeframe",
-            "target_bar_open_time_ms",
-        ):
-            if getattr(request, name) != getattr(response, name):
-                raise EngineResponseBindingError(f"mismatched {name}")
