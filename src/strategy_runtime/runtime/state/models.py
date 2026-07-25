@@ -3,7 +3,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from strategy_runtime.runtime.recipes.entry import EntryRecipe
+from strategy_runtime.runtime.recipes.entry import DesiredEntry
 from strategy_runtime.runtime.recipes.position_management import PositionManagementRecipe
 from strategy_runtime.utility.deployment_catalog.models import FrozenJsonValue, freeze_json
 
@@ -28,8 +28,8 @@ class RegisteredSpecSnapshot:
 @dataclass(frozen=True, slots=True)
 class CurrentTradeCycle:
     trade_cycle_id: str
-    entry_recipe: EntryRecipe
-    entry_recipe_frozen: bool
+    desired_entry: DesiredEntry
+    desired_entry_frozen: bool
     position_management_recipe: PositionManagementRecipe | None = None
 
     def __post_init__(self) -> None:

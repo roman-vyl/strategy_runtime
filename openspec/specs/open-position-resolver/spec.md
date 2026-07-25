@@ -31,8 +31,8 @@ filtering by local lifecycle condition.
 - **THEN** it copies only the state's `strategy_instance_id` into the lookup request
 - **AND** invokes the ABI lookup port exactly once
 
-#### Scenario: Ignore local recipe state as a filter
-- **WHEN** the state has no trade cycle, a working recipe, or frozen entry context
+#### Scenario: Ignore local desired-entry state as a filter
+- **WHEN** the state has no trade cycle, an applied desired entry, or frozen entry context
 - **THEN** the resolver still performs the lookup
 
 ### Requirement: ABI response contains strict current-position facts

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from strategy_runtime.runtime.open_position.models import (
     PositionResolvedStrategyInstanceRuntimeState,
 )
-from strategy_runtime.runtime.recipes.entry import EntryRecipe
+from strategy_runtime.runtime.recipes.entry import DesiredEntry
 from strategy_runtime.runtime.recipes.position_management import PositionManagementRecipe
 from strategy_runtime.utility.committed_bar.models import StrategyBarProcessingUnit
 from strategy_runtime.utility.deployment_catalog.models import DeploymentSpecification
@@ -20,7 +20,7 @@ class PositionResolvedStrategyInstance:
 @dataclass(frozen=True, slots=True)
 class LiveEntryProjectedStrategyInstance:
     source: PositionResolvedStrategyInstance
-    entry_recipe: EntryRecipe
+    desired_entry: DesiredEntry | None
 
 
 @dataclass(frozen=True, slots=True)

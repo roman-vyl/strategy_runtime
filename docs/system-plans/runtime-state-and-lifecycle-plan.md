@@ -74,8 +74,8 @@ Current implemented shape:
 ```text
 CurrentTradeCycle
 ├── trade_cycle_id
-├── entry_recipe
-├── entry_recipe_frozen
+├── desired_entry: DesiredEntry
+├── desired_entry_frozen
 └── position_management_recipe | null
 ```
 
@@ -86,50 +86,45 @@ A strategy instance can have at most one current cycle in the active aggregate.
 The creation policy, recipe revision semantics, and completed-cycle archival
 policy are not yet implemented.
 
-## 5. Entry recipe lifecycle
+## 5. Desired-entry lifecycle
 
 Each successful live-entry projection currently returns one complete
-`EntryRecipe` inside `LiveEntryProjectedStrategyInstance`. It does not mutate the
-repository.
+`desired_entry: DesiredEntry | null` inside
+`LiveEntryProjectedStrategyInstance`. It does not mutate the repository, choose
+a side, or arbitrate between plans.
 
 Before execution:
 
 ```text
-entry_recipe_frozen = false
+desired_entry_frozen = false
 ```
 
 The future state applier will use these complete-snapshot semantics:
 
 ```text
 no existing cycle
--> create cycle with complete recipe
+-> create cycle with the complete DesiredEntry after successful application
 
-existing mutable recipe
--> replace complete snapshot
+existing mutable desired entry
+-> compare new and currently applied singular objects, then replace the complete snapshot
 
-existing frozen recipe
+existing frozen desired entry
 -> replacement forbidden
 ```
 
-A side-level `null` is data and must replace the previously stored side plan
-with `null`.
-
-```text
-long_plan = null
-short_plan = null
-```
-
-is a valid calculated snapshot. The current `CurrentTradeCycle` model requires
-an `EntryRecipe`; absence of a cycle represents the state before a recipe has
-been applied.
+Top-level `desired_entry = null` is data and means that no entry is currently
+desired. In the future reconciliation stage it cancels an acknowledged unfilled
+entry or remains a no-op when none is applied. The current `CurrentTradeCycle`
+model requires one `DesiredEntry`; absence of a cycle represents the state
+before a desired entry has been successfully applied.
 
 ## 6. Execution and freeze transition
 
 When ABI later confirms that a correlated entry instruction executed, a future
 Runtime transition must:
 
-1. identify the correct current trade cycle and exact accepted recipe;
-2. freeze that recipe;
+1. identify the correct current trade cycle and exact accepted `DesiredEntry`;
+2. freeze an executed entry context that references exactly that one object;
 3. store `entry_bar_open_time_ms`;
 4. store exact decimal `executed_entry_price`;
 5. mark the cycle as owning an open position according to the final state model.
@@ -208,8 +203,8 @@ decide:
 - which transitions must be atomic;
 - whether SQLite or another durable adapter is justified.
 
-Independent of storage choice, state application must not partially merge recipe
-objects, and `get_or_create` must remain deterministic and identity-safe.
+Independent of storage choice, state application must not partially merge a
+`DesiredEntry`, and `get_or_create` must remain deterministic and identity-safe.
 
 ## 11. Identifier boundary
 

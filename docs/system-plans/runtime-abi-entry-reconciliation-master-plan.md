@@ -82,6 +82,7 @@ Both orchestrator paths meet only through the durable `StrategyInstanceRuntimeSt
 StrategyInstanceRuntimeState
 ├── strategy_instance_id
 ├── registered_deployment
+├── risk_multiplier
 └── current_trade_execution: CurrentTradeExecution | null
 ```
 
@@ -95,6 +96,11 @@ raw_spec
 derived strategy_instance_id
 ```
 
+`risk_multiplier` is a Runtime-owned positive exact-decimal operational setting.
+A newly created strategy-instance state receives the canonical value `"1"`.
+Repeated deployment discovery does not reset the stored value, and the value
+does not participate in `strategy_instance_id` derivation.
+
 `current_trade_execution = null` means that the instance currently owns no acknowledged entry package and no real open position.
 
 ## 5. `CurrentTradeExecution` target shape
@@ -106,8 +112,8 @@ CurrentTradeExecution
 ├── trade_cycle_id
 ├── execution_intent_id
 ├── phase
-├── active_entry_recipe
-├── frozen_entry_recipe | null
+├── applied_desired_entry: DesiredEntry
+├── frozen_entry_context: FrozenExecutedEntryContext | null
 ├── applied_entry_package
 ├── processed_fill_ids
 ├── filled_quantity
@@ -157,35 +163,39 @@ Meanings:
 
 A generic `closing` phase is **not implemented now**. It may be reconsidered later for a future limit-exit workflow where a closing order remains pending while the position still exists. Market exits and ordinary active stop/take protection do not require a `closing` state.
 
-## 8. Live-entry recipe semantics
+## 8. Singular desired-entry semantics
 
-A live-entry calculation produces an entry recipe containing a desired plan or no plan.
-
-The current Engine model may still expose long and short slots. Runtime does not add a separate prohibition merely for both being non-null; simultaneous long and short plans are not expected under the accepted trading logic.
-
-The effective desired plan contains:
+A live-entry calculation produces exactly:
 
 ```text
-side
-planned_entry_price
-initial_stop_price
-initial_take_price
-risk_multiplier
-locked_exit_profile
-source_plan_bar_open_time_ms
+desired_entry: DesiredEntry | null
 ```
+
+`DesiredEntry` contains:
+
+```text
+DesiredEntry
+├── side: long | short
+├── source_plan_bar_open_time_ms
+├── planned_entry_price
+├── initial_stop_price
+├── initial_take_price
+└── locked_exit_profile
+```
+
+Engine chooses the side. Runtime performs no side arbitration and defines no
+separate long/short desired or execution objects.
 
 ## 9. Risk sizing boundary
 
 Runtime does not calculate an exchange quantity and does not own bankroll/risk configuration.
 
-The Engine/live-entry result supplies:
-
-```text
-risk_multiplier
-```
-
-`risk_multiplier` is an exact decimal value expressed in relative units. Examples such as `0.1`, `1`, `2`, or `3` mean fractions or multiples of one ABI-defined standard position/risk unit.
+`risk_multiplier` is not an Engine response field and is not part of
+`DesiredEntry`. During reconciliation, Runtime combines the Engine desired
+entry with the strategy instance's stored `risk_multiplier` and
+sends both to ABI. The multiplier is treated as a stable setup value in the
+first version: changing it does not itself trigger entry replacement or other
+hot-update reconciliation.
 
 ABI owns the interpretation of this multiplier using its own:
 
@@ -222,7 +232,15 @@ LiveEntryProjectedStrategyInstance
 StrategyInstanceRuntimeState
 ```
 
-It compares the newly desired recipe with the currently ABI-applied recipe stored in `CurrentTradeExecution`.
+It compares the new `desired_entry` with the currently applied
+`desired_entry` stored in `CurrentTradeExecution`:
+
+```text
+new desired_entry
+vs
+currently applied desired_entry
+→ NO_OP / APPLY / REPLACE / CANCEL
+```
 
 Its responsibility is to decide what must change, call the ABI entry-package port when necessary, validate the acknowledgement, and persist the resulting Runtime aggregate.
 
@@ -241,10 +259,10 @@ CANCEL
 
 Semantics:
 
-- `NO_OP`: desired recipe and applied recipe are already equivalent, or both are absent.
-- `APPLY`: no acknowledged entry package exists and a desired recipe now exists.
-- `REPLACE`: an acknowledged unfilled package exists and the desired recipe changed.
-- `CANCEL`: an acknowledged unfilled package exists and the new desired recipe disappeared.
+- `NO_OP`: desired and applied singular entries are already equivalent, or both are absent.
+- `APPLY`: no acknowledged entry package exists and a `DesiredEntry` now exists.
+- `REPLACE`: an acknowledged unfilled package exists and the `DesiredEntry` changed.
+- `CANCEL`: an acknowledged unfilled package exists and `desired_entry` became null.
 
 These are internal Runtime decisions, not long-lived trade phases and not necessarily separate ABI endpoints.
 
@@ -258,14 +276,17 @@ ReconcileDesiredEntryPackage
 ├── trade_cycle_id
 ├── execution_intent_id
 ├── ticker
-└── desired_entry: plan | null
+├── desired_entry: DesiredEntry | null
+└── risk_multiplier: positive exact decimal text | null
 ```
 
-`desired_entry = plan` means create or replace the desired package.
+`desired_entry = DesiredEntry` with a non-null `risk_multiplier` means create
+or replace the desired package.
 
-`desired_entry = null` means no pending entry package should remain for this intent.
+`desired_entry = null` with a null `risk_multiplier` means no pending entry
+package should remain for this intent.
 
-An existing plan always contains a positive exact-decimal
+An existing `DesiredEntry` always contains a positive exact-decimal
 `initial_take_price`. Missing or null take is malformed Engine output, not an
 alternative entry mode. Runtime must fail closed before forming an `APPLY` or
 `REPLACE` command, so reconciliation never sends ABI an entry package without
@@ -283,7 +304,8 @@ entry order
 + attached take
 ```
 
-Runtime sends the desired entry, stop, take, side, and `risk_multiplier` as one semantic unit.
+Runtime sends the Engine-derived entry, stop, take, and side together with the
+Runtime-owned `risk_multiplier` as one semantic unit.
 
 The package is indivisible: entry without initial take is architecturally
 invalid in the first version.
@@ -311,6 +333,7 @@ strategy_instance_id
 trade_cycle_id
 execution_intent_id
 status = entry_package_applied
+applied_desired_entry: DesiredEntry
 accepted risk multiplier / calculated quantity summary
 entry order reference
 attached stop reference
@@ -329,8 +352,8 @@ For first apply:
 ```text
 current_trade_execution = CurrentTradeExecution(
     phase = awaiting_entry,
-    active_entry_recipe = acknowledged recipe,
-    frozen_entry_recipe = null,
+    applied_desired_entry = acknowledged desired_entry,
+    frozen_entry_context = null,
     ...
 )
 ```
@@ -339,16 +362,16 @@ For replace, Runtime updates the existing `awaiting_entry` execution only after 
 
 If ABI fails or rejects the desired change:
 
-- the new Engine recipe does not become the applied recipe;
-- an existing applied recipe remains authoritative;
+- the new Engine `DesiredEntry` does not become the applied desired entry;
+- an existing applied `DesiredEntry` remains authoritative;
 - if no package had ever been acknowledged, no `awaiting_entry` execution is created.
 
-## 17. Mutable and frozen entry recipe
+## 17. Mutable desired entry and frozen executed context
 
 Before the first fill:
 
 ```text
-active_entry_recipe
+applied_desired_entry: DesiredEntry
 ```
 
 is mutable through successful reconciliation.
@@ -356,18 +379,35 @@ is mutable through successful reconciliation.
 After the first partial or full fill:
 
 ```text
-frozen_entry_recipe = active_entry_recipe
+FrozenExecutedEntryContext
+├── desired_entry: DesiredEntry
+├── entry_bar_open_time_ms
+└── executed_entry_price
 ```
 
-The recipe is frozen because real market exposure now exists. Later live-entry projections may not replace the entry semantics of the active trade cycle.
+The context is frozen because real market exposure now exists. It references
+the one applied `DesiredEntry`, whose `side` is authoritative. Later live-entry
+projections may not replace the entry semantics of the active trade cycle.
+
+The future open-trade receipt is constructed from this same singular context:
+
+```text
+OpenTradeReceipt
+├── desired_entry: DesiredEntry
+├── entry_bar_open_time_ms
+└── executed_entry_price
+```
+
+Receipt construction must not introduce long/short receipt branches or
+duplicate execution objects.
 
 ## 18. Replace and cancel before fill
 
 While phase is `awaiting_entry`:
 
-- a changed desired recipe may produce `REPLACE`;
-- a disappeared desired recipe may produce `CANCEL`;
-- an unchanged desired recipe produces `NO_OP`.
+- a changed `DesiredEntry` may produce `REPLACE`;
+- a null `desired_entry` may produce `CANCEL`;
+- an unchanged `DesiredEntry` produces `NO_OP`.
 
 After the first fill, live-entry replacement/cancellation no longer controls the trade cycle. The position-management branch becomes responsible for future decisions.
 
@@ -393,6 +433,10 @@ occurred_at_ms
 ```
 
 ABI must bind exchange orders to the Runtime ownership identities before emitting the callback.
+The event model does not carry or reconstruct side-wise entry objects. After
+identity validation, each fill applies to the one
+`CurrentTradeExecution.applied_desired_entry`; the first fill freezes that same
+object inside `FrozenExecutedEntryContext`.
 
 ## 20. `AbiExecutionEventOrchestrator`
 
@@ -405,7 +449,7 @@ The webhook path performs:
 4. Validate trade_cycle_id and execution_intent_id.
 5. Ignore an already processed fill_id.
 6. Apply the fill aggregate.
-7. Freeze the recipe on the first fill.
+7. Freeze the singular executed entry context on the first fill.
 8. Advance the execution phase.
 9. Save the complete aggregate.
 ```
@@ -544,7 +588,7 @@ src/strategy_runtime/runtime/
 Planned implementation order after this document is approved:
 
 1. Finalise the `CurrentTradeExecution` model and invariants.
-2. Finalise `EntryRecipe`/`LiveEntryPlan` fields including exact decimal `risk_multiplier`.
+2. Finalise `DesiredEntry` fields and the state-owned exact-decimal `risk_multiplier`.
 3. Define reconciliation decisions and equivalence rules.
 4. Define the ABI desired-entry-package port and acknowledgement models.
 5. Define ABI fill-event models and minimal fill aggregate state.

@@ -57,9 +57,10 @@ The router SHALL select the Engine use case from `position_open`.
 ### Requirement: Live-entry mapping and result are exact
 The router SHALL build the live-entry request from the current processing unit
 without transmitting Runtime-owned instance identity and SHALL preserve
-Engine's `plans_by_side` calculation as one typed recipe. Every non-null
-`LiveEntryPlan` SHALL contain a non-empty, finite, positive exact-decimal
-`initial_take_price`; a missing or null take SHALL be rejected before the plan
+Engine's singular `desired_entry: DesiredEntry | null` without side selection
+or arbitration. Every non-null `DesiredEntry` SHALL contain a `side` of `long`
+or `short` and a non-empty, finite, positive exact-decimal
+`initial_take_price`; a missing or null take SHALL be rejected before the object
 can enter projected Runtime state or future ABI reconciliation.
 
 #### Scenario: Map the live-entry request
@@ -68,28 +69,32 @@ can enter projected Runtime state or future ABI reconciliation.
 - **AND** contains the committed bar open time as `target_bar_open_time_ms`
 - **AND** does not contain Runtime `strategy_instance_id` or Engine `instance_id`
 
-#### Scenario: Preserve the entry recipe
-- **WHEN** Engine returns a valid `plans_by_side` response
-- **THEN** the projection's long plan comes from the `long` mapping entry
-- **AND** its short plan comes from the `short` mapping entry
-- **AND** absent or null side entries remain null
-- **AND** every present plan contains canonical positive initial take text
+#### Scenario: Preserve the desired entry
+- **WHEN** Engine returns a valid singular `desired_entry`
+- **THEN** the projection contains that same `DesiredEntry`
+- **AND** its embedded `side` is preserved without Runtime arbitration
+- **AND** the entry contains canonical positive initial take text
 - **AND** the source processing item is retained
 
+#### Scenario: Preserve no desired entry
+- **WHEN** Engine returns `desired_entry = null`
+- **THEN** the projection contains `desired_entry = null`
+- **AND** Runtime does not fabricate either side
+
 #### Scenario: Reject a null initial take
-- **WHEN** an Engine payload contains a live-entry plan whose `initial_take_price` is null
-- **THEN** Runtime rejects the plan as malformed
-- **AND** no entry recipe can be sent to ABI reconciliation
+- **WHEN** an Engine payload contains a `DesiredEntry` whose `initial_take_price` is null
+- **THEN** Runtime rejects the desired entry as malformed
+- **AND** no desired entry can be sent to ABI reconciliation
 
 #### Scenario: Reject a missing initial take
-- **WHEN** an Engine payload contains a live-entry plan without `initial_take_price`
-- **THEN** Runtime rejects the plan as malformed
-- **AND** no entry recipe can be sent to ABI reconciliation
+- **WHEN** an Engine payload contains a `DesiredEntry` without `initial_take_price`
+- **THEN** Runtime rejects the desired entry as malformed
+- **AND** no desired entry can be sent to ABI reconciliation
 
 #### Scenario: Reject an invalid initial take decimal
-- **WHEN** an Engine payload contains an empty, non-finite, zero, or negative `initial_take_price`
-- **THEN** Runtime rejects the plan as malformed
-- **AND** no entry recipe can be sent to ABI reconciliation
+- **WHEN** an Engine payload contains a `DesiredEntry` with an empty, non-finite, zero, or negative `initial_take_price`
+- **THEN** Runtime rejects the desired entry as malformed
+- **AND** no desired entry can be sent to ABI reconciliation
 
 ### Requirement: Open-trade mapping requires frozen entry context
 The router SHALL call open-trade projection only when the runtime state and
@@ -99,16 +104,16 @@ Engine SHALL calculate position management from the frozen
 `planned_entry_price`; the executed price remains a Runtime/ABI execution fact.
 
 #### Scenario: Reject missing context before Engine
-- **WHEN** the current trade cycle is absent, its entry recipe is not frozen, or either execution fact is absent
+- **WHEN** the current trade cycle is absent, its singular desired entry is not frozen, or either execution fact is absent
 - **THEN** the router raises `OpenTradeContextUnavailable`
 - **AND** does not call either Engine port
 
 #### Scenario: Map the open-trade request
 - **WHEN** an open position has complete context
 - **THEN** the request contains strategy ID, raw spec, market, base timeframe, and target bar
-- **AND** contains the frozen entry recipe
+- **AND** contains the frozen `DesiredEntry`
 - **AND** contains the resolver-supplied entry bar
-- **AND** uses the frozen recipe's planned entry price as Engine calculation input
+- **AND** uses the frozen `DesiredEntry.planned_entry_price` as Engine calculation input
 - **AND** does not contain executed entry price
 - **AND** contains no Runtime strategy-instance ID, Runtime cycle ID, or exchange identifier
 
@@ -131,7 +136,7 @@ The router SHALL associate each calculation-only Engine response with the exact
 `PositionResolvedStrategyInstance` that initiated the scalar synchronous call.
 
 #### Scenario: Bind live-entry result locally
-- **WHEN** live-entry projection returns `plans_by_side`
+- **WHEN** live-entry projection returns `desired_entry: DesiredEntry | null`
 - **THEN** the router creates a projected object whose source is the same input Runtime instance
 - **AND** no Engine response identity field is required
 
@@ -158,7 +163,7 @@ propagate that failure.
 
 #### Scenario: Live-entry transport is unavailable
 - **WHEN** the live-entry Engine port raises `StrategyEngineProjectionUnavailable`
-- **THEN** the router propagates it without fabricating an entry recipe
+- **THEN** the router propagates it without fabricating a desired entry
 
 #### Scenario: Open-trade transport is unavailable
 - **WHEN** the open-trade Engine port raises `StrategyEngineProjectionUnavailable`

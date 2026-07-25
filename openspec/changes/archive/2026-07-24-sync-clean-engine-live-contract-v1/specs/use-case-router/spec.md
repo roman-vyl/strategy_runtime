@@ -5,7 +5,7 @@ The router SHALL associate each calculation-only Engine response with the exact
 `PositionResolvedStrategyInstance` that initiated the scalar synchronous call.
 
 #### Scenario: Bind live-entry result locally
-- **WHEN** live-entry projection returns `plans_by_side`
+- **WHEN** live-entry projection returns `desired_entry: DesiredEntry | null`
 - **THEN** the router creates a projected object whose source is the same input Runtime instance
 - **AND** no Engine response identity field is required
 
@@ -30,7 +30,7 @@ Runtime Engine response DTOs SHALL accept only their calculation-result fields.
 ### Requirement: Live-entry mapping and result are exact
 The router SHALL build the live-entry request from the current processing unit
 without transmitting Runtime-owned instance identity and SHALL preserve
-Engine's `plans_by_side` calculation as one typed recipe.
+Engine's singular `desired_entry` without side selection or arbitration.
 
 #### Scenario: Map the live-entry request
 - **WHEN** a closed position is routed
@@ -38,11 +38,11 @@ Engine's `plans_by_side` calculation as one typed recipe.
 - **AND** contains the committed bar open time as `target_bar_open_time_ms`
 - **AND** does not contain Runtime `strategy_instance_id` or Engine `instance_id`
 
-#### Scenario: Preserve the entry recipe
-- **WHEN** Engine returns a valid `plans_by_side` response
-- **THEN** the projection's long plan comes from the `long` mapping entry
-- **AND** its short plan comes from the `short` mapping entry
-- **AND** absent or null side entries remain null
+#### Scenario: Preserve the desired entry
+- **WHEN** Engine returns a valid `desired_entry`
+- **THEN** the projection contains that same singular value
+- **AND** its embedded side is preserved without Runtime arbitration
+- **AND** null remains null
 - **AND** the source processing item is retained
 
 ### Requirement: Open-trade mapping requires frozen entry context
@@ -51,14 +51,14 @@ resolved facts contain complete immutable entry context, and it SHALL NOT send
 Runtime-owned instance identity to Engine.
 
 #### Scenario: Reject missing context before Engine
-- **WHEN** the current trade cycle is absent, its entry recipe is not frozen, or either execution fact is absent
+- **WHEN** the current trade cycle is absent, its desired entry is not frozen, or either execution fact is absent
 - **THEN** the router raises `OpenTradeContextUnavailable`
 - **AND** does not call either Engine port
 
 #### Scenario: Map the open-trade request
 - **WHEN** an open position has complete context
 - **THEN** the request contains strategy ID, raw spec, market, base timeframe, and target bar
-- **AND** contains the frozen entry recipe
+- **AND** contains the frozen `DesiredEntry`
 - **AND** contains resolver-supplied entry bar and executed entry price
 - **AND** contains no Runtime strategy-instance ID, Runtime cycle ID, or exchange identifier
 

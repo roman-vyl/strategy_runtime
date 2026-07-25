@@ -203,12 +203,10 @@ Engine port response:
 
 ```text
 LiveEntryProjectionResponse
-└── plans_by_side
-    ├── long: LiveEntryPlan | null
-    └── short: LiveEntryPlan | null
+└── desired_entry: DesiredEntry | null
 
-LiveEntryPlan
-├── side
+DesiredEntry
+├── side: long | short
 ├── source_plan_bar_open_time_ms
 ├── planned_entry_price
 ├── initial_stop_price
@@ -216,9 +214,9 @@ LiveEntryPlan
 └── locked_exit_profile
 ```
 
-`initial_take_price` is required canonical positive exact-decimal text. A side
-may have no plan, but an existing plan cannot omit take or carry a null, empty,
-non-finite, zero, or negative take. Malformed plans fail before projected
+`initial_take_price` is required canonical positive exact-decimal text. The
+desired entry may be absent, but an existing object cannot omit take or carry a
+null, empty, non-finite, zero, or negative take. Malformed objects fail before projected
 Runtime state is created.
 
 The scalar router binds the calculation to its existing local source and
@@ -227,13 +225,11 @@ returns:
 ```text
 LiveEntryProjectedStrategyInstance
 ├── source
-└── entry_recipe
-    ├── long_plan
-    └── short_plan
+└── desired_entry: DesiredEntry | null
 ```
 
-A side may be `null`; both sides may be `null`. The router creates a complete
-`EntryRecipe` object but does not apply it to repository state.
+The router passes through the singular result without side selection,
+arbitration, or side-specific storage and does not apply it to repository state.
 
 ## 8. Open-trade projection contract
 
@@ -242,7 +238,7 @@ Open-trade is allowed only when:
 ```text
 position_open = true
 current_trade_cycle exists
-entry_recipe_frozen = true
+desired_entry_frozen = true
 entry_bar_open_time_ms exists
 executed_entry_price exists
 ```
@@ -256,7 +252,7 @@ OpenTradeProjectionRequest
 ├── ticker
 ├── base_timeframe
 ├── target_bar_open_time_ms
-├── entry_recipe
+├── desired_entry: DesiredEntry
 └── entry_bar_open_time_ms
 ```
 
@@ -264,7 +260,7 @@ The request contains no `trade_id` and no `trade_cycle_id`. The Runtime cycle
 identity is not required by the synchronous Engine calculation and remains
 inside `CurrentTradeCycle`.
 
-Strategy Engine v1 calculates position management from the frozen plan's
+Strategy Engine v1 calculates position management from the frozen desired entry's
 `planned_entry_price`. The resolver-supplied `executed_entry_price` remains a
 Runtime/ABI execution fact and an open-position invariant, but it does not cross
 the Runtime → Engine boundary.
@@ -363,8 +359,9 @@ After the projected object returns to `StrategyRuntimeOrchestrator`, a future
 state-transition module will:
 
 - accept or reject the projection under lifecycle invariants;
-- apply complete recipe replacement semantics;
+- compare the new singular `desired_entry` with the currently applied singular
+  `desired_entry` and produce `NO_OP`, `APPLY`, `REPLACE`, or `CANCEL`;
 - update the repository according to the selected in-memory or durable
   persistence policy;
-- later hand the uninterpreted recipe to separately designed ABI
+- later hand the uninterpreted `DesiredEntry` to separately designed ABI
   execution-command planning.

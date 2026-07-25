@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
-from strategy_runtime.runtime.recipes.entry import EntryRecipe
+from strategy_runtime.runtime.recipes.entry import DesiredEntry
 from strategy_runtime.runtime.recipes.position_management import CloseSignal, DesiredProtection
 from strategy_runtime.utility.deployment_catalog.models import FrozenJsonValue
 
@@ -16,7 +16,7 @@ class OpenTradeProjectionRequest:
     ticker: str
     base_timeframe: str
     target_bar_open_time_ms: int
-    entry_recipe: EntryRecipe
+    desired_entry: DesiredEntry
     entry_bar_open_time_ms: int
 
 

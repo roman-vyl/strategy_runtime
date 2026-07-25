@@ -50,7 +50,7 @@ The following semantic components are implemented and tested:
 - `OpenPositionResolver`;
 - `StrategyUseCaseRouter`;
 - typed live-entry and open-trade Engine requests and responses;
-- immutable entry and position-management recipe objects;
+- immutable desired-entry and position-management projection objects;
 - strict calculation-only Engine response DTOs bound through local synchronous
   call context.
 
@@ -152,15 +152,16 @@ position_open = true
 The router does not interpret the strategy result into ABI commands.
 
 For the live-entry path, the Engine port returns
-`LiveEntryProjectionResponse` containing only `plans_by_side`. Runtime binds
+`LiveEntryProjectionResponse` containing only `desired_entry`. Runtime binds
 that calculation to the exact source object held by the scalar call and returns:
 
 ```text
 LiveEntryProjectedStrategyInstance
-└── EntryRecipe
-    ├── long_plan
-    └── short_plan
+└── desired_entry: DesiredEntry | null
 ```
+
+`DesiredEntry.side` is already `long` or `short`. Runtime does not arbitrate
+between sides and never receives or stores two side-specific plans.
 
 For the open-trade path, the Engine port returns
 `OpenTradeProjectionResponse` containing only desired protection, close signal,
@@ -175,45 +176,43 @@ OpenTradeProjectedStrategyInstance
     └── diagnostics
 ```
 
-The open-trade Engine request carries the frozen entry recipe and
-`entry_bar_open_time_ms`. Engine v1 uses the recipe's `planned_entry_price` for
+The open-trade Engine request carries the frozen `DesiredEntry` and
+`entry_bar_open_time_ms`. Engine v1 uses its `planned_entry_price` for
 position-management calculation. ABI-supplied `executed_entry_price` remains a
 Runtime execution fact and is not transmitted to Engine.
 
 These projected objects are the terminal result of the currently implemented
 semantic contour.
 
-## 6. Projection recipes and future state application
+## 6. Projection objects and future state application
 
-The semantic projection contour defines two distinct immutable recipe objects.
+The semantic projection contour defines two distinct immutable projection objects.
 Their lifecycle application is the responsibility of a future state-transition
 stage.
 
-### EntryRecipe
+### DesiredEntry
 
-Produced as a complete live-entry projection:
+Produced as the complete singular live-entry desire:
 
 ```text
-EntryRecipe
-├── long_plan
-└── short_plan
+desired_entry: DesiredEntry | null
 ```
 
-`long_plan` and `short_plan` are each a complete Engine plan or `null`.
-Every present plan contains mandatory entry, stop, and take prices.
+`DesiredEntry` contains `side`, provenance, mandatory entry, stop, and take
+prices, and the locked exit profile.
 `initial_take_price` is canonical positive exact-decimal text; missing, null,
-empty, non-finite, zero, or negative values fail closed at `LiveEntryPlan`
+empty, non-finite, zero, or negative values fail closed at `DesiredEntry`
 construction.
 
-When the future state applier accepts this projection, the new response will
-replace the complete mutable recipe snapshot. A returned `null` side explicitly
-clears a previously stored plan for that side. Both sides may be `null`; that
-remains a valid calculated recipe snapshot.
+When the future state applier accepts this projection, the new `desired_entry`
+replaces the complete mutable desired snapshot. A returned `null` explicitly
+clears a previously applied desired entry.
 
-`entry_recipe_frozen` is Runtime-owned lifecycle metadata stored beside the
-recipe. Once frozen for an executed position, the entry recipe cannot be
-replaced. The transition that creates and freezes trade-cycle state is not part
-of the implemented projection contour.
+`desired_entry_frozen` is Runtime-owned lifecycle metadata stored beside the
+singular object in the current placeholder cycle model. Once the executed entry
+context is frozen, its referenced `DesiredEntry` cannot be replaced. The
+transition that creates and freezes execution state is not part of the
+implemented projection contour.
 
 ### PositionManagementRecipe
 
@@ -242,7 +241,8 @@ Both Engine request paths retain:
 The target bar is required for deterministic calculation against the exact committed-bar event.
 
 Runtime-owned `strategy_instance_id` does not cross the Engine boundary.
-Live-entry response contains only `plans_by_side`; open-trade response contains
+Live-entry response contains only `desired_entry: DesiredEntry | null`;
+open-trade response contains
 only desired protection, close signal, and diagnostics. Old responses carrying
 identity, market, timeframe, or target-bar echoes are rejected by strict DTO
 decoding.
@@ -309,7 +309,7 @@ It deliberately does not:
 2. Define state-result application and repository update semantics.
 3. Define when `trade_cycle_id` is created and how a cycle is completed.
 4. Define the ABI execution notification/callback path that freezes the exact
-   accepted entry recipe and supplies execution facts.
+   accepted `DesiredEntry` with its execution facts.
 5. Decide whether the future asynchronous Runtime ↔ ABI command boundary needs
    one Runtime-owned `command_id`; do not introduce one before that boundary
    proves it necessary.
@@ -323,7 +323,7 @@ It deliberately does not:
 1. Specify and implement the projection-result state applier.
 2. Decide the repository persistence policy and implement only the guarantees
    required by that decision.
-3. Design the ABI execution callback and entry-recipe freeze transition.
+3. Design the ABI execution callback and singular desired-entry freeze transition.
 4. Design closure transition, completed-cycle archival, and next-cycle creation.
 5. Extend processing journal events around semantic Runtime stages.
 6. Add full integration tests across utility Runtime, state repository, fake

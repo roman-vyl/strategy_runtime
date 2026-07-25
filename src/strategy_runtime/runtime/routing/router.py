@@ -8,7 +8,6 @@ from strategy_runtime.runtime.engine.open_trade import (
     OpenTradeProjectionRequest,
     StrategyEngineOpenTradePort,
 )
-from strategy_runtime.runtime.recipes.entry import EntryRecipe
 from strategy_runtime.runtime.recipes.position_management import PositionManagementRecipe
 from strategy_runtime.runtime.routing.errors import (
     OpenTradeContextUnavailable,
@@ -48,16 +47,13 @@ class StrategyUseCaseRouter:
             live_response = self._live_entry_engine.project_live_entry(live_request)
             return LiveEntryProjectedStrategyInstance(
                 source=item,
-                entry_recipe=EntryRecipe(
-                    live_response.plans_by_side.get("long"),
-                    live_response.plans_by_side.get("short"),
-                ),
+                desired_entry=live_response.desired_entry,
             )
 
         cycle = resolved.runtime_state.current_trade_cycle
         if (
             cycle is None
-            or not cycle.entry_recipe_frozen
+            or not cycle.desired_entry_frozen
             or resolved.entry_bar_open_time_ms is None
             or resolved.executed_entry_price is None
         ):
@@ -68,7 +64,7 @@ class StrategyUseCaseRouter:
             ticker=deployment.instrument,
             base_timeframe=deployment.base_timeframe,
             target_bar_open_time_ms=unit.committed_bar.open_time_ms,
-            entry_recipe=cycle.entry_recipe,
+            desired_entry=cycle.desired_entry,
             entry_bar_open_time_ms=resolved.entry_bar_open_time_ms,
         )
         open_trade_response = self._open_trade_engine.project_open_trade(open_trade_request)

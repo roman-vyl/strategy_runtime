@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
-from strategy_runtime.runtime.recipes.entry import LiveEntryPlan
+from strategy_runtime.runtime.recipes.entry import DesiredEntry
 from strategy_runtime.utility.deployment_catalog.models import FrozenJsonValue
 
 
@@ -19,7 +19,7 @@ class LiveEntryProjectionRequest:
 
 @dataclass(frozen=True, slots=True)
 class LiveEntryProjectionResponse:
-    plans_by_side: Mapping[str, LiveEntryPlan | None]
+    desired_entry: DesiredEntry | None
 
 
 class StrategyEngineLiveEntryPort(Protocol):

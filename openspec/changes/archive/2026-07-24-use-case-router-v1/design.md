@@ -91,23 +91,24 @@ target_bar_open_time_ms <- committed_bar.open_time_ms
 ```
 
 The router validates the response echo for every listed binding except
-`raw_spec`, which is not echoed. A valid response becomes an `EntryRecipe`
-containing the returned long and short plans, including null plans. The router
-does not apply or freeze a trade-cycle recipe.
+`raw_spec`, which is not echoed. A valid response becomes
+`desired_entry: DesiredEntry | null` on the projected instance. `DesiredEntry`
+already contains `side`; the router does not select or arbitrate a side and
+does not apply or freeze trade-cycle state.
 
 ### Require exact open-trade context
 
 For `position_open = true`, the router requires:
 
 - a current trade cycle;
-- `entry_recipe_frozen = true`;
-- the cycle's immutable entry recipe;
+- `desired_entry_frozen = true`;
+- the cycle's immutable singular `DesiredEntry`;
 - resolver-supplied entry bar open time;
 - resolver-supplied executed entry price.
 
 Missing context raises `OpenTradeContextUnavailable` before the Engine call.
 The open-trade request uses the same strategy, instance, market, and target-bar
-mapping as live entry, plus the frozen entry recipe and execution facts.
+mapping as live entry, plus the frozen desired entry and execution facts.
 `trade_cycle_id` and exchange identifiers remain internal.
 
 ### Return uninterpreted management projection

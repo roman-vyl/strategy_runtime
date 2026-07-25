@@ -16,7 +16,7 @@ wire-level correlation field.
 **Goals:**
 
 - Remove only Engine-facing `instance_id` from both request DTOs.
-- Model live-entry response as `plans_by_side`.
+- Model live-entry response as `desired_entry: DesiredEntry | null`.
 - Model open-trade response as the three calculation objects only.
 - Remove response echo validation and its dedicated error.
 - Reject old echo-bearing response payloads during strict DTO construction.
@@ -26,7 +26,7 @@ wire-level correlation field.
 **Non-Goals:**
 
 - No flat-versus-nested HTTP payload decision.
-- No recipe, routing, open-trade receipt, or ABI contract change.
+- No routing-decision, position-management response, or ABI implementation change.
 - No removal of `strategy_instance_id` from Runtime processing or state.
 - No production HTTP Engine client implementation.
 - No lifecycle or state-application work.
@@ -56,7 +56,7 @@ improving correctness.
 
 Both request DTOs retain strategy ID, raw specification, ticker, base
 timeframe, and exact target bar. Open-trade additionally retains its existing
-entry recipe and execution facts. Only `instance_id` is removed.
+singular desired entry and execution facts. Only `instance_id` is removed.
 
 **Rationale:** Those values are calculation inputs; `strategy_instance_id` is
 Runtime/ABI ownership metadata.
@@ -66,11 +66,12 @@ Runtime/ABI ownership metadata.
 Live-entry response contains only:
 
 ```text
-plans_by_side
+desired_entry: DesiredEntry | null
 ```
 
-The router reads `long` and `short` from that mapping when constructing the
-unchanged `EntryRecipe`.
+The router passes that singular value directly into
+`LiveEntryProjectedStrategyInstance`. `DesiredEntry` already contains `side`;
+Runtime performs no arbitration or side-wise storage.
 
 Open-trade response contains only:
 
@@ -105,9 +106,8 @@ deployment skew between Runtime and Engine.
   correlation contract then; do not retain obsolete synchronous echoes now.
 - [A stale Engine still returns echoes] → Strict DTO decoding rejects the
   payload instead of accepting mixed contract versions.
-- [`plans_by_side` contains unexpected keys] → Runtime consumes only `long` and
-  `short`; Engine owns its result-map vocabulary and recipe semantics remain
-  unchanged.
+- [A stale Engine returns the former side-wise result] → Strict DTO decoding
+  rejects the obsolete field instead of reconstructing or arbitrating plans.
 
 ## Migration Plan
 

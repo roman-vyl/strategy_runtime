@@ -1,6 +1,6 @@
 ## 1. Router and Recipe Models
 
-- [x] 1.1 Add immutable live-entry plan and complete replacement `EntryRecipe`.
+- [x] 1.1 Add immutable singular `DesiredEntry` with nullable projection semantics.
 - [x] 1.2 Add immutable desired-protection, close-signal, diagnostics, and `PositionManagementRecipe`.
 - [x] 1.3 Add typed position-resolved input and live-entry/open-trade projected outputs.
 - [x] 1.4 Add typed projection, Engine-unavailable, identity-binding, response-binding, and missing-open-trade-context failures.
@@ -18,8 +18,8 @@
 
 - [x] 3.1 Route solely by current ABI `position_open`.
 - [x] 3.2 Route closed positions to live-entry projection.
-- [x] 3.3 Route open positions only with a frozen entry recipe and exact execution facts.
-- [x] 3.4 Preserve Engine plans and management objects without interpreting them.
+- [x] 3.3 Route open positions only with a frozen `DesiredEntry` and exact execution facts.
+- [x] 3.4 Preserve Engine desired-entry and management objects without interpreting them.
 - [x] 3.5 Validate processing-unit, deployment, and resolved-state identity before Engine calls.
 - [x] 3.6 Use a scalar router and return no fabricated recipe on failure.
 - [x] 3.7 Perform no state application and send no ABI command.

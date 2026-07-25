@@ -24,7 +24,9 @@ Contains only the complete strategy object, market object, and exact target bar 
 
 ### Live-entry response
 
-Contains the entry projection (`long_plan`, `short_plan`) and no specification/configuration hash. Removal of `market_data_hash` is handled by plan 26.
+Contains singular `desired_entry: DesiredEntry | null` and no
+specification/configuration hash. Removal of `market_data_hash` is handled by
+plan 26.
 
 ### Open-trade request
 

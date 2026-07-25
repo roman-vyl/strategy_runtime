@@ -1,4 +1,5 @@
 from dataclasses import replace
+from typing import Literal
 
 import pytest
 
@@ -17,7 +18,7 @@ from strategy_runtime.runtime.open_position.models import (
 )
 from strategy_runtime.runtime.open_position.resolver import OpenPositionResolver
 from strategy_runtime.runtime.orchestrator.orchestrator import StrategyRuntimeOrchestrator
-from strategy_runtime.runtime.recipes.entry import EntryRecipe, LiveEntryPlan
+from strategy_runtime.runtime.recipes.entry import DesiredEntry
 from strategy_runtime.runtime.recipes.position_management import CloseSignal, DesiredProtection
 from strategy_runtime.runtime.routing.errors import (
     OpenTradeContextUnavailable,
@@ -85,8 +86,11 @@ def processing_unit(
     )
 
 
-def plan(side: str) -> LiveEntryPlan:
-    return LiveEntryPlan(side, 900, "100.00", "99.00", "103.00", "runner")
+def desired_entry(side: Literal["long", "short"] = "long") -> DesiredEntry:
+    return DesiredEntry(side, 900, "100.00", "99.00", "103.00", "runner")
+
+
+DEFAULT_DESIRED_ENTRY = desired_entry()
 
 
 class Abi:
@@ -111,21 +115,18 @@ class LiveEngine:
     def __init__(
         self,
         *,
+        desired: DesiredEntry | None = DEFAULT_DESIRED_ENTRY,
         error: Exception | None = None,
     ) -> None:
         self.requests: list[object] = []
+        self.desired = desired
         self.error = error
 
     def project_live_entry(self, request):
         self.requests.append(request)
         if self.error is not None:
             raise self.error
-        return LiveEntryProjectionResponse(
-            plans_by_side={
-                "long": plan("long"),
-                "short": None,
-            }
-        )
+        return LiveEntryProjectionResponse(desired_entry=self.desired)
 
 
 class OpenEngine:
@@ -170,7 +171,7 @@ def frozen_trade_state() -> StrategyInstanceRuntimeState:
         state,
         current_trade_cycle=CurrentTradeCycle(
             "cycle-1",
-            EntryRecipe(plan("long"), None),
+            desired_entry(),
             True,
         ),
     )
@@ -252,19 +253,32 @@ def test_router_projects_one_live_entry_without_mutating_state() -> None:
         processing_unit(),
         resolved_state(position_open=False, state=state),
     )
-    live_engine = LiveEngine()
+    expected = desired_entry("short")
+    live_engine = LiveEngine(desired=expected)
 
     result = router(live_engine=live_engine).route(item)
 
     assert isinstance(result, LiveEntryProjectedStrategyInstance)
     assert result.source is item
-    assert result.entry_recipe.long_plan == plan("long")
-    assert result.entry_recipe.short_plan is None
+    assert result.desired_entry is expected
+    assert result.desired_entry.side == "short"
     assert len(live_engine.requests) == 1
     assert not hasattr(live_engine.requests[0], "instance_id")
     assert live_engine.requests[0].strategy_id == "ema_pullback"
     assert live_engine.requests[0].target_bar_open_time_ms == 1000
     assert state.current_trade_cycle is None
+
+
+def test_router_preserves_no_desired_entry_without_side_arbitration() -> None:
+    item = PositionResolvedStrategyInstance(
+        processing_unit(),
+        resolved_state(position_open=False),
+    )
+
+    result = router(live_engine=LiveEngine(desired=None)).route(item)
+
+    assert isinstance(result, LiveEntryProjectedStrategyInstance)
+    assert result.desired_entry is None
 
 
 def test_router_projects_one_open_trade_from_frozen_entry_context() -> None:
@@ -283,7 +297,7 @@ def test_router_projects_one_open_trade_from_frozen_entry_context() -> None:
     assert not hasattr(open_engine.requests[0], "instance_id")
     assert open_engine.requests[0].strategy_id == "ema_pullback"
     assert open_engine.requests[0].target_bar_open_time_ms == 1000
-    assert open_engine.requests[0].entry_recipe == state.current_trade_cycle.entry_recipe
+    assert open_engine.requests[0].desired_entry == state.current_trade_cycle.desired_entry
     assert not hasattr(open_engine.requests[0], "executed_entry_price")
     assert state.current_trade_cycle.position_management_recipe is None
 
@@ -295,7 +309,7 @@ def test_open_trade_request_contract_rejects_executed_entry_price() -> None:
         "ticker": "BTCUSDT.P",
         "base_timeframe": "5m",
         "target_bar_open_time_ms": 1000,
-        "entry_recipe": EntryRecipe(plan("long"), None),
+        "desired_entry": desired_entry(),
         "entry_bar_open_time_ms": 950,
         "executed_entry_price": "100.5",
     }
@@ -388,7 +402,7 @@ def test_router_does_not_mask_engine_programming_errors() -> None:
 def test_clean_engine_response_dtos_reject_obsolete_echo_fields(branch, field) -> None:
     if branch == "live":
         payload = {
-            "plans_by_side": {"long": plan("long"), "short": None},
+            "desired_entry": desired_entry(),
             field: "obsolete",
         }
         response_type = LiveEntryProjectionResponse
@@ -403,6 +417,13 @@ def test_clean_engine_response_dtos_reject_obsolete_echo_fields(branch, field) -
 
     with pytest.raises(TypeError, match="unexpected keyword argument"):
         response_type(**payload)
+
+
+def test_live_entry_response_rejects_old_side_wise_contract() -> None:
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        LiveEntryProjectionResponse(  # type: ignore[call-arg]
+            plans_by_side={"long": desired_entry(), "short": None}
+        )
 
 
 def test_open_trade_diagnostics_are_opaque_and_recursively_immutable() -> None:
@@ -460,7 +481,7 @@ def test_semantic_orchestrator_calls_each_scalar_stage_once_and_stops_at_project
     state = runtime_state()
     resolved = resolved_state(position_open=False, state=state)
     item = PositionResolvedStrategyInstance(processing_unit(), resolved)
-    projected = LiveEntryProjectedStrategyInstance(item, EntryRecipe(plan("long"), None))
+    projected = LiveEntryProjectedStrategyInstance(item, desired_entry())
     repository = CountingRepository(state)
     resolver_port = CountingResolver(resolved)
     router_port = CountingRouter(projected)

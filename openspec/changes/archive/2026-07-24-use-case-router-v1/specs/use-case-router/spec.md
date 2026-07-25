@@ -48,7 +48,8 @@ The router SHALL select the Engine use case from `position_open`.
 
 ### Requirement: Live-entry mapping and result are exact
 The router SHALL build the live-entry request from the current processing unit
-and preserve the returned plans as one typed recipe.
+and preserve singular `desired_entry: DesiredEntry | null` without side
+selection or arbitration.
 
 #### Scenario: Map the live-entry request
 - **WHEN** a closed position is routed
@@ -56,10 +57,11 @@ and preserve the returned plans as one typed recipe.
 - **AND** contains the derived instance ID
 - **AND** contains the committed bar open time as `target_bar_open_time_ms`
 
-#### Scenario: Preserve the entry recipe
+#### Scenario: Preserve the desired entry
 - **WHEN** Engine returns a valid live-entry response
-- **THEN** the projection contains the returned long and short plans
-- **AND** null plans remain null
+- **THEN** the projection contains the returned singular `DesiredEntry`
+- **AND** its embedded side is preserved without Runtime arbitration
+- **AND** null remains null
 - **AND** the source processing item is retained
 
 ### Requirement: Open-trade mapping requires frozen entry context
@@ -67,14 +69,14 @@ The router SHALL call open-trade projection only when the runtime state and
 resolved facts contain complete immutable entry context.
 
 #### Scenario: Reject missing context before Engine
-- **WHEN** the current trade cycle is absent, its entry recipe is not frozen, or either execution fact is absent
+- **WHEN** the current trade cycle is absent, its desired entry is not frozen, or either execution fact is absent
 - **THEN** the router raises `OpenTradeContextUnavailable`
 - **AND** does not call either Engine port
 
 #### Scenario: Map the open-trade request
 - **WHEN** an open position has complete context
 - **THEN** the request contains the same strategy, instance, market, and target-bar mapping as live entry
-- **AND** contains the frozen entry recipe
+- **AND** contains the frozen `DesiredEntry`
 - **AND** contains resolver-supplied entry bar and executed entry price
 - **AND** contains no Runtime cycle ID or exchange identifier
 
@@ -103,7 +105,7 @@ target bar echoed by either Engine projection.
 
 #### Scenario: Do not duplicate echoes in recipes
 - **WHEN** all echoes are valid
-- **THEN** the router does not copy them into `EntryRecipe` or `PositionManagementRecipe`
+- **THEN** the router does not copy them into `DesiredEntry` or `PositionManagementRecipe`
 
 ### Requirement: Engine transport failures remain distinct
 The Engine adapter boundary SHALL classify network, timeout, HTTP, and transport
@@ -112,7 +114,7 @@ propagate that failure.
 
 #### Scenario: Live-entry transport is unavailable
 - **WHEN** the live-entry Engine port raises `StrategyEngineProjectionUnavailable`
-- **THEN** the router propagates it without fabricating an entry recipe
+- **THEN** the router propagates it without fabricating a desired entry
 
 #### Scenario: Open-trade transport is unavailable
 - **WHEN** the open-trade Engine port raises `StrategyEngineProjectionUnavailable`

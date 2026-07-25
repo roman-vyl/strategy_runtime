@@ -1,14 +1,15 @@
-"""Immutable potential-entry recipe models returned by Strategy Engine."""
+"""Immutable singular desired-entry model returned by Strategy Engine."""
 
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Literal
 
 from strategy_runtime.shared.decimal_text import normalize_decimal_text
 
 
 @dataclass(frozen=True, slots=True)
-class LiveEntryPlan:
-    side: str
+class DesiredEntry:
+    side: Literal["long", "short"]
     source_plan_bar_open_time_ms: int
     planned_entry_price: str
     initial_stop_price: str
@@ -32,15 +33,3 @@ class LiveEntryPlan:
         object.__setattr__(self, "initial_take_price", initial_take_price)
         if not self.locked_exit_profile.strip():
             raise ValueError("locked_exit_profile must be non-empty")
-
-
-@dataclass(frozen=True, slots=True)
-class EntryRecipe:
-    long_plan: LiveEntryPlan | None
-    short_plan: LiveEntryPlan | None
-
-    def __post_init__(self) -> None:
-        if self.long_plan is not None and self.long_plan.side != "long":
-            raise ValueError("long_plan must have side=long")
-        if self.short_plan is not None and self.short_plan.side != "short":
-            raise ValueError("short_plan must have side=short")
