@@ -20,7 +20,7 @@ LiveEntryProjectedStrategyInstance
 -> desired entry reconciliation
 -> ABI attached entry package
 -> ABI acknowledgement
--> CurrentTradeExecution
+-> CurrentTradeCycle
 -> ABI partial/full fill webhooks
 -> Runtime state transition
 ```
@@ -76,14 +76,14 @@ Both orchestrator paths meet only through the durable `StrategyInstanceRuntimeSt
 
 ## 4. Strategy-instance aggregate
 
-`CurrentTradeExecution` is nested inside the long-lived strategy-instance aggregate:
+`CurrentTradeCycle` is nested inside the long-lived strategy-instance aggregate:
 
 ```text
 StrategyInstanceRuntimeState
 ├── strategy_instance_id
 ├── registered_deployment
 ├── risk_multiplier
-└── current_trade_execution: CurrentTradeExecution | null
+└── current_trade_cycle: CurrentTradeCycle | null
 ```
 
 `registered_deployment` is the immutable Runtime deployment snapshot containing:
@@ -101,14 +101,14 @@ A newly created strategy-instance state receives the canonical value `"1"`.
 Repeated deployment discovery does not reset the stored value, and the value
 does not participate in `strategy_instance_id` derivation.
 
-`current_trade_execution = null` means that the instance currently owns no acknowledged entry package and no real open position.
+`current_trade_cycle = null` means that the instance currently owns no acknowledged entry package and no real open position.
 
-## 5. `CurrentTradeExecution` target shape
+## 5. `CurrentTradeCycle` target shape
 
-The active trade execution object represents one complete entry-to-close lifecycle:
+The current trade-cycle aggregate represents one complete entry-to-close lifecycle:
 
 ```text
-CurrentTradeExecution
+CurrentTradeCycle
 ├── trade_cycle_id
 ├── execution_intent_id
 ├── phase
@@ -122,6 +122,11 @@ CurrentTradeExecution
 ├── last_fill_at_ms | null
 └── position_management_recipe | null
 ```
+
+`CurrentTradeCycle` is the single Runtime aggregate for one sequential trading
+cycle. This master plan details only its live-entry slice. The future open-trade
+management model will be added inside the same aggregate as a separate design
+slice.
 
 The first implementation may introduce these fields incrementally, but the ownership boundary should remain stable.
 
@@ -148,7 +153,7 @@ ambiguous call result.
 
 Exchange orders and fills may have their own ABI/exchange identifiers inside ABI's execution ledger.
 
-## 7. `CurrentTradeExecution` phases
+## 7. `CurrentTradeCycle` phases
 
 The first implementation uses only:
 
@@ -240,7 +245,7 @@ instance. It holds that same mutex through comparison, any bounded ABI call,
 state update, and save.
 
 It compares the new `desired_entry` with the currently applied
-`desired_entry` stored in `CurrentTradeExecution`:
+`desired_entry` stored in `CurrentTradeCycle`:
 
 ```text
 new desired_entry
@@ -355,14 +360,14 @@ current execution status = awaiting_entry
 
 The exact exchange payload remains ABI-private unless Runtime needs a specific field for later correlation or diagnostics.
 
-## 16. Creation and update of `CurrentTradeExecution`
+## 16. Creation and update of `CurrentTradeCycle`
 
-Runtime creates the first `CurrentTradeExecution` only after ABI successfully acknowledges the package.
+Runtime creates the first `CurrentTradeCycle` only after ABI successfully acknowledges the package.
 
 For first apply:
 
 ```text
-current_trade_execution = CurrentTradeExecution(
+current_trade_cycle = CurrentTradeCycle(
     phase = awaiting_entry,
     applied_desired_entry = acknowledged desired_entry,
     frozen_entry_context = null,
@@ -421,6 +426,15 @@ While phase is `awaiting_entry`:
 - a null `desired_entry` may produce `CANCEL`;
 - an unchanged `DesiredEntry` produces `NO_OP`.
 
+For Live V1, a successful ABI `entry_package_cancelled` response is the
+authoritative confirmation of cancellation. Runtime then completes the current
+entry lifecycle and clears `current_trade_cycle`.
+
+If ABI returns an error or the cancel request times out, Runtime preserves the
+existing `current_trade_cycle`, records the error, and introduces no new
+state. More complex cancellation edge cases, cancel/fill races, and late
+execution callbacks are deferred until there is concrete operational need.
+
 After the first fill, live-entry replacement/cancellation no longer controls the trade cycle. The position-management branch becomes responsible for future decisions.
 
 ## 19. ABI execution webhook
@@ -447,7 +461,7 @@ occurred_at_ms
 ABI must bind exchange orders to the Runtime ownership identities before emitting the callback.
 The event model does not carry or reconstruct side-wise entry objects. After
 identity validation, each fill applies to the one
-`CurrentTradeExecution.applied_desired_entry`; the first fill freezes that same
+`CurrentTradeCycle.applied_desired_entry`; the first fill freezes that same
 object inside `FrozenExecutedEntryContext`.
 
 ## 20. `AbiExecutionEventOrchestrator`
@@ -458,7 +472,7 @@ The webhook path performs:
 1. Parse and validate the event.
 2. Acquire the local keyed mutex for strategy_instance_id.
 3. Load the current StrategyInstanceRuntimeState after acquiring the mutex.
-4. Require a matching CurrentTradeExecution.
+4. Require a matching CurrentTradeCycle.
 5. Validate trade_cycle_id and execution_intent_id.
 6. Apply the fill aggregate.
 7. Freeze the singular executed entry context on the first fill.
@@ -466,7 +480,7 @@ The webhook path performs:
 9. Save the complete aggregate and release the mutex.
 ```
 
-HTTP handlers never mutate `CurrentTradeExecution` directly.
+HTTP handlers never mutate `CurrentTradeCycle` directly.
 The mutex is the same mutex used by closed-bar reconciliation, so a webhook may
 wait for an in-flight ABI call but never applies a state snapshot captured
 before waiting. Durable duplicate-fill suppression is not part of Live V1.
@@ -601,7 +615,7 @@ src/strategy_runtime/runtime/
 │   └── abi_execution_event.py
 ├── state/
 │   ├── strategy_instance.py
-│   ├── current_trade_execution.py
+│   ├── current_trade_cycle.py
 │   └── repository.py
 ├── reconciliation/
 │   ├── entry_diff.py
@@ -615,7 +629,7 @@ src/strategy_runtime/runtime/
 
 Planned implementation order after this document is approved:
 
-1. Finalise the `CurrentTradeExecution` model and invariants.
+1. Finalise the `CurrentTradeCycle` model and invariants.
 2. Finalise `DesiredEntry` fields and the state-owned exact-decimal `risk_multiplier`.
 3. Define reconciliation decisions and equivalence rules.
 4. Define the ABI desired-entry-package port and acknowledgement models.
