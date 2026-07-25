@@ -115,7 +115,6 @@ CurrentTradeExecution
 ├── applied_desired_entry: DesiredEntry
 ├── frozen_entry_context: FrozenExecutedEntryContext | null
 ├── applied_entry_package
-├── processed_fill_ids
 ├── filled_quantity
 ├── remaining_quantity
 ├── average_entry_price | null
@@ -141,7 +140,11 @@ execution_intent_id
 = which concrete ABI entry intention is being reconciled
 ```
 
-`execution_intent_id` is not an exchange-order ID and not a fill ID. Its purpose is to give one stable identity to the desired entry package so ABI can safely recognise retries, replacements, cancellations, acknowledgements, and later fill callbacks as belonging to the same entry intention instead of creating duplicate packages.
+`execution_intent_id` is not an exchange-order ID and not a fill ID. Its purpose
+is to give one stable identity to the desired entry package and its later fill
+callbacks. It is also the correlation basis for future ABI command idempotency,
+but Live V1 does not assume that create or replace is retry-safe after an
+ambiguous call result.
 
 Exchange orders and fills may have their own ABI/exchange identifiers inside ABI's execution ledger.
 
@@ -232,6 +235,10 @@ LiveEntryProjectedStrategyInstance
 StrategyInstanceRuntimeState
 ```
 
+Before loading the aggregate, it acquires the process-local keyed mutex for the
+instance. It holds that same mutex through comparison, any bounded ABI call,
+state update, and save.
+
 It compares the new `desired_entry` with the currently applied
 `desired_entry` stored in `CurrentTradeExecution`:
 
@@ -293,6 +300,11 @@ alternative entry mode. Runtime must fail closed before forming an `APPLY` or
 take.
 
 ABI decides whether the exchange implementation requires create, amend, cancel-and-recreate, or another sequence.
+
+All ABI calls have a bounded timeout. A timeout or transport failure after the
+command may have reached ABI is an ambiguous result; Runtime must not blindly
+repeat create or replace until future command idempotency and recovery state can
+prove the safe action.
 
 ## 14. Atomic attached entry package
 
@@ -444,17 +456,20 @@ The webhook path performs:
 
 ```text
 1. Parse and validate the event.
-2. Load StrategyInstanceRuntimeState by strategy_instance_id.
-3. Require a matching CurrentTradeExecution.
-4. Validate trade_cycle_id and execution_intent_id.
-5. Ignore an already processed fill_id.
+2. Acquire the local keyed mutex for strategy_instance_id.
+3. Load the current StrategyInstanceRuntimeState after acquiring the mutex.
+4. Require a matching CurrentTradeExecution.
+5. Validate trade_cycle_id and execution_intent_id.
 6. Apply the fill aggregate.
 7. Freeze the singular executed entry context on the first fill.
 8. Advance the execution phase.
-9. Save the complete aggregate.
+9. Save the complete aggregate and release the mutex.
 ```
 
 HTTP handlers never mutate `CurrentTradeExecution` directly.
+The mutex is the same mutex used by closed-bar reconciliation, so a webhook may
+wait for an in-flight ABI call but never applies a state snapshot captured
+before waiting. Durable duplicate-fill suppression is not part of Live V1.
 
 ## 21. Partial-fill state transitions
 
@@ -492,10 +507,10 @@ The first partial fill already creates real market exposure and must be treated 
 
 Runtime does not implement a detailed duplicate fill ledger in the first version.
 
-ABI remains authoritative for full exchange-order and fill history. Runtime stores only the minimum state needed for routing, idempotency, and Engine requests:
+ABI remains authoritative for full exchange-order and fill history. Runtime
+stores only the minimum Live V1 state needed for routing and Engine requests:
 
 ```text
-processed_fill_ids
 filled_quantity
 remaining_quantity
 average_entry_price
@@ -543,22 +558,35 @@ Runtime never infers ownership from ticker, side, price, or total exchange posit
 
 The detailed ABI virtual-position ledger remains subject to the later ABI data-model review.
 
-## 25. Minimal reliability now; concurrency later
+## 25. Live V1 local serialization and deferred reliability
 
-The first version requires only basic idempotency:
+Live V1 intentionally runs as one Runtime process with one worker. Multiple
+replicas and horizontal scaling are prohibited. One local keyed mutex per
+`strategy_instance_id` is shared by closed-bar reconciliation and ABI fill
+webhooks and covers the complete
+`load → decision → ABI call → state update → save` cycle. Different instances
+may be processed in parallel.
 
-- repeating reconciliation for the same `execution_intent_id` must not create duplicate packages;
-- repeating a webhook with the same `fill_id` must not increase the Runtime position twice.
+This deliberately permits a fill webhook to wait briefly behind an ABI call.
+After it acquires the mutex, it reloads current state before applying the event.
+ABI calls use bounded timeouts, and an ambiguous create/replace result is not
+blindly retried. The mutex is released on every success and failure path.
 
-The first version deliberately does not yet implement:
+The following mechanisms are explicitly deferred:
 
-- per-instance queues;
-- distributed locks;
-- optimistic revision/CAS protocols;
-- transactional outbox;
-- complex stale-response recovery.
+- repository revisions and compare-and-swap;
+- persisted pending execution actions written before external calls;
+- ABI command idempotency;
+- idempotent application and durable deduplication of fill events;
+- restart recovery and stale-response recovery;
+- multi-worker and multi-replica deployment;
+- distributed locking or another cross-process coordination mechanism.
 
-The architecture keeps future insertion points by requiring all mutations to pass through repositories and dedicated orchestrators rather than direct HTTP-handler mutation.
+They become required before horizontal scaling or stronger production
+guarantees. This single-process local-mutex model is a conscious first-live
+constraint, not the final production-scale solution. The architecture preserves
+the extension point by routing mutations through repositories and dedicated
+orchestrators rather than direct HTTP-handler mutation.
 
 ## 26. Module structure, implementation sequence, and deferred topics
 
@@ -605,7 +633,8 @@ Deferred topics include:
 - market-close and close acknowledgements;
 - a future pending limit-exit phase (`closing` or a more precise name);
 - partial-entry remainder policy and timeouts;
-- missed-callback/restart reconciliation;
+- missed-callback/restart reconciliation and persisted pending actions;
 - full ABI virtual-position ledger design;
-- advanced concurrency control;
+- repository CAS, ABI command idempotency, fill-event idempotency, and
+  multi-process concurrency control;
 - exact production HTTP endpoint names and exchange-specific payloads.

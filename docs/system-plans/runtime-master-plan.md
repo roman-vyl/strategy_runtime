@@ -302,7 +302,67 @@ It deliberately does not:
 - call ABI execution endpoints;
 - interpret Engine calculations as exchange operations.
 
-## 9. Open architecture gates
+## 9. Live V1 concurrency model
+
+The first live deployment deliberately uses a constrained concurrency model.
+This is an explicit launch boundary, not the final production-scale design.
+
+Deployment constraints:
+
+- Runtime runs as exactly one process with one worker;
+- multiple Runtime replicas and horizontal scaling are prohibited;
+- concurrent request handling may process different strategy instances in
+  parallel, but all mutations for one `strategy_instance_id` are serialized by
+  one process-local keyed mutex.
+
+Closed-bar reconciliation and the ABI fill-webhook path are independent state
+writers for the same strategy-instance aggregate. Both paths must acquire the
+same keyed mutex before loading mutable state. The critical section covers the
+entire operation:
+
+```text
+acquire keyed mutex(strategy_instance_id)
+→ load current aggregate
+→ make decision
+→ call ABI when required
+→ update aggregate
+→ save aggregate
+→ release mutex
+```
+
+The mutex intentionally remains held across the ABI call. A fill webhook may
+therefore wait briefly for reconciliation to finish its external call. After
+acquiring the mutex, the webhook must load the aggregate again and make its
+decision from that current state; it must not apply a snapshot captured before
+waiting.
+
+Every ABI call must use a bounded timeout. If create or replace reaches an
+ambiguous outcome, Runtime must not blindly retry the command: the Live V1
+contract does not yet provide persisted pending actions, command idempotency, or
+recovery capable of proving whether the first call took effect.
+The mutex must be released on every success and failure path.
+
+The repository's existing internal lock protects individual in-memory
+repository operations only. It is not a substitute for the shared
+strategy-instance mutex around both end-to-end writer workflows. This document
+records the required live boundary; the keyed-mutex wiring belongs to the
+future reconciliation/webhook implementation and must exist before those
+writers are enabled in Live V1.
+
+The following production-hardening mechanisms are deferred:
+
+- repository revisions and compare-and-swap;
+- persisting pending execution actions before an external ABI call;
+- ABI command idempotency;
+- idempotent application of fill events;
+- restart recovery;
+- multi-worker and multi-replica deployment.
+
+They become required before horizontal scaling or whenever stronger production
+guarantees are adopted. At that point the local mutex may remain a local
+optimization, but it cannot replace durable coordination and recovery.
+
+## 10. Open architecture gates
 
 1. Decide whether the initial Runtime remains in-memory or adopts SQLite or
    another durable state adapter.
@@ -315,18 +375,23 @@ It deliberately does not:
    proves it necessary.
 6. Apply Engine cleanup plans 24–29 before production HTTP integration.
 7. Implement and verify production ABI and Strategy Engine adapters.
-8. Define concurrency, idempotency, restart, and recovery guarantees appropriate
-   to the selected persistence model.
+8. Implement and verify the shared per-instance mutex and bounded ABI timeouts
+   before enabling both Live V1 writers.
+9. Select and implement the deferred CAS, idempotency, pending-action, and
+   recovery guarantees before horizontal scaling or stronger production
+   guarantees.
 
-## 10. Next implementation sequence
+## 11. Next implementation sequence
 
 1. Specify and implement the projection-result state applier.
 2. Decide the repository persistence policy and implement only the guarantees
    required by that decision.
 3. Design the ABI execution callback and singular desired-entry freeze transition.
-4. Design closure transition, completed-cycle archival, and next-cycle creation.
-5. Extend processing journal events around semantic Runtime stages.
-6. Add full integration tests across utility Runtime, state repository, fake
+4. Add the shared local keyed-mutex boundary to reconciliation and fill-webhook
+   orchestration, with bounded ABI call timeouts.
+5. Design closure transition, completed-cycle archival, and next-cycle creation.
+6. Extend processing journal events around semantic Runtime stages.
+7. Add full integration tests across utility Runtime, state repository, fake
    ABI, and fake Engine.
-7. Add production HTTP adapters only after the adjacent service contracts match
+8. Add production HTTP adapters only after the adjacent service contracts match
    the cleaned Runtime boundary.

@@ -187,24 +187,33 @@ The aggregate returns to a state capable of starting a new trade cycle. A new
 cycle receives a new `trade_cycle_id`. None of these transitions is implemented
 in the current projection contour.
 
-## 10. Persistence and concurrency gate
+## 10. Live V1 persistence and concurrency boundary
 
 The repository port intentionally does not expose a storage technology. The
 current implementation is an in-memory dictionary protected by `RLock`.
 
-The initial service may remain in-memory. Before adding concurrent closed-bar
-state application and asynchronous ABI execution callbacks, the project must
-decide:
+The initial live deployment is constrained to one Runtime process and one
+worker. Multiple replicas and horizontal scaling are prohibited. A single
+process-local keyed mutex per `strategy_instance_id` serializes both closed-bar
+reconciliation and ABI fill-webhook mutations across their complete
+`load → decision → ABI call → state update → save` cycle. Different strategy
+instances may proceed in parallel.
 
-- whether process restart recovery is required for the selected deployment;
-- whether one process is the only state writer;
-- whether aggregate versioning or compare-and-swap is required;
-- whether full-snapshot replacement is sufficient;
-- which transitions must be atomic;
-- whether SQLite or another durable adapter is justified.
+A webhook that waits behind reconciliation must reload state after acquiring
+the mutex. Holding the mutex across an ABI call is accepted for Live V1, so
+every such call requires a bounded timeout. An ambiguous create/replace result
+must not be retried blindly.
 
 Independent of storage choice, state application must not partially merge a
 `DesiredEntry`, and `get_or_create` must remain deterministic and identity-safe.
+The repository's own `RLock` does not replace the end-to-end keyed mutex.
+
+Repository revisions/CAS, persisted pending execution actions, ABI command
+idempotency, idempotent fill-event application, restart recovery, and
+multi-worker or multi-replica deployment remain deferred. They are required
+before horizontal scaling or stronger production guarantees. The Live V1
+boundary is intentionally limited and is not the final production-scale
+concurrency model.
 
 ## 11. Identifier boundary
 
