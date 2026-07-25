@@ -2,7 +2,7 @@
 
 Status: discussion-approved high-level plan for the second half of the Runtime live-entry pipeline. This document is not an OpenSpec change and does not yet authorize implementation.
 
-The plan starts at the point where Runtime already owns one typed Strategy Engine projection result and ends at the point where ABI execution events have updated the durable strategy-instance state.
+The plan starts at the point where Runtime already owns one typed Strategy Engine projection result and ends at the point where ABI execution events have updated the Runtime-owned repository state.
 
 ## 1. Scope and starting boundary
 
@@ -72,7 +72,8 @@ Realtime ABI callbacks are handled by a separate orchestrator:
 AbiExecutionEventOrchestrator
 ```
 
-Both orchestrator paths meet only through the durable `StrategyInstanceRuntimeStateRepository`.
+Both orchestrator paths meet only through the Runtime-owned
+`StrategyInstanceRuntimeStateRepository`.
 
 ## 4. Strategy-instance aggregate
 
@@ -81,19 +82,20 @@ Both orchestrator paths meet only through the durable `StrategyInstanceRuntimeSt
 ```text
 StrategyInstanceRuntimeState
 ├── strategy_instance_id
-├── registered_deployment
+├── strategy_id
+├── registered_spec_snapshot
 ├── risk_multiplier
 └── current_trade_cycle: CurrentTradeCycle | null
 ```
 
-`registered_deployment` is the immutable Runtime deployment snapshot containing:
+`registered_spec_snapshot` remains the existing immutable Runtime snapshot
+containing:
 
 ```text
-strategy_id
-ticker
+instrument
 base_timeframe
 raw_spec
-derived strategy_instance_id
+source_path
 ```
 
 `risk_multiplier` is a Runtime-owned positive exact-decimal operational setting.
@@ -110,7 +112,6 @@ The current trade-cycle aggregate represents one complete entry-to-close lifecyc
 ```text
 CurrentTradeCycle
 ├── trade_cycle_id
-├── execution_intent_id
 ├── phase
 ├── applied_desired_entry: DesiredEntry
 ├── frozen_entry_context: FrozenExecutedEntryContext | null
@@ -139,17 +140,16 @@ strategy_instance_id
 = which deployed strategy owns the execution
 
 trade_cycle_id
-= which Runtime trade lifecycle this execution belongs to
-
-execution_intent_id
-= which concrete ABI entry intention is being reconciled
+= which Runtime trade lifecycle and its single current entry package this execution belongs to
 ```
 
-`execution_intent_id` is not an exchange-order ID and not a fill ID. Its purpose
-is to give one stable identity to the desired entry package and its later fill
-callbacks. It is also the correlation basis for future ABI command idempotency,
-but Live V1 does not assume that create or replace is retry-safe after an
-ambiguous call result.
+In Live V1, one `CurrentTradeCycle` owns at most one current entry package.
+Therefore, `strategy_instance_id + trade_cycle_id` is the complete Runtime
+ownership and callback binding pair.
+
+A separate Runtime-owned `command_id` remains a future gate and may be introduced
+only if a later command-idempotency design proves that an independently durable
+command identity is required.
 
 Exchange orders and fills may have their own ABI/exchange identifiers inside ABI's execution ledger.
 
@@ -228,7 +228,8 @@ It does not prove that:
 - any quantity has filled;
 - Runtime may mark a position as open.
 
-The Engine projection becomes durable execution state only after successful ABI reconciliation.
+The Engine projection becomes repository execution state only after successful
+ABI reconciliation.
 
 ## 11. `EntryReconciliationOrchestrator`
 
@@ -286,7 +287,6 @@ Runtime sends one business command representing the desired entry package, conce
 ReconcileDesiredEntryPackage
 ├── strategy_instance_id
 ├── trade_cycle_id
-├── execution_intent_id
 ├── ticker
 ├── desired_entry: DesiredEntry | null
 └── risk_multiplier: positive exact decimal text | null
@@ -296,7 +296,7 @@ ReconcileDesiredEntryPackage
 or replace the desired package.
 
 `desired_entry = null` with a null `risk_multiplier` means no pending entry
-package should remain for this intent.
+package should remain for this trade cycle.
 
 An existing `DesiredEntry` always contains a positive exact-decimal
 `initial_take_price`. Missing or null take is malformed Engine output, not an
@@ -306,10 +306,10 @@ take.
 
 ABI decides whether the exchange implementation requires create, amend, cancel-and-recreate, or another sequence.
 
-All ABI calls have a bounded timeout. A timeout or transport failure after the
-command may have reached ABI is an ambiguous result; Runtime must not blindly
-repeat create or replace until future command idempotency and recovery state can
-prove the safe action.
+All ABI calls have a bounded timeout. An ambiguous create/replace result is
+surfaced as an ordinary failure; Live V1 adds no special state or recovery flow,
+and later committed-bar cycles continue through the ordinary pipeline. This
+accepted limitation may be revisited after initial operational testing.
 
 ## 14. Atomic attached entry package
 
@@ -341,14 +341,13 @@ Runtime must not consider the command successful if only part of the package was
 
 A successful ABI reply means:
 
-> the desired attached entry package for this execution intent was processed and is now the acknowledged ABI state.
+> the desired attached entry package for this trade cycle was processed and is now the acknowledged ABI state.
 
 It must contain enough binding and execution information to persist Runtime state, including conceptually:
 
 ```text
 strategy_instance_id
 trade_cycle_id
-execution_intent_id
 status = entry_package_applied
 applied_desired_entry: DesiredEntry
 accepted risk multiplier / calculated quantity summary
@@ -411,12 +410,12 @@ The future open-trade receipt is constructed from this same singular context:
 ```text
 OpenTradeReceipt
 ├── desired_entry: DesiredEntry
-├── entry_bar_open_time_ms
-└── executed_entry_price
+└── entry_bar_open_time_ms
 ```
 
 Receipt construction must not introduce long/short receipt branches or
-duplicate execution objects.
+duplicate execution objects. `executed_entry_price` remains a Runtime/ABI
+execution fact and is not transmitted to Strategy Engine.
 
 ## 18. Replace and cancel before fill
 
@@ -448,7 +447,6 @@ event_id
 fill_id
 strategy_instance_id
 trade_cycle_id
-execution_intent_id
 exchange order reference
 fill_quantity
 fill_price
@@ -473,7 +471,7 @@ The webhook path performs:
 2. Acquire the local keyed mutex for strategy_instance_id.
 3. Load the current StrategyInstanceRuntimeState after acquiring the mutex.
 4. Require a matching CurrentTradeCycle.
-5. Validate trade_cycle_id and execution_intent_id.
+5. Validate strategy_instance_id and trade_cycle_id.
 6. Apply the fill aggregate.
 7. Freeze the singular executed entry context on the first fill.
 8. Advance the execution phase.
@@ -538,20 +536,12 @@ Before implementation, the ABI/Bybit review must confirm exactly which cumulativ
 
 ## 23. Routing after the first fill
 
-The next committed-bar route must use a semantic predicate such as:
-
-```text
-has_open_position
-```
-
-It is true for at least:
-
-```text
-partially_filled
-position_open
-```
-
-Therefore, after the first fill, the next MDS cycle uses the Engine open-trade path rather than live-entry projection.
+`CurrentTradeCycle.phase` is a Runtime lifecycle invariant, not proof of the
+current exchange position. On every committed-bar cycle, the existing ABI
+open-position resolver obtains the authoritative current `position_open` fact,
+and the existing use-case router selects the Engine live-entry or open-trade
+path from that fact. An ABI-reported open position without complete frozen
+Runtime context fails closed.
 
 ## 24. Multi-strategy ownership on one ticker
 
@@ -581,10 +571,19 @@ webhooks and covers the complete
 `load → decision → ABI call → state update → save` cycle. Different instances
 may be processed in parallel.
 
+Live V1 uses the existing in-memory
+`StrategyInstanceRuntimeStateRepository`. SQLite or another durable persistence
+adapter is a future gate and is not required for the initial launch.
+
 This deliberately permits a fill webhook to wait briefly behind an ABI call.
 After it acquires the mutex, it reloads current state before applying the event.
-ABI calls use bounded timeouts, and an ambiguous create/replace result is not
-blindly retried. The mutex is released on every success and failure path.
+The mutex is released on every success and failure path.
+
+Live V1 adds no projection generations, post-lock reprojection, quarantine,
+fail-stop mode, `outcome_unknown`, persisted pending actions, ABI lookup
+recovery, or command idempotency. The existing mutex and ordinary lifecycle
+invariants are the complete V1 guard. The residual risk is accepted for the
+initial launch and may be revisited after operational testing.
 
 The following mechanisms are explicitly deferred:
 
@@ -627,18 +626,18 @@ src/strategy_runtime/runtime/
     └── execution_event_models.py
 ```
 
-Planned implementation order after this document is approved:
+Planned delivery order:
 
-1. Finalise the `CurrentTradeCycle` model and invariants.
-2. Finalise `DesiredEntry` fields and the state-owned exact-decimal `risk_multiplier`.
-3. Define reconciliation decisions and equivalence rules.
-4. Define the ABI desired-entry-package port and acknowledgement models.
-5. Define ABI fill-event models and minimal fill aggregate state.
-6. Implement `EntryReconciliationOrchestrator`.
-7. Implement `AbiExecutionEventOrchestrator`.
-8. Connect both to the strategy-instance repository.
-9. Add state-machine and end-to-end tests with fake ABI.
-10. Only then create corresponding OpenSpec changes.
+1. Approve this master plan.
+2. Create corresponding OpenSpec changes covering `CurrentTradeCycle`,
+   `risk_multiplier`, reconciliation decisions, ABI entry-package
+   acknowledgement, fill events, and Runtime state updates.
+3. Validate the OpenSpec changes.
+4. Implement the approved OpenSpec tasks, including
+   `EntryReconciliationOrchestrator`, `AbiExecutionEventOrchestrator`, and their
+   repository integration.
+5. Add and run state-machine and end-to-end tests with fake ABI.
+6. Archive the completed OpenSpec changes after implementation and verification.
 
 Deferred topics include:
 

@@ -2,6 +2,10 @@
 
 Status: current architecture and implementation roadmap for Strategy Runtime.
 
+This document distinguishes the currently implemented Engine-projection contour
+from its approved but not yet implemented continuation. The latter is defined by
+[`runtime-abi-entry-reconciliation-master-plan.md`](runtime-abi-entry-reconciliation-master-plan.md).
+
 ## 1. Current implemented foundation
 
 The utility closed-bar contour is implemented and verified:
@@ -83,9 +87,8 @@ strategy_instance_id = utility-derived identity of strategy semantics + ticker +
 The aggregate survives multiple entry, open-position, close, and re-entry cycles. A completed trade does not destroy or replace the long-lived strategy-instance aggregate.
 
 The current repository implementation is in-memory and protected by an
-in-process lock. Keeping the initial Runtime in-memory is an accepted option.
-SQLite or another durable store is not assumed by the domain model and remains
-an explicit architecture gate.
+in-process lock. Live V1 retains this existing in-memory repository. SQLite or
+another durable store remains a future architecture gate.
 
 ## 4. Identity hierarchy
 
@@ -364,8 +367,8 @@ optimization, but it cannot replace durable coordination and recovery.
 
 ## 10. Open architecture gates
 
-1. Decide whether the initial Runtime remains in-memory or adopts SQLite or
-   another durable state adapter.
+1. Retain the existing in-memory repository for Live V1; keep SQLite or another
+   durable state adapter as a future gate.
 2. Define state-result application and repository update semantics.
 3. Define when `trade_cycle_id` is created and how a cycle is completed.
 4. Define the ABI execution notification/callback path that freezes the exact

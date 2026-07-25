@@ -11,7 +11,10 @@ The documents are intentionally layered:
    current state models plus the future lifecycle and persistence decisions.
 3. [`runtime-contract-map.md`](runtime-contract-map.md) — exact implemented
    module-to-module request, response, identity, and projection seams.
-4. [`overall-central-journal.md`](overall-central-journal.md) — deferred
+4. [`runtime-abi-entry-reconciliation-master-plan.md`](runtime-abi-entry-reconciliation-master-plan.md)
+   — approved but not yet implemented continuation from the Engine live-entry
+   projection through ABI entry reconciliation and Runtime state updates.
+5. [`overall-central-journal.md`](overall-central-journal.md) — deferred
    cross-service journal initiative outside the active Runtime sequence.
 
 The documents explicitly distinguish:

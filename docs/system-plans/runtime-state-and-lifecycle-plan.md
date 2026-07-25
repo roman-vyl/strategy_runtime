@@ -4,6 +4,11 @@ Status: current state and lifecycle design. Domain models, the repository port,
 in-memory `get_or_create`, position resolution, and Engine projection are
 implemented. State-transition application and physical persistence remain open.
 
+The implemented state model below remains authoritative for current code. Its
+approved but not yet implemented live-entry reconciliation continuation is
+defined by
+[`runtime-abi-entry-reconciliation-master-plan.md`](runtime-abi-entry-reconciliation-master-plan.md).
+
 ## 1. Aggregate ownership
 
 Runtime owns one logical long-lived aggregate for each active deployed strategy
@@ -17,8 +22,9 @@ The aggregate is not a single trade. It is the long-lived operating state of a
 strategy deployment and remains after individual trades close.
 
 Logical ownership does not require a particular physical store. The current
-implementation is in-memory. SQLite or another durable repository remains an
-architecture decision rather than an assumption embedded in the aggregate.
+implementation is in-memory, and Live V1 retains that repository. SQLite or
+another durable repository remains a future gate rather than an initial-launch
+requirement or an assumption embedded in the aggregate.
 
 ## 2. Stable identity
 

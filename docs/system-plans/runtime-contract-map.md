@@ -4,6 +4,11 @@ Status: current implemented contract map for the semantic Engine-projection
 pipeline. Production HTTP adapters and projection-result state application are
 outside this map.
 
+This map describes current implemented contracts only. The approved but not yet
+implemented continuation from live-entry projection through ABI reconciliation
+is defined by
+[`runtime-abi-entry-reconciliation-master-plan.md`](runtime-abi-entry-reconciliation-master-plan.md).
+
 ## 1. Invocation and cardinality
 
 The utility orchestrator fans one committed bar out into independently
@@ -361,7 +366,7 @@ state-transition module will:
 - accept or reject the projection under lifecycle invariants;
 - compare the new singular `desired_entry` with the currently applied singular
   `desired_entry` and produce `NO_OP`, `APPLY`, `REPLACE`, or `CANCEL`;
-- update the repository according to the selected in-memory or durable
-  persistence policy;
+- update the existing in-memory repository used by Live V1; durable persistence
+  remains a future gate;
 - later hand the uninterpreted `DesiredEntry` to separately designed ABI
   execution-command planning.
