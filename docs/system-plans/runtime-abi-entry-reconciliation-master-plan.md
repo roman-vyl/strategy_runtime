@@ -289,14 +289,15 @@ ReconcileDesiredEntryPackage
 ├── trade_cycle_id
 ├── ticker
 ├── desired_entry: DesiredEntry | null
-└── risk_multiplier: positive exact decimal text | null
+└── risk_multiplier: positive exact decimal text
 ```
 
-`desired_entry = DesiredEntry` with a non-null `risk_multiplier` means create
-or replace the desired package.
+`desired_entry = DesiredEntry` with the strategy instance's positive
+`risk_multiplier` means create or replace the desired package.
 
-`desired_entry = null` with a null `risk_multiplier` means no pending entry
-package should remain for this trade cycle.
+`desired_entry = null` with the same required positive `risk_multiplier` means
+no pending entry package should remain for this trade cycle. Package absence
+does not remove or null the strategy-instance risk configuration.
 
 An existing `DesiredEntry` always contains a positive exact-decimal
 `initial_take_price`. Missing or null take is malformed Engine output, not an
