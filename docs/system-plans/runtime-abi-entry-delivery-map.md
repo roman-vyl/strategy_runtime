@@ -28,36 +28,45 @@ flowchart TD
     I1["I1 · ABI entry-package client"]
     I2["I2 · Aggregate, repository, identity and mutex foundation"]
     I3["I3 · Pure entry reconciliation"]
+    P0["Pre-I4 · ABI cancel contract + immutable multiplier"]
     I4["I4 · Closed-bar reconciliation orchestration"]
     I5["I5 · ABI fill webhook and execution state machine"]
-    I6["I6 · Cross-flow E2E and Live V1 guardrails"]
-    FUTURE["Position management and stronger reliability"]
+    I6["I6 · Entry/fill cross-flow E2E and guardrails"]
+    OPEN_GATE["Open-trade requirements gate"]
+    OPEN_IMPL["Open-trade branch design and implementation"]
+    FINAL["Final full Live V1 E2E"]
+    FUTURE["Stronger reliability and scale"]
 
-    CURRENT --> I4
-    I1 --> I4
+    CURRENT --> P0
+    I1 --> P0
     I2 --> I3
-    I2 --> I4
+    I2 --> P0
     I2 --> I5
-    I3 --> I4
+    I3 --> P0
+    P0 --> I4
     I4 --> I5
     I4 --> I6
     I5 --> I6
-    I6 --> FUTURE
+    I6 --> OPEN_GATE
+    OPEN_GATE --> OPEN_IMPL
+    OPEN_IMPL --> FINAL
+    FINAL --> FUTURE
 ```
 
 ## Canonical implementation progress
 
 ### I1 · ABI entry-package client
 
-- [x] Proposal, design, specification, and task plan completed in
-  `openspec/changes/abi-entry-package-client-v1`.
-- [ ] Closed request and response DTOs implemented.
-- [ ] Scalar `AbiEntryPackagePort` implemented.
-- [ ] Bounded non-retried HTTP adapter implemented.
-- [ ] Strict success, public-error, transport, and protocol decoding implemented.
-- [ ] Fake-ABI contract tests implemented.
-- [ ] ABI OpenAPI conformance verification implemented.
-- [ ] Change verified and archived.
+- [x] Proposal, design, specification, and task plan completed.
+- [x] Closed request and response DTOs implemented.
+- [x] Scalar `AbiEntryPackagePort` implemented.
+- [x] Bounded non-retried HTTP adapter implemented.
+- [x] Strict success, public-error, transport, and protocol decoding implemented.
+- [x] Fake-ABI contract tests implemented.
+- [x] ABI OpenAPI conformance verification implemented for the then-approved
+  contract.
+- [x] Change verified and archived as
+  `openspec/changes/archive/2026-07-26-abi-entry-package-client-v1`.
 
 Exit condition: Runtime owns a tested outbound ABI client that remains
 unconnected to reconciliation and production composition.
@@ -108,24 +117,66 @@ aggregate inside a per-instance critical section without calling ABI.
 Exit condition: pure components can derive one command and apply one valid
 acknowledgement without transport, HTTP, or composition dependencies.
 
+### Pre-I4 · Contract prerequisites
+
+- [ ] Align the Runtime I1 request DTO, codec, OpenSpec, and contract tests with
+  the authoritative ABI package-absence payload:
+  `desired_entry = null + risk_multiplier = null`.
+- [ ] Preserve a positive state multiplier only for `APPLY` and `REPLACE`
+  outbound requests.
+- [ ] Make `StrategyInstanceRuntimeState.risk_multiplier` immutable after its
+  canonical creation as `"1"`.
+- [ ] Update the repository specification, model tests, and repository tests to
+  reject replacement of the multiplier through complete-aggregate `save(...)`.
+
+Exit condition: the outbound ABI cancel contract and aggregate multiplier
+invariant are aligned before I4 orchestration depends on them.
+
 ### I4 · Closed-bar reconciliation orchestration
 
 - [ ] Create and approve a dedicated OpenSpec change.
-- [ ] Add `EntryReconciliationOrchestrator`.
-- [ ] Hold the keyed mutex across load, decision, bounded ABI call, state
-  application, and save.
+- [ ] Extend the existing `StrategyRuntimeOrchestrator`; do not introduce
+  another top-level closed-bar or projection orchestrator.
+- [ ] Add `EntryReconciliationOrchestrator` as the nested live-entry application
+  operation.
+- [ ] Make `StrategyRuntimeOrchestrator` own the keyed mutex across state load,
+  ABI position lookup, Engine projection, typed branching, reconciliation,
+  save, and every failure path.
+- [ ] Prohibit nested mutex acquisition, repository reload, and repository save
+  inside `EntryReconciliationOrchestrator`.
+- [ ] Route `LiveEntryProjectedStrategyInstance` into entry reconciliation.
+- [ ] Make `StrategyRuntimeOrchestrator.process(unit)` fail explicitly for
+  `OpenTradeProjectedStrategyInstance`; the handoff must not record or report
+  that dispatch as successful.
 - [ ] Reserve a new `trade_cycle_id` for `APPLY` without creating
   `CurrentTradeCycle` before acknowledgement.
 - [ ] Reuse the acknowledged cycle identity for `REPLACE` and `CANCEL`.
 - [ ] Preserve state on public ABI errors, timeout, network failure, and protocol
   failure.
-- [ ] Connect the semantic orchestrator to `StrategyCycleHandoffBoundary` in
-  production composition.
+- [ ] Adapt the ABI wire acknowledgement to the I3 confirmation boundary:
+  validate but do not persist `accepted_risk_multiplier`, and persist only
+  `applied_desired_entry + calculated_quantity`.
+- [ ] Require bounded timeouts for every outbound call made while holding the
+  mutex.
+- [ ] Require the ABI entry-package acknowledgement to complete independently
+  of any Runtime webhook emitted by the same call.
+- [ ] Connect `StrategyCycleHandoffBoundary.dispatch(unit)` to
+  `StrategyRuntimeOrchestrator.process(unit)` in production composition.
 - [ ] Complete the required Strategy Engine and ABI position-lookup production
   adapters or inject their production implementations.
 - [ ] Add closed-bar integration tests through a fake ABI.
+- [ ] Add a contention test proving that an ABI webhook for the same
+  `strategy_instance_id` blocks while `StrategyRuntimeOrchestrator` owns the
+  mutex across state load, ABI position lookup, Engine projection, and
+  live-entry reconciliation.
+- [ ] Prove that after the closed-bar critical section releases the mutex, the
+  webhook acquires it and loads fresh repository state rather than a snapshot
+  captured before waiting.
+- [ ] Prove that nested entry reconciliation never reacquires the non-reentrant
+  mutex.
 
-Exit condition: a live-entry projection can reach ABI and persist only a valid,
+Exit condition: one closed-bar invocation is serialized from state load through
+projection and live-entry application, and it persists only a valid,
 identity-bound acknowledgement.
 
 ### I5 · ABI fill webhook and execution state machine
@@ -147,7 +198,7 @@ Exit condition: ABI partial and final fills update the matching acknowledged
 cycle through the same serialized repository boundary as closed-bar
 reconciliation.
 
-### I6 · Cross-flow E2E and Live V1 guardrails
+### I6 · Entry/fill cross-flow E2E and guardrails
 
 - [ ] Add reconciliation-versus-webhook contention tests.
 - [ ] Add the accepted Live V1 cancel/fill race test matrix.
@@ -158,8 +209,22 @@ reconciliation.
 - [ ] Enforce or verify the single-process, single-worker deployment constraint.
 - [ ] Run complete pytest, Ruff, mypy, compilation, and OpenSpec validation.
 
-Exit condition: both Runtime writer paths are verified together under the
-explicit Live V1 reliability boundary.
+Exit condition: the entry-reconciliation and fill-webhook writer paths are
+verified together under the explicit Live V1 concurrency boundary. This is an
+entry/fill milestone, not final full Live V1 readiness.
+
+### Open-trade gate and final Live V1
+
+- [ ] Define open-trade branch requirements from the first post-fill committed
+  bar onward.
+- [ ] Design and implement the branch without preassigning a component name.
+- [ ] Replace the explicit unsupported outcome only after that implementation is
+  verified.
+- [ ] Run final full Live V1 E2E across entry, fills, open-trade routing, and
+  position management.
+
+Exit condition: both typed projection branches are supported before Runtime is
+described as fully Live V1 ready.
 
 ## Decisions required before I4
 
@@ -167,15 +232,15 @@ explicit Live V1 reliability boundary.
   `EntryPackageAbsent`.
 - [x] Define the persisted I3 `AppliedEntryPackage` summary:
   `applied_desired_entry + calculated_quantity`.
-- [x] Confirm I3 is unaware of `risk_multiplier`; I4 may read the existing
-  `StrategyInstanceRuntimeState.risk_multiplier` directly at the actual ABI
-  call boundary if the current ABI client still needs that value.
+- [x] Confirm I3 is unaware of `risk_multiplier`.
+- [ ] Complete the pre-I4 nullable-cancel and immutable-multiplier changes above.
 - [ ] Decide whether the production Strategy Engine and ABI open-position HTTP
   adapters belong to I4 or to a prerequisite composition change.
 
 ## Explicitly deferred
 
-- [ ] Open-trade protection and close reconciliation.
+- [ ] Open-trade protection and close reconciliation remains outside I1–I6 and
+  is governed by the explicit gate above.
 - [ ] Stop/take replacement after entry.
 - [ ] Partial-entry remainder and timeout policy.
 - [ ] Durable fill-event deduplication.
@@ -188,6 +253,8 @@ explicit Live V1 reliability boundary.
 1. Update the canonical checklist in this Markdown file.
 2. Update the corresponding step status or wording in
    `runtime-abi-entry-delivery-map.fragment.html`.
-3. Regenerate `runtime-abi-entry-delivery-map.html` from the fragment.
+3. Regenerate `runtime-abi-entry-delivery-map.html` from the fragment with title
+   `Runtime ABI Entry Delivery Map` and preserve same-origin browser storage for
+   tracked checkboxes.
 4. Review both files in the same change as the implementation whose status
    changed.

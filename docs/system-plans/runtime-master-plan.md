@@ -61,6 +61,11 @@ The following semantic components are implemented and tested:
 The orchestrator remains the coordinator. Each submodule returns to the same
 orchestration method and does not independently advance the pipeline.
 
+This stopping point is an implementation milestone, not the final
+responsibility boundary of the class. The approved I4 continuation extends the
+existing `StrategyRuntimeOrchestrator` in place as the top-level closed-bar
+workflow; it does not add another closed-bar or projection orchestrator.
+
 The production bootstrap does not yet attach this semantic core to the utility
 handoff by default. That wiring decision does not change the implemented
 semantic boundary: the core is independently callable and the handoff accepts a
@@ -319,31 +324,51 @@ Deployment constraints:
   one process-local keyed mutex.
 
 Closed-bar reconciliation and the ABI fill-webhook path are independent state
-writers for the same strategy-instance aggregate. Both paths must acquire the
-same keyed mutex before loading mutable state. The critical section covers the
-entire operation:
+writers for the same strategy-instance aggregate. Their top-level
+`StrategyRuntimeOrchestrator` and `AbiExecutionEventOrchestrator` paths acquire
+the same non-reentrant keyed mutex before loading mutable state.
+
+The complete closed-bar critical section is:
 
 ```text
 acquire keyed mutex(strategy_instance_id)
-→ load current aggregate
-→ make decision
-→ call ABI when required
-→ update aggregate
+→ get_or_create/load current aggregate
+→ ABI open-position lookup
+→ Strategy Engine projection
+→ typed projection branch
+→ live-entry reconciliation when applicable
+→ save when state changed
+→ release mutex
+```
+
+The nested `EntryReconciliationOrchestrator` runs inside this critical section.
+It does not reacquire the mutex, reload the aggregate, or save repository state.
+
+The ABI webhook critical section is:
+
+```text
+acquire the same keyed mutex(strategy_instance_id)
+→ load fresh current aggregate
+→ validate event binding
+→ apply execution event
 → save aggregate
 → release mutex
 ```
 
-The mutex intentionally remains held across the ABI call. A fill webhook may
-therefore wait briefly for reconciliation to finish its external call. After
-acquiring the mutex, the webhook must load the aggregate again and make its
-decision from that current state; it must not apply a snapshot captured before
-waiting.
+The mutex intentionally remains held across position lookup, Engine projection,
+and any ABI entry-package call. A fill webhook may therefore wait for the
+closed-bar path. After acquiring the mutex, the webhook must load the aggregate
+again and make its decision from that current state; it must not apply a
+snapshot captured before waiting.
 
-Every ABI call must use a bounded timeout. If create or replace reaches an
-ambiguous outcome, Runtime must not blindly retry the command: the Live V1
-contract does not yet provide persisted pending actions, command idempotency, or
-recovery capable of proving whether the first call took effect.
-The mutex must be released on every success and failure path.
+Every outbound call made while holding the mutex must use a bounded timeout. If
+create or replace reaches an ambiguous outcome, Runtime must not blindly retry
+the command: the Live V1 contract does not yet provide persisted pending
+actions, command idempotency, or recovery capable of proving whether the first
+call took effect. An ABI entry-package acknowledgement must not synchronously
+wait for Runtime to process a webhook emitted by that same call. The mutex must
+be released on every success, rejection, timeout, unsupported branch, and
+exception path.
 
 The repository's existing internal lock protects individual in-memory
 repository operations only. It is not a substitute for the shared
@@ -369,32 +394,44 @@ optimization, but it cannot replace durable coordination and recovery.
 
 1. Retain the existing in-memory repository for Live V1; keep SQLite or another
    durable state adapter as a future gate.
-2. Define state-result application and repository update semantics.
-3. Define when `trade_cycle_id` is created and how a cycle is completed.
-4. Define the ABI execution notification/callback path that freezes the exact
+2. Before I4, align the ABI entry-package client with the authoritative package
+   absence contract: `desired_entry = null` requires `risk_multiplier = null`.
+3. Before I4, make `StrategyInstanceRuntimeState.risk_multiplier` immutable
+   after canonical creation as `"1"` and update the repository contract and
+   tests accordingly.
+4. Define state-result application and repository update semantics.
+5. Define when `trade_cycle_id` is created and how a cycle is completed.
+6. Define the ABI execution notification/callback path that freezes the exact
    accepted `DesiredEntry` with its execution facts.
-5. Decide whether the future asynchronous Runtime ↔ ABI command boundary needs
+7. Decide whether the future asynchronous Runtime ↔ ABI command boundary needs
    one Runtime-owned `command_id`; do not introduce one before that boundary
    proves it necessary.
-6. Apply Engine cleanup plans 24–29 before production HTTP integration.
-7. Implement and verify production ABI and Strategy Engine adapters.
-8. Implement and verify the shared per-instance mutex and bounded ABI timeouts
+8. Apply Engine cleanup plans 24–29 before production HTTP integration.
+9. Implement and verify production ABI and Strategy Engine adapters.
+10. Implement and verify top-level ownership of the shared per-instance mutex,
+   bounded outbound-call timeouts, and prohibition of nested mutex acquisition
    before enabling both Live V1 writers.
-9. Select and implement the deferred CAS, idempotency, pending-action, and
+11. Treat entry/fill cross-flow verification as an intermediate gate; design and
+   implement the open-trade branch before claiming final full Live V1 E2E
+   readiness.
+12. Select and implement the deferred CAS, idempotency, pending-action, and
    recovery guarantees before horizontal scaling or stronger production
    guarantees.
 
 ## 11. Next implementation sequence
 
-1. Specify and implement the projection-result state applier.
-2. Decide the repository persistence policy and implement only the guarantees
+1. Align package absence with `risk_multiplier = null` and make the aggregate
+   multiplier immutable after creation.
+2. Specify and implement the projection-result state applier.
+3. Decide the repository persistence policy and implement only the guarantees
    required by that decision.
-3. Design the ABI execution callback and singular desired-entry freeze transition.
-4. Add the shared local keyed-mutex boundary to reconciliation and fill-webhook
-   orchestration, with bounded ABI call timeouts.
-5. Design closure transition, completed-cycle archival, and next-cycle creation.
-6. Extend processing journal events around semantic Runtime stages.
-7. Add full integration tests across utility Runtime, state repository, fake
-   ABI, and fake Engine.
-8. Add production HTTP adapters only after the adjacent service contracts match
+4. Design the ABI execution callback and singular desired-entry freeze transition.
+5. Extend `StrategyRuntimeOrchestrator` to own the complete closed-bar keyed
+   critical section, add the same boundary to fill-webhook orchestration, and
+   keep nested live-entry reconciliation free of lock and repository ownership.
+6. Add entry/fill cross-flow integration tests and Live V1 writer guardrails.
+7. Define and implement the open-trade branch, then run final full Live V1 E2E.
+8. Design closure transition, completed-cycle archival, and next-cycle creation.
+9. Extend processing journal events around semantic Runtime stages.
+10. Add production HTTP adapters only after the adjacent service contracts match
    the cleaned Runtime boundary.

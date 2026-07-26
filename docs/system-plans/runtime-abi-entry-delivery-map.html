@@ -1135,7 +1135,7 @@ html&gt;body{padding:0}&lt;/style&gt;
             edge: &quot;get_or_create&quot;,
             lane: 2,
             title: &quot;StrategyInstanceRuntimeStateRepository&quot;,
-            detail: &quot;In-memory aggregate; сейчас порт умеет только &lt;code&gt;get_or_create&lt;/code&gt;.&quot;,
+            detail: &quot;In-memory aggregate; порт поддерживает &lt;code&gt;get_or_create&lt;/code&gt;, &lt;code&gt;get&lt;/code&gt; и complete-aggregate &lt;code&gt;save&lt;/code&gt;.&quot;,
             status: &quot;current&quot;
           },
           {
@@ -1177,40 +1177,68 @@ html&gt;body{padding:0}&lt;/style&gt;
           }
         ],
         gates: [
-          &quot;Подключить &lt;code&gt;StrategyRuntimeOrchestrator&lt;/code&gt; как sink handoff-границы в production composition.&quot;,
+          &quot;&lt;code&gt;StrategyCycleHandoffBoundary.dispatch(unit)&lt;/code&gt; должен вызвать sink &lt;code&gt;StrategyRuntimeOrchestrator.process(unit)&lt;/code&gt; в production composition.&quot;,
           &quot;Реализовать production HTTP adapters для ABI position lookup и Strategy Engine, если они не поставляются внешней композицией.&quot;,
           &quot;Новый entry-контур должен начинаться после typed projection, не внутри router.&quot;
         ]
       },
       closed: {
-        title: &quot;Целевая closed-bar цепочка после live-entry projection&quot;,
-        caption: &quot;Один keyed mutex держится от загрузки состояния до ABI acknowledgement и save.&quot;,
+        title: &quot;Целевая closed-bar цепочка I4&quot;,
+        caption: &quot;StrategyRuntimeOrchestrator удерживает один keyed mutex через state load, position lookup, Engine projection, reconciliation и save.&quot;,
         steps: [
           {
-            lane: 1,
-            title: &quot;ProjectionOrchestrator&quot;,
-            detail: &quot;Возвращает существующий &lt;code&gt;LiveEntryProjectedStrategyInstance&lt;/code&gt; как typed in-memory object.&quot;,
-            status: &quot;current&quot;
+            lane: 0,
+            title: &quot;StrategyCycleHandoffBoundary.dispatch → StrategyRuntimeOrchestrator.process&quot;,
+            detail: &quot;Существующий orchestrator расширяется как единственный верхний closed-bar workflow.&quot;,
+            status: &quot;gap&quot;
           },
           {
-            edge: &quot;projection + strategy_instance_id&quot;,
-            lane: 2,
-            title: &quot;KeyedMutex.acquire(strategy_instance_id)&quot;,
-            detail: &quot;Общий process-local mutex для reconciliation и fill webhook.&quot;,
+            edge: &quot;strategy_instance_id&quot;,
+            lane: 1,
+            title: &quot;StrategyRuntimeOrchestrator → KeyedMutex.acquire&quot;,
+            detail: &quot;Верхний orchestrator владеет полным critical section; mutex non-reentrant.&quot;,
             status: &quot;gap&quot;
           },
           {
             edge: &quot;после захвата mutex&quot;,
             lane: 2,
-            title: &quot;Repository.get_or_create / reload&quot;,
-            detail: &quot;Загружает свежий aggregate с optional acknowledged &lt;code&gt;CurrentTradeCycle&lt;/code&gt;.&quot;,
+            title: &quot;Repository.get_or_create / load&quot;,
+            detail: &quot;Загружает текущий aggregate до любых state-dependent внешних вычислений.&quot;,
+            status: &quot;gap&quot;
+          },
+          {
+            edge: &quot;state → authoritative position facts&quot;,
+            lane: 3,
+            title: &quot;ABI open-position lookup&quot;,
+            detail: &quot;Lookup выполняется внутри того же critical section с bounded timeout.&quot;,
+            status: &quot;gap&quot;
+          },
+          {
+            edge: &quot;resolved state + processing unit&quot;,
+            lane: 3,
+            title: &quot;Strategy Engine projection&quot;,
+            detail: &quot;Engine projection также выполняется внутри critical section с bounded timeout.&quot;,
+            status: &quot;gap&quot;
+          },
+          {
+            edge: &quot;typed in-memory projection&quot;,
+            lane: 1,
+            title: &quot;StrategyRuntimeOrchestrator typed branch&quot;,
+            detail: &quot;&lt;code&gt;LiveEntryProjectedStrategyInstance&lt;/code&gt; продолжает I4; &lt;code&gt;OpenTradeProjectedStrategyInstance&lt;/code&gt; завершается явной unsupported-ошибкой без мутации и успешного dispatch.&quot;,
+            status: &quot;gap&quot;
+          },
+          {
+            edge: &quot;LiveEntryProjectedStrategyInstance + loaded state&quot;,
+            lane: 1,
+            title: &quot;EntryReconciliationOrchestrator&quot;,
+            detail: &quot;Вложенная операция не захватывает mutex повторно, не reload-ит state и не вызывает repository save.&quot;,
             status: &quot;gap&quot;
           },
           {
             edge: &quot;new desired vs applied desired&quot;,
             lane: 1,
             title: &quot;EntryDiff.decide&quot;,
-            detail: &quot;Чистое решение: &lt;code&gt;NoOp | Apply | Replace | Cancel&lt;/code&gt; с payload, без multiplier.&quot;,
+            detail: &quot;Чистое решение &lt;code&gt;NoOp | Apply | Replace | Cancel&lt;/code&gt;; multiplier не входит в I3 semantics.&quot;,
             status: &quot;current&quot;
           },
           {
@@ -1224,49 +1252,51 @@ html&gt;body{padding:0}&lt;/style&gt;
             edge: &quot;EntryPackageRequest&quot;,
             lane: 1,
             title: &quot;AbiEntryPackagePort.send&quot;,
-            detail: &quot;DTO + scalar port из готового OpenSpec &lt;code&gt;abi-entry-package-client-v1&lt;/code&gt;.&quot;,
+            detail: &quot;I4 mapping: APPLY/REPLACE берут multiplier из current state; CANCEL отправляет &lt;code&gt;desired_entry=null + risk_multiplier=null&lt;/code&gt;.&quot;,
             status: &quot;planned&quot;
           },
           {
             edge: &quot;один bounded PUT, без retry/redirect&quot;,
             lane: 3,
             title: &quot;PUT …/trade-cycles/{trade_cycle_id}/entry-package&quot;,
-            detail: &quot;I3 строит &lt;code&gt;ticker + desired_entry|null&lt;/code&gt;; фактический ABI call в I4 читает multiplier directly from loaded state if needed.&quot;,
+            detail: &quot;ABI acknowledgement не должен синхронно ждать Runtime webhook, заблокированный тем же mutex.&quot;,
             status: &quot;planned&quot;
           },
           {
             edge: &quot;200 success | public ABI error | typed failure&quot;,
             lane: 1,
             title: &quot;Strict decode + identity binding&quot;,
-            detail: &quot;Success допустим только при совпадении обоих Runtime-owned identifiers.&quot;,
+            detail: &quot;Wire &lt;code&gt;accepted_risk_multiplier&lt;/code&gt; валидируется, но не переносится в I3 confirmation и не сохраняется.&quot;,
             status: &quot;planned&quot;
           },
           {
             edge: &quot;valid acknowledgement only&quot;,
             lane: 2,
-            title: &quot;Entry result applier → Repository.save&quot;,
-            detail: &quot;Pure applier готов: APPLY создаёт cycle; REPLACE атомарно заменяет package; CANCEL/absent очищает cycle; invariant violation raises.&quot;,
-            status: &quot;current&quot;
+            title: &quot;Entry result applier → StrategyRuntimeOrchestrator&quot;,
+            detail: &quot;Вложенная операция возвращает unchanged/replacement aggregate; верхний orchestrator сохраняет только подтверждённый transition.&quot;,
+            status: &quot;gap&quot;
+          },
+          {
+            edge: &quot;state changed&quot;,
+            lane: 2,
+            title: &quot;Repository.save&quot;,
+            detail: &quot;Persisted package содержит только &lt;code&gt;applied_desired_entry + calculated_quantity&lt;/code&gt;.&quot;,
+            status: &quot;gap&quot;
           },
           {
             edge: &quot;finally&quot;,
             lane: 2,
             title: &quot;KeyedMutex.release&quot;,
-            detail: &quot;Освобождается на success, rejection, timeout и любом exception path.&quot;,
+            detail: &quot;Освобождается на success, rejection, timeout, unsupported branch и любом exception path.&quot;,
             status: &quot;gap&quot;
-          },
-          {
-            edge: &quot;OpenTradeProjectedStrategyInstance&quot;,
-            lane: 1,
-            title: &quot;Position-management reconciliation&quot;,
-            detail: &quot;Не входит в live-entry master plan и проектируется отдельно.&quot;,
-            status: &quot;deferred&quot;
           }
         ],
         gates: [
+          &quot;Mutex принадлежит &lt;code&gt;StrategyRuntimeOrchestrator&lt;/code&gt;; вложенный &lt;code&gt;EntryReconciliationOrchestrator&lt;/code&gt; не может повторно захватить non-reentrant lock.&quot;,
           &quot;I3 зафиксировал confirmed cancel как &lt;code&gt;EntryPackageAbsent&lt;/code&gt;.&quot;,
           &quot;I3 зафиксировал persisted package как &lt;code&gt;applied_desired_entry + calculated_quantity&lt;/code&gt;.&quot;,
-          &quot;I3 полностью не осведомлён о &lt;code&gt;risk_multiplier&lt;/code&gt;; I4 может читать его прямо из loaded state на фактическом ABI call boundary.&quot;,
+          &quot;До I4 нужно исправить I1 boundary: package absence использует &lt;code&gt;risk_multiplier=null&lt;/code&gt;, а aggregate multiplier становится immutable после создания.&quot;,
+          &quot;&lt;code&gt;OpenTradeProjectedStrategyInstance&lt;/code&gt; не мутирует state и не может завершиться успешным dispatch до отдельного дизайна.&quot;,
           &quot;До ABI acknowledgement новый &lt;code&gt;trade_cycle_id&lt;/code&gt; существует как локально зарезервированная identity, но &lt;code&gt;CurrentTradeCycle&lt;/code&gt; ещё не создаётся.&quot;
         ]
       },
@@ -1367,9 +1397,9 @@ html&gt;body{padding:0}&lt;/style&gt;
             lane: 0,
             span: 4,
             title: &quot;I1 · ABI entry-package client&quot;,
-            detail: &quot;Выполнить текущий OpenSpec: wire DTOs, scalar port, HTTP adapter, strict decoding, fake ABI и OpenAPI conformance. Никакого wiring.&quot;,
-            status: &quot;planned&quot;,
-            note: &quot;активный OpenSpec&quot;
+            detail: &quot;DTOs, scalar port, bounded HTTP adapter, strict decoding, fake ABI и OpenAPI conformance реализованы; change архивирован.&quot;,
+            status: &quot;current&quot;,
+            note: &quot;архивировано&quot;
           },
           {
             id: &quot;i2-state-foundation&quot;,
@@ -1394,13 +1424,23 @@ html&gt;body{padding:0}&lt;/style&gt;
             note: &quot;архивировано&quot;
           },
           {
-            id: &quot;i4-closed-bar-orchestration&quot;,
+            id: &quot;pre-i4-contracts&quot;,
             trackable: true,
             edge: &quot;I1 + I2 + I3&quot;,
             lane: 0,
             span: 4,
+            title: &quot;Pre-I4 · Contract prerequisites&quot;,
+            detail: &quot;Исправить cancel wire payload на &lt;code&gt;desired_entry=null + risk_multiplier=null&lt;/code&gt; и сделать aggregate &lt;code&gt;risk_multiplier=&amp;quot;1&amp;quot;&lt;/code&gt; immutable после создания.&quot;,
+            status: &quot;gap&quot;
+          },
+          {
+            id: &quot;i4-closed-bar-orchestration&quot;,
+            trackable: true,
+            edge: &quot;оба prerequisite закрыты&quot;,
+            lane: 0,
+            span: 4,
             title: &quot;I4 · Closed-bar reconciliation orchestration&quot;,
-            detail: &quot;Добавить &lt;code&gt;EntryReconciliationOrchestrator&lt;/code&gt;, удержание mutex вокруг load → ABI → save, production composition и failure preservation.&quot;,
+            detail: &quot;Расширить существующий &lt;code&gt;StrategyRuntimeOrchestrator&lt;/code&gt;: он удерживает mutex через load → position lookup → Engine projection → nested entry reconciliation → save; вложенная операция lock/reload/save не выполняет.&quot;,
             status: &quot;gap&quot;
           },
           {
@@ -1419,23 +1459,54 @@ html&gt;body{padding:0}&lt;/style&gt;
             edge: &quot;обе writer-цепочки готовы&quot;,
             lane: 0,
             span: 4,
-            title: &quot;I6 · Cross-flow E2E и live guardrails&quot;,
-            detail: &quot;Fake ABI end-to-end, contention tests, cancel/fill race matrix, timeout paths, journal/metrics и проверяемый single-worker deployment guard.&quot;,
+            title: &quot;I6 · Entry/fill cross-flow E2E и guardrails&quot;,
+            detail: &quot;Fake ABI E2E, contention tests, cancel/fill race matrix, timeout paths, journal/metrics и single-worker guard. Это entry/fill milestone, не финальная готовность Live V1.&quot;,
             status: &quot;gap&quot;
           },
           {
-            edge: &quot;следующая отдельная программа работ&quot;,
+            id: &quot;open-trade-requirements&quot;,
+            trackable: true,
+            edge: &quot;после entry/fill verification&quot;,
             lane: 0,
             span: 4,
-            title: &quot;Position-management + stronger reliability&quot;,
-            detail: &quot;Protection/close reconciliation, durable persistence, idempotency, recovery, CAS и horizontal scaling.&quot;,
+            title: &quot;Open-trade requirements gate&quot;,
+            detail: &quot;Определить требования начиная с первого committed bar после fill, не назначая заранее имя компоненту.&quot;,
+            status: &quot;deferred&quot;
+          },
+          {
+            id: &quot;open-trade-implementation&quot;,
+            trackable: true,
+            edge: &quot;requirements approved&quot;,
+            lane: 0,
+            span: 4,
+            title: &quot;Open-trade branch design and implementation&quot;,
+            detail: &quot;Реализовать вторую typed branch и только после этого убрать explicit unsupported outcome.&quot;,
+            status: &quot;deferred&quot;
+          },
+          {
+            id: &quot;final-live-v1-e2e&quot;,
+            trackable: true,
+            edge: &quot;обе projection branches поддержаны&quot;,
+            lane: 0,
+            span: 4,
+            title: &quot;Final full Live V1 E2E&quot;,
+            detail: &quot;Проверить entry, fills, open-trade routing и position management как один полный runtime lifecycle.&quot;,
+            status: &quot;deferred&quot;
+          },
+          {
+            edge: &quot;после полной Live V1 готовности&quot;,
+            lane: 0,
+            span: 4,
+            title: &quot;Stronger reliability and scale&quot;,
+            detail: &quot;Durable persistence, idempotency, recovery, CAS и horizontal scaling.&quot;,
             status: &quot;deferred&quot;
           }
         ],
         gates: [
-          &quot;I1 можно реализовать изолированно прямо сейчас: его OpenSpec уже полный и специально не меняет active flow.&quot;,
-          &quot;I2–I6 лучше оформить отдельными OpenSpec changes, чтобы state model, orchestration и webhook не смешались в один большой change.&quot;,
-          &quot;Главная зависимость: I4 нельзя считать завершённым без I1–I3; I5 опирается на acknowledged cycle, создаваемый I4.&quot;
+          &quot;I1–I3 реализованы и архивированы; перед I4 остаются два отдельных contract prerequisites.&quot;,
+          &quot;I4 нельзя начинать, пока cancel DTO не допускает null multiplier и aggregate multiplier не стал immutable.&quot;,
+          &quot;I5 опирается на acknowledged cycle, создаваемый I4; I6 проверяет только entry/fill cross-flow.&quot;,
+          &quot;Финальный full Live V1 E2E возможен только после дизайна и реализации open-trade branch.&quot;
         ]
       }
     };

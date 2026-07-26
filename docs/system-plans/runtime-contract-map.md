@@ -109,11 +109,10 @@ StrategyInstanceRuntimeState
 
 CurrentTradeCycle
 ├── trade_cycle_id
-└── applied_entry_package: AppliedEntryPackage | null
+└── applied_entry_package: AppliedEntryPackage
 
 AppliedEntryPackage
 ├── applied_desired_entry
-├── accepted_risk_multiplier
 └── calculated_quantity
 ```
 
@@ -127,6 +126,11 @@ Behavior:
 - preserve a multiplier changed through complete-aggregate `save(...)` on
   repeated deployment discovery;
 - reject reuse of one `strategy_instance_id` for another `strategy_id`.
+
+The multiplier-preservation bullet above describes current implementation, not
+the accepted I4 target. A prerequisite delta must make the canonical
+`risk_multiplier = "1"` immutable after aggregate creation and update this
+implemented contract map when that change lands.
 
 `current_trade_cycle = null` means only that Runtime owns no current cycle or
 acknowledged entry package. ABI lookup remains authoritative for exchange
@@ -379,13 +383,22 @@ The current contour does not:
 
 ## 12. Planned next seam
 
-After the projected object returns to `StrategyRuntimeOrchestrator`, a future
-state-transition module will:
+Before I4, separate prerequisite changes will align ABI package absence with
+`risk_multiplier = null` and make the aggregate's canonical
+`risk_multiplier = "1"` immutable after creation.
 
-- accept or reject the projection under lifecycle invariants;
-- compare the new singular `desired_entry` with the currently applied singular
-  `desired_entry` and produce `NO_OP`, `APPLY`, `REPLACE`, or `CANCEL`;
-- update the existing in-memory repository used by Live V1; durable persistence
-  remains a future gate;
-- later hand the uninterpreted `DesiredEntry` to separately designed ABI
-  execution-command planning.
+I4 will then extend the same `StrategyRuntimeOrchestrator.process(...)` invocation
+beyond this currently implemented stopping point. The orchestrator will acquire
+the per-instance keyed mutex before loading state and will retain it through ABI
+position lookup, Engine projection, typed branching, live-entry application,
+and repository save.
+
+For `LiveEntryProjectedStrategyInstance`, the orchestrator will invoke the
+nested `EntryReconciliationOrchestrator` with the projection and the current
+aggregate already loaded inside the critical section. That nested operation
+will not acquire the mutex, reload state, or save independently.
+
+For `OpenTradeProjectedStrategyInstance`,
+`StrategyRuntimeOrchestrator.process(unit)` will fail explicitly until the
+position-management branch is separately designed. The handoff must not record
+or report that dispatch as successful.

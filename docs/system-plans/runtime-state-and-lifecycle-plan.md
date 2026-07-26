@@ -62,10 +62,10 @@ StrategyInstanceRuntimeState
 The registered snapshot preserves the creation-time instrument, base timeframe,
 opaque `raw_spec`, and source path.
 
-`risk_multiplier` is Runtime-owned operational state. It is not a deployment
+`risk_multiplier` is a Runtime-owned canonical field. It is not a deployment
 field, registration-request field, `raw_spec` member, registered snapshot
-field, or identity input. The repository supplies canonical initial `"1"` only
-when the aggregate is first created.
+field, or identity input. The repository supplies `"1"` when the aggregate is
+first created, and the accepted target makes that value immutable afterward.
 
 Creation does not imply that Engine has produced a plan or ABI has opened or
 not opened a position. In particular, `current_trade_cycle = null` means only
@@ -73,9 +73,12 @@ that Runtime owns no current cycle or acknowledged entry package; ABI lookup
 remains authoritative for exchange position facts.
 
 The current in-memory repository returns the same aggregate for repeated lookup
-of the same identity without resetting a saved multiplier or current cycle. It
-rejects a collision where the same `strategy_instance_id` is associated with
-another `strategy_id`.
+of the same identity and rejects a collision where the same
+`strategy_instance_id` is associated with another `strategy_id`. Its current
+complete-aggregate `save(...)` still permits a replacement state carrying a
+different multiplier. Before I4, a dedicated delta must make the value
+immutable after creation and update the model, repository specification, and
+tests.
 
 ## 4. Nested trade cycle
 
@@ -89,11 +92,10 @@ Current implemented shape:
 ```text
 CurrentTradeCycle
 ├── trade_cycle_id
-└── applied_entry_package: AppliedEntryPackage | null
+└── applied_entry_package: AppliedEntryPackage
 
 AppliedEntryPackage
 ├── applied_desired_entry: DesiredEntry
-├── accepted_risk_multiplier
 └── calculated_quantity
 ```
 
@@ -128,9 +130,9 @@ successful acknowledgement
 
 Top-level `desired_entry = null` is data and means that no entry is currently
 desired. In the future reconciliation stage it cancels an acknowledged unfilled
-entry or remains a no-op when none is applied. A cycle may exist with
-`applied_entry_package = null`; neither that state nor an absent cycle proves
-that ABI or the exchange is flat.
+entry or remains a no-op when none is applied. No valid non-null cycle lacks an
+`AppliedEntryPackage`; successful cancellation clears `current_trade_cycle`.
+An absent cycle does not prove that ABI or the exchange is flat.
 
 ## 6. Execution and freeze transition
 
@@ -201,15 +203,22 @@ current implementation is an in-memory dictionary protected by `RLock`.
 
 The initial live deployment is constrained to one Runtime process and one
 worker. Multiple replicas and horizontal scaling are prohibited. A single
-process-local keyed mutex per `strategy_instance_id` serializes both closed-bar
-reconciliation and ABI fill-webhook mutations across their complete
-`load → decision → ABI call → state update → save` cycle. Different strategy
-instances may proceed in parallel.
+process-local non-reentrant keyed mutex per `strategy_instance_id` serializes
+both top-level writer paths. Different strategy instances may proceed in
+parallel.
+
+`StrategyRuntimeOrchestrator` owns the closed-bar critical section across
+`get_or_create/load → ABI position lookup → Engine projection → typed branch →
+live-entry reconciliation → save`. `AbiExecutionEventOrchestrator` independently
+owns the webhook critical section across `fresh load → event application →
+save`. Nested entry reconciliation does not acquire the mutex, reload state, or
+save independently.
 
 A webhook that waits behind reconciliation must reload state after acquiring
-the mutex. Holding the mutex across an ABI call is accepted for Live V1, so
+the mutex. Holding the mutex across outbound calls is accepted for Live V1, so
 every such call requires a bounded timeout. An ambiguous create/replace result
-must not be retried blindly.
+must not be retried blindly, and an ABI acknowledgement must not synchronously
+depend on processing a webhook blocked by the same mutex.
 
 Independent of storage choice, state application must not partially merge a
 `DesiredEntry`, and `get_or_create` must remain deterministic and identity-safe.

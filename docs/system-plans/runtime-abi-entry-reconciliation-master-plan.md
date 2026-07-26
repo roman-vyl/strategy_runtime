@@ -2,11 +2,17 @@
 
 Status: discussion-approved high-level plan for the second half of the Runtime live-entry pipeline. This document is not an OpenSpec change and does not yet authorize implementation.
 
-The plan starts at the point where Runtime already owns one typed Strategy Engine projection result and ends at the point where ABI execution events have updated the Runtime-owned repository state.
+The live-entry behavior in this plan starts when Runtime owns one typed Strategy
+Engine projection result and ends when ABI execution events have updated the
+Runtime-owned repository state. Its serialization boundary begins earlier:
+the top-level closed-bar orchestrator acquires the keyed mutex before loading
+state and retains it through position lookup, Engine projection, live-entry
+application, and save.
 
 ## 1. Scope and starting boundary
 
-The first half of the closed-bar pipeline ends with one of two typed objects:
+The implemented first half of the closed-bar pipeline currently ends with one
+of two typed objects:
 
 ```text
 LiveEntryProjectedStrategyInstance
@@ -25,7 +31,15 @@ LiveEntryProjectedStrategyInstance
 -> Runtime state transition
 ```
 
-The open-trade/position-management reconciliation branch will be designed separately after this entry branch is settled.
+The plan does not redesign how either projection is calculated. It does define
+the caller-owned critical section around that calculation so no execution
+webhook can invalidate the state between projection and application.
+
+The open-trade/position-management reconciliation branch will be designed
+separately after this entry branch is settled. Completing the entry/fill
+increments in this plan does not by itself establish full Live V1 readiness:
+after the first fill, the next authoritative position lookup selects the
+open-trade branch, which remains explicitly unsupported until that later work.
 
 ## 2. Two independent Runtime entry points
 
@@ -54,26 +68,48 @@ Its purpose is to record what actually happened on the exchange.
 
 An ABI webhook does not resume, interrupt, or enter the middle of a previous MDS request. It starts a separate Runtime use case.
 
-## 3. Orchestrator structure
+## 3. Orchestrator structure and serialization ownership
 
-The synchronous closed-bar path is coordinated by one top-level strategy-cycle orchestrator containing autonomous phases:
-
-```text
-StrategyBarCycleOrchestrator
-├── ProjectionOrchestrator
-└── EntryReconciliationOrchestrator
-```
-
-The projection object is passed directly from the first phase to the second as a typed in-memory object. Engine responses are not written to an intermediate temporary store merely to continue the same request.
-
-Realtime ABI callbacks are handled by a separate orchestrator:
+The existing `StrategyRuntimeOrchestrator` remains the single top-level
+coordinator for the closed-bar Runtime use case. I4 extends that orchestrator in
+place; it does not introduce another top-level closed-bar coordinator or a
+separate projection coordinator.
 
 ```text
-AbiExecutionEventOrchestrator
+StrategyCycleHandoffBoundary.dispatch(unit)
+-> StrategyRuntimeOrchestrator.process(unit)
+   -> acquire keyed mutex(strategy_instance_id)
+   -> load or create current StrategyInstanceRuntimeState
+   -> resolve authoritative ABI position facts
+   -> obtain the typed Strategy Engine projection
+   -> branch on the projection type
+      ├── LiveEntryProjectedStrategyInstance
+      │   -> EntryReconciliationOrchestrator
+      │   -> save the acknowledged state transition when required
+      └── OpenTradeProjectedStrategyInstance
+          -> fail explicitly as unsupported until separately designed
+   -> release mutex
 ```
 
-Both orchestrator paths meet only through the Runtime-owned
-`StrategyInstanceRuntimeStateRepository`.
+`StrategyRuntimeOrchestrator` owns the complete closed-bar critical section.
+The nested `EntryReconciliationOrchestrator` runs inside that already-open
+critical section and does not acquire the keyed mutex, reload the aggregate, or
+save repository state independently.
+
+Realtime ABI callbacks start a separate Runtime use case:
+
+```text
+ABI execution webhook
+-> AbiExecutionEventOrchestrator
+   -> acquire the same keyed mutex
+   -> load fresh StrategyInstanceRuntimeState
+   -> apply the execution event
+   -> save
+   -> release mutex
+```
+
+The two top-level paths meet through both the shared keyed-mutex registry and
+the Runtime-owned `StrategyInstanceRuntimeStateRepository`.
 
 ## 4. Strategy-instance aggregate
 
@@ -98,10 +134,16 @@ raw_spec
 source_path
 ```
 
-`risk_multiplier` is a Runtime-owned positive exact-decimal operational setting.
-A newly created strategy-instance state receives the canonical value `"1"`.
-Repeated deployment discovery does not reset the stored value, and the value
-does not participate in `strategy_instance_id` derivation.
+`risk_multiplier` is a Runtime-owned positive exact-decimal field with canonical
+value `"1"`. The accepted target makes that value immutable after aggregate
+creation. Repeated deployment discovery does not reset it, and the value does
+not participate in `strategy_instance_id` derivation.
+
+The current repository can still accept a replacement aggregate carrying a
+different multiplier through complete-aggregate `save(...)`. A prerequisite
+change before I4 must close that gap in the model, repository specification, and
+tests; this master plan does not treat that current mutability as accepted
+behavior.
 
 `current_trade_cycle = null` means that Runtime owns no current trade cycle or
 acknowledged entry package for the instance. This value does not replace an ABI
@@ -116,9 +158,10 @@ The current trade-cycle aggregate represents one complete entry-to-close lifecyc
 CurrentTradeCycle
 ├── trade_cycle_id
 ├── phase
-├── applied_desired_entry: DesiredEntry
+├── applied_entry_package: AppliedEntryPackage
+│   ├── applied_desired_entry: DesiredEntry
+│   └── calculated_quantity
 ├── frozen_entry_context: FrozenExecutedEntryContext | null
-├── applied_entry_package
 ├── filled_quantity
 ├── remaining_quantity
 ├── average_entry_price | null
@@ -199,16 +242,32 @@ separate long/short desired or execution objects.
 
 ## 9. Risk sizing boundary
 
-Runtime owns the strategy instance's `risk_multiplier` operational setting but
+Runtime owns the strategy instance's canonical `risk_multiplier = "1"` field but
 does not calculate exchange quantity or own ABI bankroll, account-risk, or
-leverage policy.
+leverage policy. The field is immutable after creation in the accepted target
+and has no hot-update use case.
 
-`risk_multiplier` is not an Engine response field and is not part of
-`DesiredEntry`. During reconciliation, Runtime combines the Engine desired
-entry with the strategy instance's stored `risk_multiplier` and
-sends both to ABI. The multiplier is treated as a stable setup value in the
-first version: changing it does not itself trigger entry replacement or other
-hot-update reconciliation.
+`risk_multiplier` is not an Engine response field, is not part of
+`DesiredEntry`, and is not an input to desired-entry equivalence, reconciliation
+decisions, or the transport-free I3 command and confirmation models.
+
+The authoritative ABI contract requires the I4 outbound mapping:
+
+```text
+APPLY / REPLACE
+→ desired_entry = DesiredEntry
+→ risk_multiplier = current StrategyInstanceRuntimeState.risk_multiplier
+
+CANCEL
+→ desired_entry = null
+→ risk_multiplier = null
+```
+
+The current Runtime I1 request DTO, OpenSpec, and tests still require a positive
+non-null multiplier for package absence. A separate prerequisite change before
+I4 must align that existing client boundary with the authoritative ABI OpenAPI.
+This wire mapping does not make the multiplier part of reconciliation semantics
+or persisted `AppliedEntryPackage` state.
 
 ABI owns the interpretation of this multiplier using its own:
 
@@ -238,17 +297,14 @@ ABI reconciliation.
 
 ## 11. `EntryReconciliationOrchestrator`
 
-The reconciliation orchestrator receives:
+The reconciliation orchestrator is invoked only inside the keyed critical
+section already owned by `StrategyRuntimeOrchestrator`. It receives:
 
 ```text
 LiveEntryProjectedStrategyInstance
 +
-StrategyInstanceRuntimeState
+current StrategyInstanceRuntimeState loaded by the caller
 ```
-
-Before loading the aggregate, it acquires the process-local keyed mutex for the
-instance. It holds that same mutex through comparison, any bounded ABI call,
-state update, and save.
 
 It compares the new `desired_entry` with the currently applied
 `desired_entry` stored in `CurrentTradeCycle`:
@@ -260,7 +316,17 @@ currently applied desired_entry
 → NO_OP / APPLY / REPLACE / CANCEL
 ```
 
-Its responsibility is to decide what must change, call the ABI entry-package port when necessary, validate the acknowledgement, and persist the resulting Runtime aggregate.
+Its responsibility is to decide what must change, reserve an apply-only cycle
+identity when required, call the ABI entry-package port, validate and adapt a
+successful wire acknowledgement to the I3 confirmation boundary, and return
+the unchanged or replacement aggregate to `StrategyRuntimeOrchestrator`.
+
+It does not:
+
+- acquire or release the keyed mutex;
+- reload repository state;
+- save repository state;
+- accept a state snapshot obtained before the caller acquired the mutex.
 
 It does not contain exchange-specific create/amend/cancel sequences.
 
@@ -286,23 +352,25 @@ These are internal Runtime decisions, not long-lived trade phases and not necess
 
 ## 13. Desired-state ABI command
 
-Runtime sends one business command representing the desired entry package, conceptually:
+Pure reconciliation produces one transport-free business command:
 
 ```text
-ReconcileDesiredEntryPackage
+EntryReconciliationCommand
 ├── strategy_instance_id
 ├── trade_cycle_id
 ├── ticker
-├── desired_entry: DesiredEntry | null
-└── risk_multiplier: positive exact decimal text
+└── desired_entry: DesiredEntry | null
 ```
 
-`desired_entry = DesiredEntry` with the strategy instance's positive
-`risk_multiplier` means create or replace the desired package.
+`desired_entry = DesiredEntry` means create or replace the desired package.
+`desired_entry = null` means no pending entry package should remain for the
+trade cycle. Neither form carries `risk_multiplier` inside the I3 command.
 
-`desired_entry = null` with the same required positive `risk_multiplier` means
-no pending entry package should remain for this trade cycle. Package absence
-does not remove or null the strategy-instance risk configuration.
+At the outbound ABI boundary, I4 adapts this command to the corrected
+`EntryPackageRequest`. `APPLY` and `REPLACE` supply the positive
+`risk_multiplier` read directly from the current aggregate. `CANCEL` supplies
+`risk_multiplier = null`. Cancellation does not compare, change, or persist the
+aggregate field.
 
 An existing `DesiredEntry` always contains a positive exact-decimal
 `initial_take_price`. Missing or null take is malformed Engine output, not an
@@ -327,8 +395,12 @@ entry order
 + attached take
 ```
 
-Runtime sends the Engine-derived entry, stop, take, and side together with the
-Runtime-owned `risk_multiplier` as one semantic unit.
+Runtime reconciliation treats the Engine-derived entry, stop, take, and side as
+one semantic desired-entry unit. For `APPLY` and `REPLACE`, the outbound ABI
+adapter additionally supplies the Runtime-owned `risk_multiplier`. For
+`CANCEL`, the adapter sends `desired_entry = null` and
+`risk_multiplier = null`. Neither mapping adds the multiplier to reconciliation
+equivalence or state-transition semantics.
 
 The package is indivisible: entry without initial take is architecturally
 invalid in the first version.
@@ -349,21 +421,32 @@ A successful ABI reply means:
 
 > the desired attached entry package for this trade cycle was processed and is now the acknowledged ABI state.
 
-It must contain enough binding and execution information to persist Runtime state, including conceptually:
+The existing wire success DTO contains:
 
 ```text
 strategy_instance_id
 trade_cycle_id
 status = entry_package_applied
 applied_desired_entry: DesiredEntry
-accepted risk multiplier / calculated quantity summary
-entry order reference
-attached stop reference
-attached take reference
-current execution status = awaiting_entry
+accepted_risk_multiplier
+calculated_quantity
 ```
 
-The exact exchange payload remains ABI-private unless Runtime needs a specific field for later correlation or diagnostics.
+I4 validates the wire result and adapts it to the pure I3 confirmation:
+
+```text
+EntryAppliedConfirmation
+├── strategy_instance_id
+├── trade_cycle_id
+├── applied_desired_entry
+└── calculated_quantity
+```
+
+`accepted_risk_multiplier` remains a validated wire fact but is not carried into
+the I3 confirmation and is not persisted. `AppliedEntryPackage` contains only
+`applied_desired_entry + calculated_quantity`. Exchange order references,
+attached-order references, and execution phase are not part of this
+acknowledgement or the minimal applied package.
 
 ## 16. Creation and update of `CurrentTradeCycle`
 
@@ -374,7 +457,10 @@ For first apply:
 ```text
 current_trade_cycle = CurrentTradeCycle(
     phase = awaiting_entry,
-    applied_desired_entry = acknowledged desired_entry,
+    applied_entry_package = AppliedEntryPackage(
+        applied_desired_entry = acknowledged desired_entry,
+        calculated_quantity = acknowledged calculated quantity,
+    ),
     frozen_entry_context = null,
     ...
 )
@@ -393,7 +479,7 @@ If ABI fails or rejects the desired change:
 Before the first fill:
 
 ```text
-applied_desired_entry: DesiredEntry
+CurrentTradeCycle.applied_entry_package.applied_desired_entry: DesiredEntry
 ```
 
 is mutable through successful reconciliation.
@@ -431,7 +517,7 @@ While phase is `awaiting_entry`:
 - a null `desired_entry` may produce `CANCEL`;
 - an unchanged `DesiredEntry` produces `NO_OP`.
 
-For Live V1, a successful ABI `entry_package_cancelled` response is the
+For Live V1, a successful ABI `entry_package_absent` response is the
 authoritative confirmation of cancellation. Runtime then completes the current
 entry lifecycle and clears `current_trade_cycle`.
 
@@ -465,8 +551,8 @@ occurred_at_ms
 ABI must bind exchange orders to the Runtime ownership identities before emitting the callback.
 The event model does not carry or reconstruct side-wise entry objects. After
 identity validation, each fill applies to the one
-`CurrentTradeCycle.applied_desired_entry`; the first fill freezes that same
-object inside `FrozenExecutedEntryContext`.
+`CurrentTradeCycle.applied_entry_package.applied_desired_entry`; the first fill
+freezes that same object inside `FrozenExecutedEntryContext`.
 
 ## 20. `AbiExecutionEventOrchestrator`
 
@@ -571,19 +657,51 @@ The detailed ABI virtual-position ledger remains subject to the later ABI data-m
 ## 25. Live V1 local serialization and deferred reliability
 
 Live V1 intentionally runs as one Runtime process with one worker. Multiple
-replicas and horizontal scaling are prohibited. One local keyed mutex per
-`strategy_instance_id` is shared by closed-bar reconciliation and ABI fill
-webhooks and covers the complete
-`load → decision → ABI call → state update → save` cycle. Different instances
-may be processed in parallel.
+replicas and horizontal scaling are prohibited. One local non-reentrant keyed
+mutex per `strategy_instance_id` is shared by the two top-level writer paths.
+Different instances may be processed in parallel.
+
+The closed-bar critical section is:
+
+```text
+acquire keyed mutex(strategy_instance_id)
+→ get_or_create/load current aggregate
+→ ABI open-position lookup
+→ Strategy Engine projection
+→ typed projection branch
+→ live-entry reconciliation when applicable
+→ save when state changed
+→ release mutex
+```
+
+The ABI webhook critical section is:
+
+```text
+acquire the same keyed mutex(strategy_instance_id)
+→ load fresh current aggregate
+→ validate event binding
+→ apply execution event
+→ save
+→ release mutex
+```
+
+The nested `EntryReconciliationOrchestrator` must not reacquire the same
+non-reentrant mutex. The owner releases it on every success, rejection, timeout,
+unsupported branch, and exception path.
 
 Live V1 uses the existing in-memory
 `StrategyInstanceRuntimeStateRepository`. SQLite or another durable persistence
 adapter is a future gate and is not required for the initial launch.
 
-This deliberately permits a fill webhook to wait briefly behind an ABI call.
-After it acquires the mutex, it reloads current state before applying the event.
-The mutex is released on every success and failure path.
+This deliberately permits a fill webhook to wait behind position lookup,
+Engine projection, or an ABI entry-package call. After it acquires the mutex,
+it loads fresh repository state rather than applying a snapshot captured before
+waiting.
+
+Every outbound call made while holding the mutex must have a bounded timeout.
+The ABI entry-package acknowledgement must not synchronously depend on Runtime
+processing a webhook emitted by that same call; such a dependency would
+deadlock the two requests on the shared mutex.
 
 Live V1 adds no projection generations, post-lock reprojection, quarantine,
 fail-stop mode, `outcome_unknown`, persisted pending actions, ABI lookup
@@ -607,43 +725,43 @@ constraint, not the final production-scale solution. The architecture preserves
 the extension point by routing mutations through repositories and dedicated
 orchestrators rather than direct HTTP-handler mutation.
 
-## 26. Module structure, implementation sequence, and deferred topics
+## 26. Responsibility layout, implementation sequence, and deferred topics
 
-Proposed responsibility layout:
+The accepted implementation direction is responsibility-based rather than a
+speculative file tree:
 
-```text
-src/strategy_runtime/runtime/
-├── orchestrator/
-│   ├── strategy_bar_cycle.py
-│   ├── projection.py
-│   ├── entry_reconciliation.py
-│   └── abi_execution_event.py
-├── state/
-│   ├── strategy_instance.py
-│   ├── current_trade_cycle.py
-│   └── repository.py
-├── reconciliation/
-│   ├── entry_diff.py
-│   ├── entry_commands.py
-│   └── entry_results.py
-└── abi/
-    ├── entry_package_port.py
-    ├── entry_package_models.py
-    └── execution_event_models.py
-```
+- complete two prerequisite changes before I4: align package absence with
+  `risk_multiplier = null`, and make
+  `StrategyInstanceRuntimeState.risk_multiplier` immutable after creation;
+- extend the existing `StrategyRuntimeOrchestrator` in place as the top-level
+  closed-bar workflow and keyed-mutex owner;
+- add `EntryReconciliationOrchestrator` to the existing
+  `runtime/entry_reconciliation` capability as a nested operation without
+  mutex, repository-load, or repository-save ownership;
+- add `AbiExecutionEventOrchestrator` during I5 as the independent ABI-webhook
+  workflow and owner of that path's keyed critical section;
+- introduce no open-trade application component until that branch is separately
+  designed.
 
 Planned delivery order:
 
 1. Approve this master plan.
-2. Create corresponding OpenSpec changes covering `CurrentTradeCycle`,
-   `risk_multiplier`, reconciliation decisions, ABI entry-package
-   acknowledgement, fill events, and Runtime state updates.
-3. Validate the OpenSpec changes.
-4. Implement the approved OpenSpec tasks, including
-   `EntryReconciliationOrchestrator`, `AbiExecutionEventOrchestrator`, and their
-   repository integration.
-5. Add and run state-machine and end-to-end tests with fake ABI.
-6. Archive the completed OpenSpec changes after implementation and verification.
+2. Create and complete the two pre-I4 contract changes for nullable cancellation
+   multiplier and immutable aggregate multiplier.
+3. Create corresponding OpenSpec changes covering closed-bar orchestration,
+   fill events, and Runtime state updates.
+4. Validate the OpenSpec changes.
+5. Implement the approved OpenSpec tasks by extending
+   `StrategyRuntimeOrchestrator`, adding the nested
+   `EntryReconciliationOrchestrator`, adding `AbiExecutionEventOrchestrator`,
+   and integrating both top-level writer paths with the shared mutex and
+   repository.
+6. Add and run entry/fill state-machine and cross-flow tests with fake ABI.
+7. Define and implement the open-trade branch without preassigning a component
+   name.
+8. Run final full Live V1 end-to-end verification only after both typed
+   projection branches are supported.
+9. Archive each completed OpenSpec change after implementation and verification.
 
 Deferred topics include:
 
