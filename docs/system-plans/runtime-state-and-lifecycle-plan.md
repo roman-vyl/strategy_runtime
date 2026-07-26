@@ -65,7 +65,8 @@ opaque `raw_spec`, and source path.
 `risk_multiplier` is a Runtime-owned canonical field. It is not a deployment
 field, registration-request field, `raw_spec` member, registered snapshot
 field, or identity input. The repository supplies `"1"` when the aggregate is
-first created, and the accepted target makes that value immutable afterward.
+first created. Repeated discovery returns the existing aggregate rather than
+creating or resetting that state.
 
 Creation does not imply that Engine has produced a plan or ABI has opened or
 not opened a position. In particular, `current_trade_cycle = null` means only
@@ -74,11 +75,7 @@ remains authoritative for exchange position facts.
 
 The current in-memory repository returns the same aggregate for repeated lookup
 of the same identity and rejects a collision where the same
-`strategy_instance_id` is associated with another `strategy_id`. Its current
-complete-aggregate `save(...)` still permits a replacement state carrying a
-different multiplier. Before I4, a dedicated delta must make the value
-immutable after creation and update the model, repository specification, and
-tests.
+`strategy_instance_id` is associated with another `strategy_id`.
 
 ## 4. Nested trade cycle
 

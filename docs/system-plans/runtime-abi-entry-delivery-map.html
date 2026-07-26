@@ -5,18 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
-<title>Runtime ABI Entry Delivery Map</title>
+<title>Runtime Abi Entry Delivery Map.Fragment</title>
 <style>:root{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}html,body{margin:0}body{box-sizing:border-box;padding:1rem;background:inherit}iframe{display:block;width:100%;max-width:736px;height:calc(100vh - 2rem);margin:0 auto;border:0}</style>
 </head>
 <body>
-<iframe sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer" title="Runtime ABI Entry Delivery Map" srcdoc="&lt;!doctype html&gt;
+<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="Runtime Abi Entry Delivery Map.Fragment" srcdoc="&lt;!doctype html&gt;
 &lt;html lang=&quot;en&quot;&gt;
 &lt;head&gt;
 &lt;meta charset=&quot;utf-8&quot;&gt;
 &lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
 &lt;meta name=&quot;referrer&quot; content=&quot;no-referrer&quot;&gt;
 &lt;meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src &#x27;none&#x27;; script-src &#x27;unsafe-inline&#x27; &#x27;unsafe-eval&#x27; &#x27;wasm-unsafe-eval&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src &#x27;unsafe-inline&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src &#x27;none&#x27;; object-src &#x27;none&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;&quot;&gt;
-&lt;title&gt;Runtime ABI Entry Delivery Map&lt;/title&gt;
+&lt;title&gt;Runtime Abi Entry Delivery Map.Fragment&lt;/title&gt;
 &lt;style&gt;:root {
   color-scheme: light dark;
   background-color: var(--background) !important;
@@ -1238,7 +1238,7 @@ html&gt;body{padding:0}&lt;/style&gt;
             edge: &quot;new desired vs applied desired&quot;,
             lane: 1,
             title: &quot;EntryDiff.decide&quot;,
-            detail: &quot;Чистое решение &lt;code&gt;NoOp | Apply | Replace | Cancel&lt;/code&gt;; multiplier не входит в I3 semantics.&quot;,
+            detail: &quot;Чистое решение &lt;code&gt;NoOp | Apply | Replace | Cancel&lt;/code&gt;.&quot;,
             status: &quot;current&quot;
           },
           {
@@ -1252,7 +1252,7 @@ html&gt;body{padding:0}&lt;/style&gt;
             edge: &quot;EntryPackageRequest&quot;,
             lane: 1,
             title: &quot;AbiEntryPackagePort.send&quot;,
-            detail: &quot;I4 mapping: APPLY/REPLACE берут multiplier из current state; CANCEL отправляет &lt;code&gt;desired_entry=null + risk_multiplier=null&lt;/code&gt;.&quot;,
+            detail: &quot;I4 передаёт сформированную command через bounded outbound port.&quot;,
             status: &quot;planned&quot;
           },
           {
@@ -1266,7 +1266,7 @@ html&gt;body{padding:0}&lt;/style&gt;
             edge: &quot;200 success | public ABI error | typed failure&quot;,
             lane: 1,
             title: &quot;Strict decode + identity binding&quot;,
-            detail: &quot;Wire &lt;code&gt;accepted_risk_multiplier&lt;/code&gt; валидируется, но не переносится в I3 confirmation и не сохраняется.&quot;,
+            detail: &quot;Закрытая success-форма и identity валидируются перед адаптацией в I3 confirmation.&quot;,
             status: &quot;planned&quot;
           },
           {
@@ -1295,7 +1295,6 @@ html&gt;body{padding:0}&lt;/style&gt;
           &quot;Mutex принадлежит &lt;code&gt;StrategyRuntimeOrchestrator&lt;/code&gt;; вложенный &lt;code&gt;EntryReconciliationOrchestrator&lt;/code&gt; не может повторно захватить non-reentrant lock.&quot;,
           &quot;I3 зафиксировал confirmed cancel как &lt;code&gt;EntryPackageAbsent&lt;/code&gt;.&quot;,
           &quot;I3 зафиксировал persisted package как &lt;code&gt;applied_desired_entry + calculated_quantity&lt;/code&gt;.&quot;,
-          &quot;До I4 нужно исправить I1 boundary: package absence использует &lt;code&gt;risk_multiplier=null&lt;/code&gt;, а aggregate multiplier становится immutable после создания.&quot;,
           &quot;&lt;code&gt;OpenTradeProjectedStrategyInstance&lt;/code&gt; не мутирует state и не может завершиться успешным dispatch до отдельного дизайна.&quot;,
           &quot;До ABI acknowledgement новый &lt;code&gt;trade_cycle_id&lt;/code&gt; существует как локально зарезервированная identity, но &lt;code&gt;CurrentTradeCycle&lt;/code&gt; ещё не создаётся.&quot;
         ]
@@ -1408,7 +1407,7 @@ html&gt;body{padding:0}&lt;/style&gt;
             lane: 0,
             span: 4,
             title: &quot;I2 · Aggregate + repository + shared mutex foundation&quot;,
-            detail: &quot;Добавлены canonical &lt;code&gt;risk_multiplier=&amp;quot;1&amp;quot;&lt;/code&gt;, minimal acknowledged &lt;code&gt;CurrentTradeCycle&lt;/code&gt;, &lt;code&gt;get/save&lt;/code&gt;, id factory и keyed-mutex registry.&quot;,
+            detail: &quot;Добавлены canonical Runtime-owned strategy-instance aggregate, minimal acknowledged &lt;code&gt;CurrentTradeCycle&lt;/code&gt;, &lt;code&gt;get/save&lt;/code&gt;, id factory и keyed-mutex registry; existing aggregate сохраняется при rediscovery.&quot;,
             status: &quot;current&quot;,
             note: &quot;архивировано&quot;
           },
@@ -1424,19 +1423,9 @@ html&gt;body{padding:0}&lt;/style&gt;
             note: &quot;архивировано&quot;
           },
           {
-            id: &quot;pre-i4-contracts&quot;,
-            trackable: true,
-            edge: &quot;I1 + I2 + I3&quot;,
-            lane: 0,
-            span: 4,
-            title: &quot;Pre-I4 · Contract prerequisites&quot;,
-            detail: &quot;Исправить cancel wire payload на &lt;code&gt;desired_entry=null + risk_multiplier=null&lt;/code&gt; и сделать aggregate &lt;code&gt;risk_multiplier=&amp;quot;1&amp;quot;&lt;/code&gt; immutable после создания.&quot;,
-            status: &quot;gap&quot;
-          },
-          {
             id: &quot;i4-closed-bar-orchestration&quot;,
             trackable: true,
-            edge: &quot;оба prerequisite закрыты&quot;,
+            edge: &quot;I1 + I2 + I3&quot;,
             lane: 0,
             span: 4,
             title: &quot;I4 · Closed-bar reconciliation orchestration&quot;,
@@ -1503,8 +1492,7 @@ html&gt;body{padding:0}&lt;/style&gt;
           }
         ],
         gates: [
-          &quot;I1–I3 реализованы и архивированы; перед I4 остаются два отдельных contract prerequisites.&quot;,
-          &quot;I4 нельзя начинать, пока cancel DTO не допускает null multiplier и aggregate multiplier не стал immutable.&quot;,
+          &quot;I1–I3 реализованы и архивированы; следующий архитектурный инкремент — I4.&quot;,
           &quot;I5 опирается на acknowledged cycle, создаваемый I4; I6 проверяет только entry/fill cross-flow.&quot;,
           &quot;Финальный full Live V1 E2E возможен только после дизайна и реализации open-trade branch.&quot;
         ]

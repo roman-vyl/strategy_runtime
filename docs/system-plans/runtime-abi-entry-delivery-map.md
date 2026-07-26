@@ -28,7 +28,6 @@ flowchart TD
     I1["I1 · ABI entry-package client"]
     I2["I2 · Aggregate, repository, identity and mutex foundation"]
     I3["I3 · Pure entry reconciliation"]
-    P0["Pre-I4 · ABI cancel contract + immutable multiplier"]
     I4["I4 · Closed-bar reconciliation orchestration"]
     I5["I5 · ABI fill webhook and execution state machine"]
     I6["I6 · Entry/fill cross-flow E2E and guardrails"]
@@ -37,13 +36,12 @@ flowchart TD
     FINAL["Final full Live V1 E2E"]
     FUTURE["Stronger reliability and scale"]
 
-    CURRENT --> P0
-    I1 --> P0
+    CURRENT --> I4
+    I1 --> I4
     I2 --> I3
-    I2 --> P0
+    I2 --> I4
     I2 --> I5
-    I3 --> P0
-    P0 --> I4
+    I3 --> I4
     I4 --> I5
     I4 --> I6
     I5 --> I6
@@ -75,11 +73,8 @@ unconnected to reconciliation and production composition.
 
 - [x] Create and approve the `runtime-entry-state-foundation-v1` OpenSpec
   change.
-- [x] Add canonical Runtime-owned `risk_multiplier = "1"` to newly created
-  strategy-instance
-  state without resetting it on rediscovery.
-- [x] Keep multiplier outside deployment, registration requests, `raw_spec`,
-  registered snapshots, and identity derivation.
+- [x] Add the canonical Runtime-owned strategy-instance aggregate and preserve
+  the existing aggregate across rediscovery.
 - [x] Replace the provisional cycle with minimal `CurrentTradeCycle`:
   `trade_cycle_id + applied_entry_package`.
 - [x] Add minimal `AppliedEntryPackage`: `applied_desired_entry +
@@ -98,14 +93,11 @@ aggregate inside a per-instance critical section without calling ABI.
 
 - [x] Create, approve, implement, verify, synchronize, and archive
   `runtime-entry-reconciliation-v1`.
-- [x] Define exact `DesiredEntry` equivalence with no multiplier input.
+- [x] Define exact `DesiredEntry` equivalence.
 - [x] Implement closed `NoOp`, `Apply`, `Replace`, and `Cancel` decision
   variants with payloads.
 - [x] Implement command construction for present and absent entry packages using
   `EntryPackageRequest`.
-- [x] Keep `risk_multiplier` completely outside I3 reconciliation, decision
-  payloads, command models, acknowledgement validation, applied package state,
-  transitions, equivalence, and tests.
 - [x] Implement fail-closed acknowledgement-to-state transition rules with one
   `EntryReconciliationInvariantError`.
 - [x] Preserve source-state value and avoid any state transition for `NO_OP`,
@@ -116,21 +108,6 @@ aggregate inside a per-instance critical section without calling ABI.
 
 Exit condition: pure components can derive one command and apply one valid
 acknowledgement without transport, HTTP, or composition dependencies.
-
-### Pre-I4 · Contract prerequisites
-
-- [ ] Align the Runtime I1 request DTO, codec, OpenSpec, and contract tests with
-  the authoritative ABI package-absence payload:
-  `desired_entry = null + risk_multiplier = null`.
-- [ ] Preserve a positive state multiplier only for `APPLY` and `REPLACE`
-  outbound requests.
-- [ ] Make `StrategyInstanceRuntimeState.risk_multiplier` immutable after its
-  canonical creation as `"1"`.
-- [ ] Update the repository specification, model tests, and repository tests to
-  reject replacement of the multiplier through complete-aggregate `save(...)`.
-
-Exit condition: the outbound ABI cancel contract and aggregate multiplier
-invariant are aligned before I4 orchestration depends on them.
 
 ### I4 · Closed-bar reconciliation orchestration
 
@@ -154,8 +131,7 @@ invariant are aligned before I4 orchestration depends on them.
 - [ ] Preserve state on public ABI errors, timeout, network failure, and protocol
   failure.
 - [ ] Adapt the ABI wire acknowledgement to the I3 confirmation boundary:
-  validate but do not persist `accepted_risk_multiplier`, and persist only
-  `applied_desired_entry + calculated_quantity`.
+  persist only `applied_desired_entry + calculated_quantity`.
 - [ ] Require bounded timeouts for every outbound call made while holding the
   mutex.
 - [ ] Require the ABI entry-package acknowledgement to complete independently
@@ -232,8 +208,6 @@ described as fully Live V1 ready.
   `EntryPackageAbsent`.
 - [x] Define the persisted I3 `AppliedEntryPackage` summary:
   `applied_desired_entry + calculated_quantity`.
-- [x] Confirm I3 is unaware of `risk_multiplier`.
-- [ ] Complete the pre-I4 nullable-cancel and immutable-multiplier changes above.
 - [ ] Decide whether the production Strategy Engine and ABI open-position HTTP
   adapters belong to I4 or to a prerequisite composition change.
 

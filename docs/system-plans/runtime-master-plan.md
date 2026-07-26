@@ -394,44 +394,37 @@ optimization, but it cannot replace durable coordination and recovery.
 
 1. Retain the existing in-memory repository for Live V1; keep SQLite or another
    durable state adapter as a future gate.
-2. Before I4, align the ABI entry-package client with the authoritative package
-   absence contract: `desired_entry = null` requires `risk_multiplier = null`.
-3. Before I4, make `StrategyInstanceRuntimeState.risk_multiplier` immutable
-   after canonical creation as `"1"` and update the repository contract and
-   tests accordingly.
-4. Define state-result application and repository update semantics.
-5. Define when `trade_cycle_id` is created and how a cycle is completed.
-6. Define the ABI execution notification/callback path that freezes the exact
+2. Define state-result application and repository update semantics.
+3. Define when `trade_cycle_id` is created and how a cycle is completed.
+4. Define the ABI execution notification/callback path that freezes the exact
    accepted `DesiredEntry` with its execution facts.
-7. Decide whether the future asynchronous Runtime ↔ ABI command boundary needs
+5. Decide whether the future asynchronous Runtime ↔ ABI command boundary needs
    one Runtime-owned `command_id`; do not introduce one before that boundary
    proves it necessary.
-8. Apply Engine cleanup plans 24–29 before production HTTP integration.
-9. Implement and verify production ABI and Strategy Engine adapters.
-10. Implement and verify top-level ownership of the shared per-instance mutex,
+6. Apply Engine cleanup plans 24–29 before production HTTP integration.
+7. Implement and verify production ABI and Strategy Engine adapters.
+8. Implement and verify top-level ownership of the shared per-instance mutex,
    bounded outbound-call timeouts, and prohibition of nested mutex acquisition
    before enabling both Live V1 writers.
-11. Treat entry/fill cross-flow verification as an intermediate gate; design and
+9. Treat entry/fill cross-flow verification as an intermediate gate; design and
    implement the open-trade branch before claiming final full Live V1 E2E
    readiness.
-12. Select and implement the deferred CAS, idempotency, pending-action, and
+10. Select and implement the deferred CAS, idempotency, pending-action, and
    recovery guarantees before horizontal scaling or stronger production
    guarantees.
 
 ## 11. Next implementation sequence
 
-1. Align package absence with `risk_multiplier = null` and make the aggregate
-   multiplier immutable after creation.
-2. Specify and implement the projection-result state applier.
-3. Decide the repository persistence policy and implement only the guarantees
+1. Specify and implement the projection-result state applier.
+2. Decide the repository persistence policy and implement only the guarantees
    required by that decision.
-4. Design the ABI execution callback and singular desired-entry freeze transition.
-5. Extend `StrategyRuntimeOrchestrator` to own the complete closed-bar keyed
+3. Design the ABI execution callback and singular desired-entry freeze transition.
+4. Extend `StrategyRuntimeOrchestrator` to own the complete closed-bar keyed
    critical section, add the same boundary to fill-webhook orchestration, and
    keep nested live-entry reconciliation free of lock and repository ownership.
-6. Add entry/fill cross-flow integration tests and Live V1 writer guardrails.
-7. Define and implement the open-trade branch, then run final full Live V1 E2E.
-8. Design closure transition, completed-cycle archival, and next-cycle creation.
-9. Extend processing journal events around semantic Runtime stages.
+5. Add entry/fill cross-flow integration tests and Live V1 writer guardrails.
+6. Define and implement the open-trade branch, then run final full Live V1 E2E.
+7. Design closure transition, completed-cycle archival, and next-cycle creation.
+8. Extend processing journal events around semantic Runtime stages.
 10. Add production HTTP adapters only after the adjacent service contracts match
    the cleaned Runtime boundary.

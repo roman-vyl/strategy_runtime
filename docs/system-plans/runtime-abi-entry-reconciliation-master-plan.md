@@ -134,16 +134,12 @@ raw_spec
 source_path
 ```
 
-`risk_multiplier` is a Runtime-owned positive exact-decimal field with canonical
-value `"1"`. The accepted target makes that value immutable after aggregate
-creation. Repeated deployment discovery does not reset it, and the value does
-not participate in `strategy_instance_id` derivation.
-
-The current repository can still accept a replacement aggregate carrying a
-different multiplier through complete-aggregate `save(...)`. A prerequisite
-change before I4 must close that gap in the model, repository specification, and
-tests; this master plan does not treat that current mutability as accepted
-behavior.
+`risk_multiplier` belongs only to the Runtime-owned strategy-instance state. A
+newly created state receives `"1"`; the value is not sourced from deployment
+configuration, registered snapshots, Engine projections, trade-cycle models, or
+strategy identity. When an outbound ABI operation requires this operational
+value, the ABI adapter reads it directly from the loaded state and sends it
+one-way to ABI. ABI responses do not contain or acknowledge it.
 
 `current_trade_cycle = null` means that Runtime owns no current trade cycle or
 acknowledged entry package for the instance. This value does not replace an ABI
@@ -240,36 +236,12 @@ DesiredEntry
 Engine chooses the side. Runtime performs no side arbitration and defines no
 separate long/short desired or execution objects.
 
-## 9. Risk sizing boundary
+## 9. ABI quantity boundary
 
-Runtime owns the strategy instance's canonical `risk_multiplier = "1"` field but
-does not calculate exchange quantity or own ABI bankroll, account-risk, or
-leverage policy. The field is immutable after creation in the accepted target
-and has no hot-update use case.
+Runtime does not calculate exchange quantity or own ABI bankroll, account-risk,
+or leverage policy.
 
-`risk_multiplier` is not an Engine response field, is not part of
-`DesiredEntry`, and is not an input to desired-entry equivalence, reconciliation
-decisions, or the transport-free I3 command and confirmation models.
-
-The authoritative ABI contract requires the I4 outbound mapping:
-
-```text
-APPLY / REPLACE
-→ desired_entry = DesiredEntry
-→ risk_multiplier = current StrategyInstanceRuntimeState.risk_multiplier
-
-CANCEL
-→ desired_entry = null
-→ risk_multiplier = null
-```
-
-The current Runtime I1 request DTO, OpenSpec, and tests still require a positive
-non-null multiplier for package absence. A separate prerequisite change before
-I4 must align that existing client boundary with the authoritative ABI OpenAPI.
-This wire mapping does not make the multiplier part of reconciliation semantics
-or persisted `AppliedEntryPackage` state.
-
-ABI owns the interpretation of this multiplier using its own:
+ABI owns quantity calculation using its own:
 
 - bankroll and account state;
 - risk policy;
@@ -364,13 +336,7 @@ EntryReconciliationCommand
 
 `desired_entry = DesiredEntry` means create or replace the desired package.
 `desired_entry = null` means no pending entry package should remain for the
-trade cycle. Neither form carries `risk_multiplier` inside the I3 command.
-
-At the outbound ABI boundary, I4 adapts this command to the corrected
-`EntryPackageRequest`. `APPLY` and `REPLACE` supply the positive
-`risk_multiplier` read directly from the current aggregate. `CANCEL` supplies
-`risk_multiplier = null`. Cancellation does not compare, change, or persist the
-aggregate field.
+trade cycle.
 
 An existing `DesiredEntry` always contains a positive exact-decimal
 `initial_take_price`. Missing or null take is malformed Engine output, not an
@@ -396,11 +362,7 @@ entry order
 ```
 
 Runtime reconciliation treats the Engine-derived entry, stop, take, and side as
-one semantic desired-entry unit. For `APPLY` and `REPLACE`, the outbound ABI
-adapter additionally supplies the Runtime-owned `risk_multiplier`. For
-`CANCEL`, the adapter sends `desired_entry = null` and
-`risk_multiplier = null`. Neither mapping adds the multiplier to reconciliation
-equivalence or state-transition semantics.
+one semantic desired-entry unit.
 
 The package is indivisible: entry without initial take is architecturally
 invalid in the first version.
@@ -428,7 +390,6 @@ strategy_instance_id
 trade_cycle_id
 status = entry_package_applied
 applied_desired_entry: DesiredEntry
-accepted_risk_multiplier
 calculated_quantity
 ```
 
@@ -442,11 +403,10 @@ EntryAppliedConfirmation
 └── calculated_quantity
 ```
 
-`accepted_risk_multiplier` remains a validated wire fact but is not carried into
-the I3 confirmation and is not persisted. `AppliedEntryPackage` contains only
-`applied_desired_entry + calculated_quantity`. Exchange order references,
-attached-order references, and execution phase are not part of this
-acknowledgement or the minimal applied package.
+`AppliedEntryPackage` contains only `applied_desired_entry +
+calculated_quantity`. Exchange order references, attached-order references, and
+execution phase are not part of this acknowledgement or the minimal applied
+package.
 
 ## 16. Creation and update of `CurrentTradeCycle`
 
@@ -730,9 +690,6 @@ orchestrators rather than direct HTTP-handler mutation.
 The accepted implementation direction is responsibility-based rather than a
 speculative file tree:
 
-- complete two prerequisite changes before I4: align package absence with
-  `risk_multiplier = null`, and make
-  `StrategyInstanceRuntimeState.risk_multiplier` immutable after creation;
 - extend the existing `StrategyRuntimeOrchestrator` in place as the top-level
   closed-bar workflow and keyed-mutex owner;
 - add `EntryReconciliationOrchestrator` to the existing
@@ -746,22 +703,20 @@ speculative file tree:
 Planned delivery order:
 
 1. Approve this master plan.
-2. Create and complete the two pre-I4 contract changes for nullable cancellation
-   multiplier and immutable aggregate multiplier.
-3. Create corresponding OpenSpec changes covering closed-bar orchestration,
+2. Create corresponding OpenSpec changes covering closed-bar orchestration,
    fill events, and Runtime state updates.
-4. Validate the OpenSpec changes.
-5. Implement the approved OpenSpec tasks by extending
+3. Validate the OpenSpec changes.
+4. Implement the approved OpenSpec tasks by extending
    `StrategyRuntimeOrchestrator`, adding the nested
    `EntryReconciliationOrchestrator`, adding `AbiExecutionEventOrchestrator`,
    and integrating both top-level writer paths with the shared mutex and
    repository.
-6. Add and run entry/fill state-machine and cross-flow tests with fake ABI.
-7. Define and implement the open-trade branch without preassigning a component
+5. Add and run entry/fill state-machine and cross-flow tests with fake ABI.
+6. Define and implement the open-trade branch without preassigning a component
    name.
-8. Run final full Live V1 end-to-end verification only after both typed
+7. Run final full Live V1 end-to-end verification only after both typed
    projection branches are supported.
-9. Archive each completed OpenSpec change after implementation and verification.
+8. Archive each completed OpenSpec change after implementation and verification.
 
 Deferred topics include:
 

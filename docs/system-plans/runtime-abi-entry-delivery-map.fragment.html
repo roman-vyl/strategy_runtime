@@ -423,7 +423,7 @@
             edge: "new desired vs applied desired",
             lane: 1,
             title: "EntryDiff.decide",
-            detail: "Чистое решение <code>NoOp | Apply | Replace | Cancel</code>; multiplier не входит в I3 semantics.",
+            detail: "Чистое решение <code>NoOp | Apply | Replace | Cancel</code>.",
             status: "current"
           },
           {
@@ -437,7 +437,7 @@
             edge: "EntryPackageRequest",
             lane: 1,
             title: "AbiEntryPackagePort.send",
-            detail: "I4 mapping: APPLY/REPLACE берут multiplier из current state; CANCEL отправляет <code>desired_entry=null + risk_multiplier=null</code>.",
+            detail: "I4 передаёт сформированную command через bounded outbound port.",
             status: "planned"
           },
           {
@@ -451,7 +451,7 @@
             edge: "200 success | public ABI error | typed failure",
             lane: 1,
             title: "Strict decode + identity binding",
-            detail: "Wire <code>accepted_risk_multiplier</code> валидируется, но не переносится в I3 confirmation и не сохраняется.",
+            detail: "Закрытая success-форма и identity валидируются перед адаптацией в I3 confirmation.",
             status: "planned"
           },
           {
@@ -480,7 +480,6 @@
           "Mutex принадлежит <code>StrategyRuntimeOrchestrator</code>; вложенный <code>EntryReconciliationOrchestrator</code> не может повторно захватить non-reentrant lock.",
           "I3 зафиксировал confirmed cancel как <code>EntryPackageAbsent</code>.",
           "I3 зафиксировал persisted package как <code>applied_desired_entry + calculated_quantity</code>.",
-          "До I4 нужно исправить I1 boundary: package absence использует <code>risk_multiplier=null</code>, а aggregate multiplier становится immutable после создания.",
           "<code>OpenTradeProjectedStrategyInstance</code> не мутирует state и не может завершиться успешным dispatch до отдельного дизайна.",
           "До ABI acknowledgement новый <code>trade_cycle_id</code> существует как локально зарезервированная identity, но <code>CurrentTradeCycle</code> ещё не создаётся."
         ]
@@ -593,7 +592,7 @@
             lane: 0,
             span: 4,
             title: "I2 · Aggregate + repository + shared mutex foundation",
-            detail: "Добавлены canonical <code>risk_multiplier=&quot;1&quot;</code>, minimal acknowledged <code>CurrentTradeCycle</code>, <code>get/save</code>, id factory и keyed-mutex registry.",
+            detail: "Добавлены canonical Runtime-owned strategy-instance aggregate, minimal acknowledged <code>CurrentTradeCycle</code>, <code>get/save</code>, id factory и keyed-mutex registry; existing aggregate сохраняется при rediscovery.",
             status: "current",
             note: "архивировано"
           },
@@ -609,19 +608,9 @@
             note: "архивировано"
           },
           {
-            id: "pre-i4-contracts",
-            trackable: true,
-            edge: "I1 + I2 + I3",
-            lane: 0,
-            span: 4,
-            title: "Pre-I4 · Contract prerequisites",
-            detail: "Исправить cancel wire payload на <code>desired_entry=null + risk_multiplier=null</code> и сделать aggregate <code>risk_multiplier=&quot;1&quot;</code> immutable после создания.",
-            status: "gap"
-          },
-          {
             id: "i4-closed-bar-orchestration",
             trackable: true,
-            edge: "оба prerequisite закрыты",
+            edge: "I1 + I2 + I3",
             lane: 0,
             span: 4,
             title: "I4 · Closed-bar reconciliation orchestration",
@@ -688,8 +677,7 @@
           }
         ],
         gates: [
-          "I1–I3 реализованы и архивированы; перед I4 остаются два отдельных contract prerequisites.",
-          "I4 нельзя начинать, пока cancel DTO не допускает null multiplier и aggregate multiplier не стал immutable.",
+          "I1–I3 реализованы и архивированы; следующий архитектурный инкремент — I4.",
           "I5 опирается на acknowledged cycle, создаваемый I4; I6 проверяет только entry/fill cross-flow.",
           "Финальный full Live V1 E2E возможен только после дизайна и реализации open-trade branch."
         ]

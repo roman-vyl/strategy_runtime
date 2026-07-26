@@ -121,16 +121,9 @@ Behavior:
 - return the existing aggregate unchanged; or
 - create and return a new aggregate with canonical Runtime-owned
   `risk_multiplier = "1"` and `current_trade_cycle = null`;
-- keep multiplier out of deployment, the registration request,
+- keep that field out of deployment, the registration request,
   `registered_spec_snapshot`, `raw_spec`, and identity derivation;
-- preserve a multiplier changed through complete-aggregate `save(...)` on
-  repeated deployment discovery;
 - reject reuse of one `strategy_instance_id` for another `strategy_id`.
-
-The multiplier-preservation bullet above describes current implementation, not
-the accepted I4 target. A prerequisite delta must make the canonical
-`risk_multiplier = "1"` immutable after aggregate creation and update this
-implemented contract map when that change lands.
 
 `current_trade_cycle = null` means only that Runtime owns no current cycle or
 acknowledged entry package. ABI lookup remains authoritative for exchange
@@ -382,10 +375,6 @@ The current contour does not:
 - perform exchange reconciliation.
 
 ## 12. Planned next seam
-
-Before I4, separate prerequisite changes will align ABI package absence with
-`risk_multiplier = null` and make the aggregate's canonical
-`risk_multiplier = "1"` immutable after creation.
 
 I4 will then extend the same `StrategyRuntimeOrchestrator.process(...)` invocation
 beyond this currently implemented stopping point. The orchestrator will acquire
