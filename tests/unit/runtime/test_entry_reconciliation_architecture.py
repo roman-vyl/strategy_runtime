@@ -37,6 +37,7 @@ def test_entry_reconciliation_does_not_know_client_or_orchestration_models() -> 
         "EntryPackageAbsent",
         "AbiEntryPackagePort",
         "TradeCycleIdFactory",
+        "entry_reconciliation_orchestrator",
         "desired_entry_frozen",
         "repository",
         "keyed_mutex",
