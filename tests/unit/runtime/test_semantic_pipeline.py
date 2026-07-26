@@ -32,6 +32,7 @@ from strategy_runtime.runtime.routing.models import (
 )
 from strategy_runtime.runtime.routing.router import StrategyUseCaseRouter
 from strategy_runtime.runtime.state.models import (
+    AppliedEntryPackage,
     CurrentTradeCycle,
     GetOrCreateStrategyInstanceRuntimeStateRequest,
     StrategyInstanceRuntimeState,
@@ -171,8 +172,11 @@ def frozen_trade_state() -> StrategyInstanceRuntimeState:
         state,
         current_trade_cycle=CurrentTradeCycle(
             "cycle-1",
-            desired_entry(),
-            True,
+            AppliedEntryPackage(
+                applied_desired_entry=desired_entry(),
+                accepted_risk_multiplier="1",
+                calculated_quantity="0.1",
+            ),
         ),
     )
 
@@ -297,9 +301,11 @@ def test_router_projects_one_open_trade_from_frozen_entry_context() -> None:
     assert not hasattr(open_engine.requests[0], "instance_id")
     assert open_engine.requests[0].strategy_id == "ema_pullback"
     assert open_engine.requests[0].target_bar_open_time_ms == 1000
-    assert open_engine.requests[0].desired_entry == state.current_trade_cycle.desired_entry
+    assert (
+        open_engine.requests[0].desired_entry
+        == state.current_trade_cycle.applied_entry_package.applied_desired_entry
+    )
     assert not hasattr(open_engine.requests[0], "executed_entry_price")
-    assert state.current_trade_cycle.position_management_recipe is None
 
 
 def test_open_trade_request_contract_rejects_executed_entry_price() -> None:
@@ -456,6 +462,13 @@ class CountingRepository:
         self.requests.append(request)
         return self.state
 
+    def get(self, strategy_instance_id):
+        return self.state if strategy_instance_id == self.state.strategy_instance_id else None
+
+    def save(self, state):
+        self.state = state
+        return state
+
 
 class CountingResolver:
     def __init__(self, resolved: PositionResolvedStrategyInstanceRuntimeState) -> None:
@@ -495,6 +508,9 @@ def test_semantic_orchestrator_calls_each_scalar_stage_once_and_stops_at_project
 
     assert result is projected
     assert len(repository.requests) == 1
+    assert not hasattr(repository.requests[0], "risk_multiplier")
+    assert "risk_multiplier" not in repository.requests[0].raw_spec
+    assert state.risk_multiplier == "1"
     assert resolver_port.states == [state]
     assert len(router_port.items) == 1
     assert router_port.items[0].processing_unit is item.processing_unit

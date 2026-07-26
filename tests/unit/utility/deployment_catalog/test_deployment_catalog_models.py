@@ -43,6 +43,8 @@ def test_deployment_is_deeply_immutable_and_detached() -> None:
     with pytest.raises(TypeError):
         item.raw_spec["x"] = 2  # type: ignore[index]
 
+    assert not hasattr(item, "risk_multiplier")
+
 
 def test_snapshot_supports_identity_lookup_only() -> None:
     items = (deployment("a"), deployment("b"))

@@ -103,7 +103,10 @@ A newly created strategy-instance state receives the canonical value `"1"`.
 Repeated deployment discovery does not reset the stored value, and the value
 does not participate in `strategy_instance_id` derivation.
 
-`current_trade_cycle = null` means that the instance currently owns no acknowledged entry package and no real open position.
+`current_trade_cycle = null` means that Runtime owns no current trade cycle or
+acknowledged entry package for the instance. This value does not replace an ABI
+position lookup and does not by itself prove that no real exchange position
+exists.
 
 ## 5. `CurrentTradeCycle` target shape
 
@@ -196,7 +199,9 @@ separate long/short desired or execution objects.
 
 ## 9. Risk sizing boundary
 
-Runtime does not calculate an exchange quantity and does not own bankroll/risk configuration.
+Runtime owns the strategy instance's `risk_multiplier` operational setting but
+does not calculate exchange quantity or own ABI bankroll, account-risk, or
+leverage policy.
 
 `risk_multiplier` is not an Engine response field and is not part of
 `DesiredEntry`. During reconciliation, Runtime combines the Engine desired

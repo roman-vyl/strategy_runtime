@@ -104,14 +104,33 @@ StrategyInstanceRuntimeState
 ├── strategy_instance_id
 ├── strategy_id
 ├── registered_spec_snapshot
-└── current_trade_cycle
+├── risk_multiplier
+└── current_trade_cycle: CurrentTradeCycle | null
+
+CurrentTradeCycle
+├── trade_cycle_id
+└── applied_entry_package: AppliedEntryPackage | null
+
+AppliedEntryPackage
+├── applied_desired_entry
+├── accepted_risk_multiplier
+└── calculated_quantity
 ```
 
 Behavior:
 
 - return the existing aggregate unchanged; or
-- create and return a new aggregate with `current_trade_cycle = null`;
+- create and return a new aggregate with canonical Runtime-owned
+  `risk_multiplier = "1"` and `current_trade_cycle = null`;
+- keep multiplier out of deployment, the registration request,
+  `registered_spec_snapshot`, `raw_spec`, and identity derivation;
+- preserve a multiplier changed through complete-aggregate `save(...)` on
+  repeated deployment discovery;
 - reject reuse of one `strategy_instance_id` for another `strategy_id`.
+
+`current_trade_cycle = null` means only that Runtime owns no current cycle or
+acknowledged entry package. ABI lookup remains authoritative for exchange
+position facts.
 
 The current implementation is in-memory and synchronized with `RLock`.
 Durability is not part of this port contract.
@@ -186,7 +205,7 @@ position_open = true  -> open-trade
 ```
 
 A newly created state with no current cycle is valid for live-entry. An open
-position without a complete frozen entry context fails closed.
+position without a complete applied entry package fails closed.
 
 ## 7. Live-entry projection contract
 
@@ -243,7 +262,7 @@ Open-trade is allowed only when:
 ```text
 position_open = true
 current_trade_cycle exists
-desired_entry_frozen = true
+applied_entry_package exists
 entry_bar_open_time_ms exists
 executed_entry_price exists
 ```
@@ -265,10 +284,10 @@ The request contains no `trade_id` and no `trade_cycle_id`. The Runtime cycle
 identity is not required by the synchronous Engine calculation and remains
 inside `CurrentTradeCycle`.
 
-Strategy Engine v1 calculates position management from the frozen desired entry's
-`planned_entry_price`. The resolver-supplied `executed_entry_price` remains a
-Runtime/ABI execution fact and an open-position invariant, but it does not cross
-the Runtime → Engine boundary.
+Strategy Engine v1 calculates position management from the applied desired
+entry's `planned_entry_price`. The resolver-supplied `executed_entry_price`
+remains a Runtime/ABI execution fact and an open-position invariant, but it
+does not cross the Runtime → Engine boundary.
 
 Engine port response:
 

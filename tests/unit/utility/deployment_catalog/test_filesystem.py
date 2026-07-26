@@ -115,7 +115,13 @@ def test_required_field_validation(tmp_path: Path, overrides: dict[str, object],
 
 @pytest.mark.parametrize(
     "field_name",
-    ["enabled", "ticker", "base_timeframe", "strategy_id", "raw_spec"],
+    [
+        "enabled",
+        "ticker",
+        "base_timeframe",
+        "strategy_id",
+        "raw_spec",
+    ],
 )
 def test_every_required_field_is_rejected_when_missing(
     tmp_path: Path,
@@ -215,3 +221,12 @@ def test_enabled_is_required_boolean_and_does_not_affect_identity(tmp_path: Path
     invalid = FilesystemDeploymentCatalog(other).load_snapshot()
     assert invalid.invalid_files[0].error_code == "invalid_field_type"
     assert invalid.invalid_files[0].error_message == "enabled"
+
+
+def test_deployment_without_risk_multiplier_is_accepted(tmp_path: Path) -> None:
+    write_spec(tmp_path / "accepted.json")
+
+    snapshot = FilesystemDeploymentCatalog(tmp_path).load_snapshot()
+
+    assert len(snapshot.accepted_deployments) == 1
+    assert not hasattr(snapshot.accepted_deployments[0], "risk_multiplier")

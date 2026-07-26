@@ -4,7 +4,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
-from strategy_runtime.runtime.recipes.position_management import PositionManagementRecipe
+from strategy_runtime.shared.decimal_text import (
+    is_exact_decimal_text,
+    is_positive_exact_decimal_text,
+)
 from strategy_runtime.utility.deployment_catalog.models import FrozenJsonValue, freeze_json
 
 
@@ -26,15 +29,45 @@ class RegisteredSpecSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
-class CurrentTradeCycle:
-    trade_cycle_id: str
-    desired_entry: DesiredEntry
-    desired_entry_frozen: bool
-    position_management_recipe: PositionManagementRecipe | None = None
+class AppliedEntryPackage:
+    applied_desired_entry: DesiredEntry
+    accepted_risk_multiplier: str
+    calculated_quantity: str
 
     def __post_init__(self) -> None:
-        if not self.trade_cycle_id.strip():
-            raise ValueError("trade_cycle_id must be non-empty")
+        if type(self.applied_desired_entry) is not DesiredEntry:
+            raise TypeError("applied_desired_entry must be DesiredEntry")
+        if not is_positive_exact_decimal_text(self.accepted_risk_multiplier):
+            raise ValueError("accepted_risk_multiplier must be positive exact-decimal text")
+        if not is_exact_decimal_text(self.calculated_quantity):
+            raise ValueError("calculated_quantity must be exact-decimal text")
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentTradeCycle:
+    trade_cycle_id: str
+    applied_entry_package: AppliedEntryPackage | None
+
+    def __post_init__(self) -> None:
+        if type(self.trade_cycle_id) is not str or len(self.trade_cycle_id) == 0:
+            raise ValueError("trade_cycle_id must be a non-empty string")
+        if (
+            self.applied_entry_package is not None
+            and type(self.applied_entry_package) is not AppliedEntryPackage
+        ):
+            raise TypeError("applied_entry_package must be AppliedEntryPackage or None")
+
+    @property
+    def desired_entry_frozen(self) -> bool:
+        """Compatibility read for the unchanged pre-I2 router; not persisted state."""
+        return self.applied_entry_package is not None
+
+    @property
+    def desired_entry(self) -> DesiredEntry:
+        """Read the singular applied entry without duplicating it on the cycle."""
+        if self.applied_entry_package is None:
+            raise AttributeError("cycle has no applied desired entry")
+        return self.applied_entry_package.applied_desired_entry
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,11 +75,19 @@ class StrategyInstanceRuntimeState:
     strategy_instance_id: str
     strategy_id: str
     registered_spec_snapshot: RegisteredSpecSnapshot
+    risk_multiplier: str
     current_trade_cycle: CurrentTradeCycle | None = None
 
     def __post_init__(self) -> None:
         if not self.strategy_instance_id.strip() or not self.strategy_id.strip():
             raise ValueError("strategy identity fields must be non-empty")
+        if not is_positive_exact_decimal_text(self.risk_multiplier):
+            raise ValueError("risk_multiplier must be positive exact-decimal text")
+        if (
+            self.current_trade_cycle is not None
+            and type(self.current_trade_cycle) is not CurrentTradeCycle
+        ):
+            raise TypeError("current_trade_cycle must be CurrentTradeCycle or None")
 
 
 @dataclass(frozen=True, slots=True)

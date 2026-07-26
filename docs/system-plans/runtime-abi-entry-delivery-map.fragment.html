@@ -1,0 +1,740 @@
+<div id="runtime-abi-chain-map">
+  <div class="viz-controls" role="group" aria-label="Выбор представления">
+    <button type="button" class="btn btn-primary" data-view="current" aria-pressed="true">Текущий контур</button>
+    <button type="button" class="btn" data-view="closed" aria-pressed="false">Closed-bar → ABI</button>
+    <button type="button" class="btn" data-view="webhook" aria-pressed="false">ABI fill webhook</button>
+    <button type="button" class="btn" data-view="increments" aria-pressed="false">Инкременты</button>
+  </div>
+
+  <div class="chain-legend" aria-label="Легенда статусов">
+    <span><i class="legend-swatch is-current" aria-hidden="true"></i>есть в коде</span>
+    <span><i class="legend-swatch is-planned" aria-hidden="true"></i>спроектировано</span>
+    <span><i class="legend-swatch is-gap" aria-hidden="true"></i>нужен следующий OpenSpec</span>
+    <span><i class="legend-swatch is-deferred" aria-hidden="true"></i>отложено</span>
+  </div>
+
+  <div class="chain-heading">
+    <h3 id="chain-view-title"></h3>
+    <span id="chain-view-caption" class="text-muted"></span>
+  </div>
+
+  <div class="lane-headings" aria-hidden="true">
+    <span>Ingress / utility</span>
+    <span>Runtime application</span>
+    <span>State / coordination</span>
+    <span>External systems</span>
+  </div>
+
+  <div id="chain-flow" class="chain-flow" role="list" aria-live="polite"></div>
+
+  <div id="chain-gates" class="card chain-gates" aria-label="Ключевые архитектурные ворота"></div>
+</div>
+
+<style>
+  #runtime-abi-chain-map {
+    width: 100%;
+    color: var(--foreground);
+  }
+
+  #runtime-abi-chain-map .viz-controls {
+    margin-bottom: 12px;
+  }
+
+  #runtime-abi-chain-map .chain-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    margin-bottom: 14px;
+    color: var(--muted-foreground);
+  }
+
+  #runtime-abi-chain-map .chain-legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  #runtime-abi-chain-map .legend-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    background: var(--muted);
+  }
+
+  #runtime-abi-chain-map .legend-swatch.is-current {
+    background: color-mix(in srgb, var(--viz-series-1) 60%, var(--background));
+  }
+
+  #runtime-abi-chain-map .legend-swatch.is-planned {
+    background: color-mix(in srgb, var(--viz-series-2) 60%, var(--background));
+  }
+
+  #runtime-abi-chain-map .legend-swatch.is-gap {
+    background: color-mix(in srgb, var(--viz-series-3) 60%, var(--background));
+  }
+
+  #runtime-abi-chain-map .legend-swatch.is-deferred {
+    background: var(--muted);
+  }
+
+  #runtime-abi-chain-map .chain-heading {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 12px;
+    margin: 0 0 10px;
+  }
+
+  #runtime-abi-chain-map .chain-heading h3 {
+    margin: 0;
+  }
+
+  #runtime-abi-chain-map .lane-headings,
+  #runtime-abi-chain-map .flow-row {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  #runtime-abi-chain-map .lane-headings {
+    padding: 0 4px 8px;
+    border-bottom: 1px solid var(--border);
+    color: var(--muted-foreground);
+    text-align: center;
+  }
+
+  #runtime-abi-chain-map .chain-flow {
+    position: relative;
+    padding-top: 6px;
+  }
+
+  #runtime-abi-chain-map .flow-step {
+    position: relative;
+  }
+
+  #runtime-abi-chain-map .edge-label {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 28px;
+    color: var(--muted-foreground);
+    text-align: center;
+  }
+
+  #runtime-abi-chain-map .edge-label::before,
+  #runtime-abi-chain-map .edge-label::after {
+    content: "";
+    height: 1px;
+    flex: 1 1 auto;
+    background: var(--border);
+  }
+
+  #runtime-abi-chain-map .edge-label span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0 8px;
+  }
+
+  #runtime-abi-chain-map .edge-label i {
+    display: inline-flex;
+  }
+
+  #runtime-abi-chain-map .flow-row {
+    align-items: stretch;
+  }
+
+  #runtime-abi-chain-map .flow-node {
+    position: relative;
+    min-height: 72px;
+    padding: 10px 11px 10px 14px;
+    border-left: 4px solid var(--border);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--muted) 36%, transparent);
+  }
+
+  #runtime-abi-chain-map .flow-node.status-current {
+    border-left-color: var(--viz-series-1);
+    background: color-mix(in srgb, var(--viz-series-1) 10%, transparent);
+  }
+
+  #runtime-abi-chain-map .flow-node.status-planned {
+    border-left-color: var(--viz-series-2);
+    background: color-mix(in srgb, var(--viz-series-2) 10%, transparent);
+  }
+
+  #runtime-abi-chain-map .flow-node.status-gap {
+    border-left-color: var(--viz-series-3);
+    background: color-mix(in srgb, var(--viz-series-3) 11%, transparent);
+  }
+
+  #runtime-abi-chain-map .flow-node.status-deferred {
+    border-left-color: var(--muted-foreground);
+    background: color-mix(in srgb, var(--muted) 46%, transparent);
+  }
+
+  #runtime-abi-chain-map .node-topline {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+  }
+
+  #runtime-abi-chain-map .step-number {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    height: 22px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--secondary);
+    color: var(--secondary-foreground);
+  }
+
+  #runtime-abi-chain-map .node-title {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-weight: 500;
+  }
+
+  #runtime-abi-chain-map .node-detail {
+    margin-top: 5px;
+    color: var(--muted-foreground);
+    overflow-wrap: anywhere;
+  }
+
+  #runtime-abi-chain-map .node-detail code {
+    color: var(--foreground);
+  }
+
+  #runtime-abi-chain-map .node-status {
+    display: inline-block;
+    margin-top: 7px;
+    color: var(--muted-foreground);
+  }
+
+  #runtime-abi-chain-map .progress-check {
+    margin-top: 9px;
+  }
+
+  #runtime-abi-chain-map .flow-node.is-completed {
+    border-left-color: var(--viz-series-1);
+    background: color-mix(in srgb, var(--viz-series-1) 10%, transparent);
+  }
+
+  #runtime-abi-chain-map .chain-gates {
+    margin-top: 14px;
+    padding: 12px 14px;
+  }
+
+  #runtime-abi-chain-map .chain-gates strong {
+    font-weight: 500;
+  }
+
+  #runtime-abi-chain-map .gate-list {
+    display: grid;
+    gap: 6px;
+    margin: 8px 0 0;
+    padding-left: 20px;
+  }
+
+  @media (max-width: 560px) {
+    #runtime-abi-chain-map .lane-headings {
+      display: none;
+    }
+
+    #runtime-abi-chain-map .flow-row {
+      display: block;
+    }
+
+    #runtime-abi-chain-map .flow-node {
+      margin: 0;
+    }
+
+    #runtime-abi-chain-map .flow-node::before {
+      content: attr(data-lane-label);
+      display: block;
+      margin-bottom: 6px;
+      color: var(--muted-foreground);
+    }
+  }
+</style>
+
+<script>
+  (() => {
+    const root = document.getElementById("runtime-abi-chain-map");
+    const title = root.querySelector("#chain-view-title");
+    const caption = root.querySelector("#chain-view-caption");
+    const flow = root.querySelector("#chain-flow");
+    const gates = root.querySelector("#chain-gates");
+    const buttons = Array.from(root.querySelectorAll("[data-view]"));
+    const laneLabels = [
+      "Ingress / utility",
+      "Runtime application",
+      "State / coordination",
+      "External systems"
+    ];
+
+    const views = {
+      current: {
+        title: "Фактическая цепочка в текущем репозитории",
+        caption: "Семантический контур реализован; production composition пока обрывается на handoff.",
+        steps: [
+          {
+            lane: 0,
+            title: "POST /v1/webhooks/closed-bar",
+            detail: "FastAPI принимает <code>ClosedBarRequest</code> и ставит background task.",
+            status: "current"
+          },
+          {
+            edge: "CommittedBarEvent",
+            lane: 0,
+            title: "CommittedBarOrchestrator.process",
+            detail: "Запускает журналирование и fan-out одной закрытой свечи.",
+            status: "current"
+          },
+          {
+            edge: "snapshot → selected deployments",
+            lane: 0,
+            title: "FilesystemDeploymentCatalog → CommittedBarDeploymentSelector",
+            detail: "Находит JSON-спеки, выводит <code>strategy_instance_id</code>, отбирает enabled + ticker + timeframe.",
+            status: "current"
+          },
+          {
+            edge: "по одному StrategyBarProcessingUnit",
+            lane: 0,
+            title: "StrategyCycleHandoffBoundary.dispatch",
+            detail: "В production composition это текущая конечная точка utility-контура.",
+            status: "gap",
+            note: "разрыв production wiring"
+          },
+          {
+            edge: "sink должен вызвать semantic pipeline",
+            lane: 1,
+            title: "StrategyRuntimeOrchestrator.process",
+            detail: "Скалярная цепочка реализована и покрыта unit-тестами, но не подключена в <code>build_application</code>.",
+            status: "current"
+          },
+          {
+            edge: "get_or_create",
+            lane: 2,
+            title: "StrategyInstanceRuntimeStateRepository",
+            detail: "In-memory aggregate; сейчас порт умеет только <code>get_or_create</code>.",
+            status: "current"
+          },
+          {
+            edge: "state → position facts",
+            lane: 1,
+            title: "OpenPositionResolver.resolve",
+            detail: "Запрашивает ABI по <code>strategy_instance_id</code> и возвращает transient position facts.",
+            status: "current"
+          },
+          {
+            edge: "AbiOpenPositionLookupPort.lookup",
+            lane: 3,
+            title: "ABI open-position lookup",
+            detail: "Порт и модели готовы; production HTTP adapter пока является заглушкой.",
+            status: "gap",
+            note: "HTTP adapter stub"
+          },
+          {
+            edge: "PositionResolvedStrategyInstance",
+            lane: 1,
+            title: "StrategyUseCaseRouter.route",
+            detail: "<code>position_open=false</code> → live-entry; <code>true</code> → open-trade с проверкой frozen context.",
+            status: "current"
+          },
+          {
+            edge: "projection request",
+            lane: 3,
+            title: "Strategy Engine",
+            detail: "<code>project_live_entry</code> или <code>project_open_trade</code>; production HTTP client пока является заглушкой.",
+            status: "gap",
+            note: "HTTP adapter stub"
+          },
+          {
+            edge: "typed in-memory result",
+            lane: 1,
+            title: "LiveEntryProjectedStrategyInstance | OpenTradeProjectedStrategyInstance",
+            detail: "Текущая semantic цепочка здесь заканчивается, состояние не мутируется.",
+            status: "current"
+          }
+        ],
+        gates: [
+          "Подключить <code>StrategyRuntimeOrchestrator</code> как sink handoff-границы в production composition.",
+          "Реализовать production HTTP adapters для ABI position lookup и Strategy Engine, если они не поставляются внешней композицией.",
+          "Новый entry-контур должен начинаться после typed projection, не внутри router."
+        ]
+      },
+      closed: {
+        title: "Целевая closed-bar цепочка после live-entry projection",
+        caption: "Один keyed mutex держится от загрузки состояния до ABI acknowledgement и save.",
+        steps: [
+          {
+            lane: 1,
+            title: "ProjectionOrchestrator",
+            detail: "Возвращает существующий <code>LiveEntryProjectedStrategyInstance</code> как typed in-memory object.",
+            status: "current"
+          },
+          {
+            edge: "projection + strategy_instance_id",
+            lane: 2,
+            title: "KeyedMutex.acquire(strategy_instance_id)",
+            detail: "Общий process-local mutex для reconciliation и fill webhook.",
+            status: "gap"
+          },
+          {
+            edge: "после захвата mutex",
+            lane: 2,
+            title: "Repository.get_or_create / reload",
+            detail: "Загружает свежий aggregate с <code>risk_multiplier</code> и optional <code>CurrentTradeCycle</code>.",
+            status: "gap"
+          },
+          {
+            edge: "new desired vs applied desired",
+            lane: 1,
+            title: "EntryDiff.decide",
+            detail: "Чистое решение: <code>NO_OP | APPLY | REPLACE | CANCEL</code>.",
+            status: "gap"
+          },
+          {
+            edge: "NO_OP завершает; остальные строят command",
+            lane: 2,
+            title: "Trade-cycle identity selection",
+            detail: "<code>APPLY</code> резервирует новый id до вызова ABI; <code>REPLACE/CANCEL</code> используют id текущего цикла.",
+            status: "gap"
+          },
+          {
+            edge: "EntryPackageRequest",
+            lane: 1,
+            title: "AbiEntryPackagePort.send",
+            detail: "DTO + scalar port из готового OpenSpec <code>abi-entry-package-client-v1</code>.",
+            status: "planned"
+          },
+          {
+            edge: "один bounded PUT, без retry/redirect",
+            lane: 3,
+            title: "PUT …/trade-cycles/{trade_cycle_id}/entry-package",
+            detail: "<code>ticker + desired_entry|null + risk_multiplier</code>; strict JSON contract.",
+            status: "planned"
+          },
+          {
+            edge: "200 success | public ABI error | typed failure",
+            lane: 1,
+            title: "Strict decode + identity binding",
+            detail: "Success допустим только при совпадении обоих Runtime-owned identifiers.",
+            status: "planned"
+          },
+          {
+            edge: "valid acknowledgement only",
+            lane: 2,
+            title: "Entry result applier → Repository.save",
+            detail: "APPLY создаёт cycle; REPLACE обновляет awaiting entry; CANCEL/absent очищает cycle; failure сохраняет прежнее состояние.",
+            status: "gap"
+          },
+          {
+            edge: "finally",
+            lane: 2,
+            title: "KeyedMutex.release",
+            detail: "Освобождается на success, rejection, timeout и любом exception path.",
+            status: "gap"
+          },
+          {
+            edge: "OpenTradeProjectedStrategyInstance",
+            lane: 1,
+            title: "Position-management reconciliation",
+            detail: "Не входит в live-entry master plan и проектируется отдельно.",
+            status: "deferred"
+          }
+        ],
+        gates: [
+          "Свести расхождение статусов отмены: master plan говорит <code>entry_package_cancelled</code>, утверждённый client contract — <code>entry_package_absent</code>.",
+          "Зафиксировать минимальный persisted acknowledgement: client DTO несёт desired entry, accepted multiplier и quantity, но master plan также упоминает order/stop/take references.",
+          "До ABI acknowledgement новый <code>trade_cycle_id</code> существует как локально зарезервированная identity, но <code>CurrentTradeCycle</code> ещё не создаётся."
+        ]
+      },
+      webhook: {
+        title: "Независимая цепочка ABI execution event",
+        caption: "Webhook не продолжает MDS request; обе цепочки встречаются только через mutex и repository.",
+        steps: [
+          {
+            lane: 3,
+            title: "ABI emits entry fill",
+            detail: "Partial или final fill, привязанный к <code>strategy_instance_id + trade_cycle_id</code>.",
+            status: "gap"
+          },
+          {
+            edge: "отдельный HTTP request",
+            lane: 0,
+            title: "POST Runtime ABI fill webhook",
+            detail: "Точное имя endpoint в master plan пока отложено.",
+            status: "gap"
+          },
+          {
+            edge: "parse + validate",
+            lane: 1,
+            title: "AbiEntryFillEvent DTO",
+            detail: "Проверяет identity, quantities, prices, cumulative fields и <code>occurred_at_ms</code>.",
+            status: "gap"
+          },
+          {
+            edge: "strategy_instance_id",
+            lane: 2,
+            title: "Shared KeyedMutex.acquire",
+            detail: "Тот же mutex, что у closed-bar reconciliation.",
+            status: "gap"
+          },
+          {
+            edge: "load after lock",
+            lane: 2,
+            title: "Repository.get current aggregate",
+            detail: "Нельзя применять snapshot, загруженный до ожидания mutex.",
+            status: "gap"
+          },
+          {
+            edge: "validate ownership pair",
+            lane: 1,
+            title: "AbiExecutionEventOrchestrator",
+            detail: "Требует matching <code>CurrentTradeCycle</code>; HTTP handler сам aggregate не мутирует.",
+            status: "gap"
+          },
+          {
+            edge: "apply cumulative fill",
+            lane: 2,
+            title: "CurrentTradeCycle.apply_fill",
+            detail: "Сохраняет filled/remaining/average + first/last fill timestamps.",
+            status: "gap"
+          },
+          {
+            edge: "first real exposure",
+            lane: 2,
+            title: "Freeze executed entry context",
+            detail: "Первый fill замораживает applied desired entry и execution facts.",
+            status: "gap"
+          },
+          {
+            edge: "state transition",
+            lane: 2,
+            title: "awaiting_entry → partially_filled → position_open",
+            detail: "Immediate full fill переводит напрямую в <code>position_open</code>.",
+            status: "gap"
+          },
+          {
+            edge: "save complete aggregate",
+            lane: 2,
+            title: "Repository.save → release mutex",
+            detail: "После save следующий closed-bar снова проверит authoritative ABI position fact.",
+            status: "gap"
+          },
+          {
+            edge: "later reliability gate",
+            lane: 2,
+            title: "Durable fill dedup / recovery / CAS",
+            detail: "Не входит в Live V1; обязательно до multi-worker или multi-replica.",
+            status: "deferred"
+          }
+        ],
+        gates: [
+          "До реализации подтвердить у ABI/Bybit источник cumulative quantity и average entry price.",
+          "Поздние callbacks и cancel/fill race в Live V1 принимаются как остаточный риск; нужен явный test matrix.",
+          "Деплой Live V1 должен реально запрещать несколько workers/replicas, иначе process-local mutex не обеспечивает инвариант."
+        ]
+      },
+      increments: {
+        title: "Рекомендуемый порядок поставки",
+        caption: "Каждый инкремент оставляет проверяемый, но архитектурно завершённый шов.",
+        steps: [
+          {
+            id: "i1-abi-client",
+            trackable: true,
+            lane: 0,
+            span: 4,
+            title: "I1 · ABI entry-package client",
+            detail: "Выполнить текущий OpenSpec: wire DTOs, scalar port, HTTP adapter, strict decoding, fake ABI и OpenAPI conformance. Никакого wiring.",
+            status: "planned",
+            note: "активный OpenSpec"
+          },
+          {
+            id: "i2-state-foundation",
+            trackable: true,
+            edge: "I1 даёт надёжный outbound seam",
+            lane: 0,
+            span: 4,
+            title: "I2 · Aggregate + repository + shared mutex foundation",
+            detail: "Добавить <code>risk_multiplier=&quot;1&quot;</code>, целевой <code>CurrentTradeCycle</code>, phase/frozen context, <code>get/save</code>, id factory и keyed-mutex registry.",
+            status: "gap"
+          },
+          {
+            id: "i3-pure-reconciliation",
+            trackable: true,
+            edge: "I2 даёт атомарную точку мутации",
+            lane: 0,
+            span: 4,
+            title: "I3 · Pure entry reconciliation",
+            detail: "Реализовать equivalence, <code>NO_OP/APPLY/REPLACE/CANCEL</code>, command builder и acknowledgement applier как чистые компоненты со state-machine tests.",
+            status: "gap"
+          },
+          {
+            id: "i4-closed-bar-orchestration",
+            trackable: true,
+            edge: "I1 + I2 + I3",
+            lane: 0,
+            span: 4,
+            title: "I4 · Closed-bar reconciliation orchestration",
+            detail: "Добавить <code>EntryReconciliationOrchestrator</code>, удержание mutex вокруг load → ABI → save, production composition и failure preservation.",
+            status: "gap"
+          },
+          {
+            id: "i5-fill-webhook",
+            trackable: true,
+            edge: "acknowledged cycle уже существует",
+            lane: 0,
+            span: 4,
+            title: "I5 · ABI fill webhook + execution state machine",
+            detail: "DTO/HTTP endpoint, <code>AbiExecutionEventOrchestrator</code>, shared mutex, freeze on first fill, cumulative fill storage и phase transitions.",
+            status: "gap"
+          },
+          {
+            id: "i6-e2e-guardrails",
+            trackable: true,
+            edge: "обе writer-цепочки готовы",
+            lane: 0,
+            span: 4,
+            title: "I6 · Cross-flow E2E и live guardrails",
+            detail: "Fake ABI end-to-end, contention tests, cancel/fill race matrix, timeout paths, journal/metrics и проверяемый single-worker deployment guard.",
+            status: "gap"
+          },
+          {
+            edge: "следующая отдельная программа работ",
+            lane: 0,
+            span: 4,
+            title: "Position-management + stronger reliability",
+            detail: "Protection/close reconciliation, durable persistence, idempotency, recovery, CAS и horizontal scaling.",
+            status: "deferred"
+          }
+        ],
+        gates: [
+          "I1 можно реализовать изолированно прямо сейчас: его OpenSpec уже полный и специально не меняет active flow.",
+          "I2–I6 лучше оформить отдельными OpenSpec changes, чтобы state model, orchestration и webhook не смешались в один большой change.",
+          "Главная зависимость: I4 нельзя считать завершённым без I1–I3; I5 опирается на acknowledged cycle, создаваемый I4."
+        ]
+      }
+    };
+
+    const progressStorageKey = "strategy-runtime.runtime-abi-entry-delivery-progress.v1";
+
+    function loadProgress() {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(progressStorageKey) || "{}");
+        return parsed && typeof parsed === "object" ? parsed : {};
+      } catch (_error) {
+        return {};
+      }
+    }
+
+    function saveProgress(progress) {
+      try {
+        localStorage.setItem(progressStorageKey, JSON.stringify(progress));
+      } catch (_error) {
+        // The visual remains usable when browser storage is unavailable.
+      }
+    }
+
+    function render(viewName) {
+      const view = views[viewName];
+      const progress = loadProgress();
+      title.textContent = view.title;
+      caption.textContent = view.caption;
+      flow.replaceChildren();
+
+      view.steps.forEach((step, index) => {
+        const wrapper = document.createElement("div");
+        wrapper.className = "flow-step";
+        wrapper.setAttribute("role", "listitem");
+
+        if (step.edge) {
+          const edge = document.createElement("div");
+          edge.className = "edge-label";
+          edge.innerHTML = `<span><i data-lucide="arrow-down" aria-hidden="true"></i>${step.edge}</span>`;
+          wrapper.appendChild(edge);
+        }
+
+        const row = document.createElement("div");
+        row.className = "flow-row";
+
+        const node = document.createElement("div");
+        node.className = `flow-node status-${step.status}`;
+        node.style.gridColumn = `${step.lane + 1} / span ${step.span || 1}`;
+        node.dataset.laneLabel = step.span === 4 ? "Cross-cutting increment" : laneLabels[step.lane];
+
+        const topline = document.createElement("div");
+        topline.className = "node-topline";
+        topline.innerHTML = `<span class="step-number">${index + 1}</span><span class="node-title">${step.title}</span>`;
+        node.appendChild(topline);
+
+        const detail = document.createElement("div");
+        detail.className = "node-detail";
+        detail.innerHTML = step.detail;
+        node.appendChild(detail);
+
+        if (step.note) {
+          const note = document.createElement("span");
+          note.className = "node-status";
+          note.textContent = step.note;
+          node.appendChild(note);
+        }
+
+        if (step.trackable) {
+          const completed = progress[step.id] === true;
+          node.classList.toggle("is-completed", completed);
+
+          const check = document.createElement("div");
+          check.className = "form-check progress-check";
+
+          const input = document.createElement("input");
+          input.className = "form-check-input";
+          input.type = "checkbox";
+          input.id = `progress-${step.id}`;
+          input.checked = completed;
+
+          const label = document.createElement("label");
+          label.className = "form-check-label";
+          label.htmlFor = input.id;
+          label.textContent = "Выполнено";
+
+          input.addEventListener("change", () => {
+            progress[step.id] = input.checked;
+            saveProgress(progress);
+            node.classList.toggle("is-completed", input.checked);
+          });
+
+          check.append(input, label);
+          node.appendChild(check);
+        }
+
+        row.appendChild(node);
+        wrapper.appendChild(row);
+        flow.appendChild(wrapper);
+      });
+
+      gates.innerHTML = `<strong>Архитектурные ворота</strong><ul class="gate-list">${view.gates.map((gate) => `<li>${gate}</li>`).join("")}</ul>`;
+
+      buttons.forEach((button) => {
+        const selected = button.dataset.view === viewName;
+        button.classList.toggle("btn-primary", selected);
+        button.setAttribute("aria-pressed", String(selected));
+      });
+
+      if (typeof lucide !== "undefined") {
+        lucide.createIcons({ attrs: { width: 16, height: 16 } });
+      }
+    }
+
+    buttons.forEach((button) => {
+      button.addEventListener("click", () => render(button.dataset.view));
+    });
+
+    render("current");
+  })();
+</script>

@@ -55,18 +55,27 @@ StrategyInstanceRuntimeState
 ├── strategy_instance_id
 ├── strategy_id
 ├── registered_spec_snapshot
+├── risk_multiplier = "1"
 └── current_trade_cycle = null
 ```
 
 The registered snapshot preserves the creation-time instrument, base timeframe,
 opaque `raw_spec`, and source path.
 
-Creation does not imply that Engine has produced a plan or ABI has opened a
-position.
+`risk_multiplier` is Runtime-owned operational state. It is not a deployment
+field, registration-request field, `raw_spec` member, registered snapshot
+field, or identity input. The repository supplies canonical initial `"1"` only
+when the aggregate is first created.
+
+Creation does not imply that Engine has produced a plan or ABI has opened or
+not opened a position. In particular, `current_trade_cycle = null` means only
+that Runtime owns no current cycle or acknowledged entry package; ABI lookup
+remains authoritative for exchange position facts.
 
 The current in-memory repository returns the same aggregate for repeated lookup
-of the same identity and rejects a collision where the same
-`strategy_instance_id` is associated with another `strategy_id`.
+of the same identity without resetting a saved multiplier or current cycle. It
+rejects a collision where the same `strategy_instance_id` is associated with
+another `strategy_id`.
 
 ## 4. Nested trade cycle
 
@@ -80,17 +89,22 @@ Current implemented shape:
 ```text
 CurrentTradeCycle
 ├── trade_cycle_id
-├── desired_entry: DesiredEntry
-├── desired_entry_frozen
-└── position_management_recipe | null
+└── applied_entry_package: AppliedEntryPackage | null
+
+AppliedEntryPackage
+├── applied_desired_entry: DesiredEntry
+├── accepted_risk_multiplier
+└── calculated_quantity
 ```
 
-Open-position facts resolved from ABI are currently transient and are not fields
-of `CurrentTradeCycle`.
+The applied desired entry exists only inside `AppliedEntryPackage`; it is not
+duplicated as another persisted cycle field. Phase, fill aggregates, frozen
+execution context, and position-management state are not part of the current
+model. Open-position facts resolved from ABI remain transient.
 
 A strategy instance can have at most one current cycle in the active aggregate.
-The creation policy, recipe revision semantics, and completed-cycle archival
-policy are not yet implemented.
+Cycle creation/application, fill processing, and completed-cycle archival are
+not implemented.
 
 ## 5. Desired-entry lifecycle
 
@@ -99,45 +113,32 @@ Each successful live-entry projection currently returns one complete
 `LiveEntryProjectedStrategyInstance`. It does not mutate the repository, choose
 a side, or arbitrate between plans.
 
-Before execution:
-
-```text
-desired_entry_frozen = false
-```
-
-The future state applier will use these complete-snapshot semantics:
+Future reconciliation will use these complete-snapshot semantics:
 
 ```text
 no existing cycle
--> create cycle with the complete DesiredEntry after successful application
+-> create a cycle only after ABI acknowledges the complete package
 
-existing mutable desired entry
--> compare new and currently applied singular objects, then replace the complete snapshot
+existing acknowledged package
+-> compare new and currently applied singular DesiredEntry objects
 
-existing frozen desired entry
--> replacement forbidden
+successful acknowledgement
+-> replace the complete AppliedEntryPackage snapshot
 ```
 
 Top-level `desired_entry = null` is data and means that no entry is currently
 desired. In the future reconciliation stage it cancels an acknowledged unfilled
-entry or remains a no-op when none is applied. The current `CurrentTradeCycle`
-model requires one `DesiredEntry`; absence of a cycle represents the state
-before a desired entry has been successfully applied.
+entry or remains a no-op when none is applied. A cycle may exist with
+`applied_entry_package = null`; neither that state nor an absent cycle proves
+that ABI or the exchange is flat.
 
 ## 6. Execution and freeze transition
 
-When ABI later confirms that a correlated entry instruction executed, a future
-Runtime transition must:
-
-1. identify the correct current trade cycle and exact accepted `DesiredEntry`;
-2. freeze an executed entry context that references exactly that one object;
-3. store `entry_bar_open_time_ms`;
-4. store exact decimal `executed_entry_price`;
-5. mark the cycle as owning an open position according to the final state model.
-
-The concrete callback contract, instruction correlation, and required atomicity
-depend on the future Runtime ↔ ABI execution boundary and remain an
-implementation gate.
+The concrete ABI fill callback, execution facts, lifecycle phases, and
+post-fill invariants are intentionally not modeled in I2. They depend on the
+future Runtime ↔ ABI fill contract and remain an implementation gate. The
+current aggregate must not be extended with speculative fill or frozen-context
+fields before that contract is designed.
 
 ## 7. Open-position facts
 

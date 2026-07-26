@@ -27,6 +27,7 @@ replace one already registered aggregate with one complete valid
 - **WHEN** the aggregate identity is already registered and its immutable registration data matches
 - **THEN** the repository replaces the stored value with the supplied complete aggregate
 - **AND** returns the stored aggregate
+- **AND** preserves the supplied valid `risk_multiplier` and current-cycle state
 - **AND** performs no partial field merge
 
 #### Scenario: Reject save for an unregistered identity
@@ -62,27 +63,22 @@ within one process.
 ## MODIFIED Requirements
 
 ### Requirement: The request contains complete first-registration data
-The repository SHALL accept a typed request containing all data required to
-create the initial state without querying another module.
+The repository SHALL accept a typed request containing deployment-derived
+identity and immutable first-registration data without operational risk state.
 
-#### Scenario: Map identity, deployment, and risk fields
+#### Scenario: Map identity and registration fields
 - **WHEN** `StrategyRuntimeOrchestrator` builds the request
 - **THEN** it supplies `strategy_instance_id` and `strategy_id`
 - **AND** supplies instrument and base timeframe
 - **AND** supplies the complete `raw_spec`
 - **AND** supplies source path
-- **AND** copies the deployment's required top-level `risk_multiplier` exactly
 
-#### Scenario: Exclude invocation-specific and utility-internal data
+#### Scenario: Exclude operational and invocation-specific data
 - **WHEN** the request is constructed
-- **THEN** it contains no committed-bar data
+- **THEN** it contains no `risk_multiplier`
+- **AND** contains no committed-bar data
 - **AND** contains no deployment-content hash
 - **AND** contains no utility selection metadata
-
-#### Scenario: Keep risk separate from raw spec
-- **WHEN** the request transports `raw_spec` and `risk_multiplier`
-- **THEN** they remain separate request fields
-- **AND** the request does not insert risk configuration into `raw_spec`
 
 #### Scenario: Keep freezing at the ownership boundary
 - **WHEN** the request transports a mutable raw-spec mapping
@@ -97,22 +93,22 @@ The repository SHALL atomically create a complete
 - **WHEN** no state exists for the requested `strategy_instance_id`
 - **THEN** the repository stores `strategy_instance_id` and `strategy_id`
 - **AND** stores an immutable registered snapshot containing instrument, base timeframe, raw spec, and source path
-- **AND** stores the request's exact user-provided positive exact-decimal `risk_multiplier`
+- **AND** stores canonical initial `risk_multiplier` exactly as `"1"`
 - **AND** returns the created aggregate
 
-#### Scenario: Create no default risk value
-- **WHEN** the registration request omits risk multiplier or supplies an invalid value
-- **THEN** request or state construction fails
-- **AND** the repository does not substitute `"1"` or any other default
-- **AND** no aggregate is created
+#### Scenario: Keep canonical initialization internal to Runtime
+- **WHEN** the initial aggregate is created
+- **THEN** `"1"` is supplied by the repository as canonical Runtime state
+- **AND** it is not read from deployment, `raw_spec`, or the registration request
+- **AND** no risk-update use case is executed
 
 #### Scenario: Create no trade-cycle state
 - **WHEN** the initial aggregate is created
 - **THEN** `current_trade_cycle` is null
 - **AND** no trade-cycle identity or applied entry package is created
-- **AND** this null Runtime state makes no claim about exchange order or position existence
+- **AND** this null Runtime state does not replace ABI position lookup or prove that an exchange position is absent
 
-#### Scenario: Keep risk outside immutable spec snapshot and identity
+#### Scenario: Keep risk outside immutable registration and identity
 - **WHEN** initial state is created
 - **THEN** `risk_multiplier` is a separate strategy-instance state field
 - **AND** is not added to `registered_spec_snapshot`
@@ -120,7 +116,7 @@ The repository SHALL atomically create a complete
 
 ### Requirement: Existing state is returned without mutation
 The repository SHALL return an existing state without replacing its registered
-snapshot, overwriting its stored risk multiplier, or changing its current-cycle
+snapshot, resetting its stored risk multiplier, or changing its current-cycle
 content.
 
 #### Scenario: Repeat an equivalent request
@@ -135,7 +131,8 @@ content.
 - **AND** treats the supplied derived identity as authoritative instead of revalidating instrument, base timeframe, or raw spec
 
 #### Scenario: Preserve operational and cycle state
-- **WHEN** repeated deployment discovery supplies the same identity with another valid `risk_multiplier`
+- **WHEN** deployment discovery repeats after a complete aggregate with another valid multiplier was saved
 - **THEN** get-or-create preserves the multiplier already stored in Runtime state
+- **AND** does not reset it to canonical initial `"1"`
 - **AND** does not treat discovery as a risk-update operation
 - **AND** does not create, clear, or replace the current cycle or applied entry package

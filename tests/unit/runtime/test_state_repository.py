@@ -1,12 +1,23 @@
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from threading import Barrier
 from types import MappingProxyType
+from typing import cast
 
 import pytest
 
-from strategy_runtime.runtime.state.errors import StrategyInstanceIdentityConflict
+from strategy_runtime.runtime.recipes.entry import DesiredEntry
+from strategy_runtime.runtime.state.errors import (
+    StrategyInstanceIdentityConflict,
+    StrategyInstanceRegistrationConflict,
+    StrategyInstanceStateNotFound,
+)
 from strategy_runtime.runtime.state.models import (
+    AppliedEntryPackage,
+    CurrentTradeCycle,
     GetOrCreateStrategyInstanceRuntimeStateRequest,
+    RegisteredSpecSnapshot,
+    StrategyInstanceRuntimeState,
 )
 from strategy_runtime.runtime.state.repository import (
     InMemoryStrategyInstanceRuntimeStateRepository,
@@ -72,6 +83,7 @@ def test_same_authoritative_instance_id_returns_the_same_aggregate() -> None:
     assert second is first
     assert second.registered_spec_snapshot.instrument == "BTCUSDT.P"
     assert second.registered_spec_snapshot.raw_spec["ema"] == 200
+    assert second.risk_multiplier == "1"
 
 
 def test_different_derived_instance_ids_create_different_aggregates() -> None:
@@ -103,3 +115,149 @@ def test_existing_instance_keeps_defensive_strategy_id_check() -> None:
 
     with pytest.raises(StrategyInstanceIdentityConflict):
         repository.get_or_create(make_request(strategy_id="different"))
+
+
+def test_missing_state_registration_uses_canonical_risk_without_creating_cycle() -> None:
+    repository = InMemoryStrategyInstanceRuntimeStateRepository()
+
+    state = repository.get_or_create(make_request())
+
+    assert state.risk_multiplier == "1"
+    assert state.current_trade_cycle is None
+
+
+def test_get_returns_existing_state_or_none_without_creation() -> None:
+    repository = InMemoryStrategyInstanceRuntimeStateRepository()
+    assert repository.get("missing") is None
+
+    state = repository.get_or_create(make_request())
+
+    assert repository.get(state.strategy_instance_id) is state
+
+
+@pytest.mark.parametrize("identity", [None, 1, ""])
+def test_get_rejects_invalid_identity(identity: object) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        InMemoryStrategyInstanceRuntimeStateRepository().get(cast("str", identity))
+
+
+def test_save_replaces_the_complete_registered_aggregate() -> None:
+    repository = InMemoryStrategyInstanceRuntimeStateRepository()
+    initial = repository.get_or_create(make_request())
+    cycle = CurrentTradeCycle(
+        trade_cycle_id="cycle-1",
+        applied_entry_package=AppliedEntryPackage(
+            applied_desired_entry=DesiredEntry("long", 900, "100", "99", "103", "runner"),
+            accepted_risk_multiplier="1.2500",
+            calculated_quantity="0.0100",
+        ),
+    )
+    replacement = replace(
+        initial,
+        risk_multiplier="2.500",
+        current_trade_cycle=cycle,
+    )
+
+    saved = repository.save(replacement)
+
+    assert saved is replacement
+    assert repository.get(initial.strategy_instance_id) is replacement
+    assert saved.risk_multiplier == "2.500"
+    assert saved.current_trade_cycle is cycle
+
+
+def test_save_rejects_unregistered_identity_without_creating_it() -> None:
+    repository = InMemoryStrategyInstanceRuntimeStateRepository()
+    state = InMemoryStrategyInstanceRuntimeStateRepository().get_or_create(
+        make_request(strategy_instance_id="unregistered")
+    )
+
+    with pytest.raises(StrategyInstanceStateNotFound):
+        repository.save(state)
+
+    assert repository.get("unregistered") is None
+
+
+def test_save_rejects_strategy_identity_change_and_preserves_existing() -> None:
+    repository = InMemoryStrategyInstanceRuntimeStateRepository()
+    initial = repository.get_or_create(make_request())
+
+    with pytest.raises(StrategyInstanceIdentityConflict):
+        repository.save(replace(initial, strategy_id="other"))
+
+    assert repository.get(initial.strategy_instance_id) is initial
+
+
+def test_save_rejects_registered_snapshot_change_and_preserves_existing() -> None:
+    repository = InMemoryStrategyInstanceRuntimeStateRepository()
+    initial = repository.get_or_create(make_request())
+    changed_snapshot = RegisteredSpecSnapshot(
+        instrument="ETHUSDT.P",
+        base_timeframe="1h",
+        raw_spec={"ema": 300},
+        source_path="other.json",
+    )
+
+    with pytest.raises(StrategyInstanceRegistrationConflict):
+        repository.save(replace(initial, registered_spec_snapshot=changed_snapshot))
+
+    assert repository.get(initial.strategy_instance_id) is initial
+
+
+def test_repeated_discovery_preserves_saved_risk_and_complete_cycle() -> None:
+    repository = InMemoryStrategyInstanceRuntimeStateRepository()
+    initial = repository.get_or_create(make_request())
+    cycle = CurrentTradeCycle("cycle-1", None)
+    saved = repository.save(replace(initial, risk_multiplier="1.25", current_trade_cycle=cycle))
+
+    rediscovered = repository.get_or_create(make_request())
+
+    assert rediscovered is saved
+    assert rediscovered.risk_multiplier == "1.25"
+    assert rediscovered.current_trade_cycle is cycle
+
+
+def test_concurrent_get_observes_only_complete_saved_aggregates() -> None:
+    repository = InMemoryStrategyInstanceRuntimeStateRepository()
+    initial = repository.get_or_create(make_request())
+    first = replace(
+        initial,
+        risk_multiplier="2",
+        current_trade_cycle=CurrentTradeCycle("cycle-a", None),
+    )
+    second = replace(
+        initial,
+        risk_multiplier="3",
+        current_trade_cycle=CurrentTradeCycle("cycle-b", None),
+    )
+    start = Barrier(4)
+
+    def writer(state: StrategyInstanceRuntimeState) -> None:
+        start.wait()
+        for _ in range(200):
+            repository.save(state)
+
+    def reader() -> None:
+        start.wait()
+        for _ in range(200):
+            observed = repository.get(initial.strategy_instance_id)
+            assert observed is not None
+            assert observed in (initial, first, second)
+            if observed is first:
+                assert observed.risk_multiplier == "2"
+                assert observed.current_trade_cycle is not None
+                assert observed.current_trade_cycle.trade_cycle_id == "cycle-a"
+            if observed is second:
+                assert observed.risk_multiplier == "3"
+                assert observed.current_trade_cycle is not None
+                assert observed.current_trade_cycle.trade_cycle_id == "cycle-b"
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = (
+            executor.submit(writer, first),
+            executor.submit(writer, second),
+            executor.submit(reader),
+            executor.submit(reader),
+        )
+        for future in futures:
+            future.result()
