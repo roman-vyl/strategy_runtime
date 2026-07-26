@@ -19,12 +19,10 @@ def desired_entry() -> DesiredEntry:
 
 def applied_package(
     *,
-    accepted_risk_multiplier: str = "+01.2500",
     calculated_quantity: str = "0.00100e3",
 ) -> AppliedEntryPackage:
     return AppliedEntryPackage(
         applied_desired_entry=desired_entry(),
-        accepted_risk_multiplier=accepted_risk_multiplier,
         calculated_quantity=calculated_quantity,
     )
 
@@ -34,17 +32,17 @@ def test_applied_package_has_only_agreed_fields_and_preserves_decimal_lexemes() 
 
     assert tuple(field.name for field in fields(package)) == (
         "applied_desired_entry",
-        "accepted_risk_multiplier",
         "calculated_quantity",
     )
-    assert package.accepted_risk_multiplier == "+01.2500"
     assert package.calculated_quantity == "0.00100e3"
 
 
-@pytest.mark.parametrize("value", [None, 1, "", "0", "-1", "NaN", " 1"])
-def test_applied_package_rejects_invalid_accepted_risk(value: object) -> None:
-    with pytest.raises((TypeError, ValueError)):
-        applied_package(accepted_risk_multiplier=cast("str", value))
+def test_applied_package_rejects_invalid_desired_entry() -> None:
+    with pytest.raises(TypeError, match="applied_desired_entry must be DesiredEntry"):
+        AppliedEntryPackage(
+            applied_desired_entry=cast("DesiredEntry", object()),
+            calculated_quantity="1",
+        )
 
 
 @pytest.mark.parametrize("value", [None, 1, "", "NaN", " 1", "1 "])
@@ -71,14 +69,16 @@ def test_current_cycle_has_only_minimal_i2_fields() -> None:
     assert not hasattr(cycle, "position_management_recipe")
 
 
-def test_current_cycle_accepts_absent_applied_package() -> None:
-    assert CurrentTradeCycle("cycle-1", None).applied_entry_package is None
+@pytest.mark.parametrize("value", [None, 1, ""])
+def test_current_cycle_rejects_invalid_applied_package(value: object) -> None:
+    with pytest.raises(TypeError, match="applied_entry_package must be AppliedEntryPackage"):
+        CurrentTradeCycle("cycle-1", cast("AppliedEntryPackage", value))
 
 
 @pytest.mark.parametrize("value", [None, 1, ""])
 def test_current_cycle_rejects_invalid_identity(value: object) -> None:
     with pytest.raises((TypeError, ValueError)):
-        CurrentTradeCycle(cast("str", value), None)
+        CurrentTradeCycle(cast("str", value), applied_package())
 
 
 def test_strategy_state_requires_and_preserves_exact_risk() -> None:

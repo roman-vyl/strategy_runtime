@@ -31,14 +31,11 @@ class RegisteredSpecSnapshot:
 @dataclass(frozen=True, slots=True)
 class AppliedEntryPackage:
     applied_desired_entry: DesiredEntry
-    accepted_risk_multiplier: str
     calculated_quantity: str
 
     def __post_init__(self) -> None:
         if type(self.applied_desired_entry) is not DesiredEntry:
             raise TypeError("applied_desired_entry must be DesiredEntry")
-        if not is_positive_exact_decimal_text(self.accepted_risk_multiplier):
-            raise ValueError("accepted_risk_multiplier must be positive exact-decimal text")
         if not is_exact_decimal_text(self.calculated_quantity):
             raise ValueError("calculated_quantity must be exact-decimal text")
 
@@ -46,27 +43,22 @@ class AppliedEntryPackage:
 @dataclass(frozen=True, slots=True)
 class CurrentTradeCycle:
     trade_cycle_id: str
-    applied_entry_package: AppliedEntryPackage | None
+    applied_entry_package: AppliedEntryPackage
 
     def __post_init__(self) -> None:
         if type(self.trade_cycle_id) is not str or len(self.trade_cycle_id) == 0:
             raise ValueError("trade_cycle_id must be a non-empty string")
-        if (
-            self.applied_entry_package is not None
-            and type(self.applied_entry_package) is not AppliedEntryPackage
-        ):
-            raise TypeError("applied_entry_package must be AppliedEntryPackage or None")
+        if type(self.applied_entry_package) is not AppliedEntryPackage:
+            raise TypeError("applied_entry_package must be AppliedEntryPackage")
 
     @property
     def desired_entry_frozen(self) -> bool:
         """Compatibility read for the unchanged pre-I2 router; not persisted state."""
-        return self.applied_entry_package is not None
+        return True
 
     @property
     def desired_entry(self) -> DesiredEntry:
         """Read the singular applied entry without duplicating it on the cycle."""
-        if self.applied_entry_package is None:
-            raise AttributeError("cycle has no applied desired entry")
         return self.applied_entry_package.applied_desired_entry
 
 

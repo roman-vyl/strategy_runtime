@@ -148,7 +148,6 @@ def test_save_replaces_the_complete_registered_aggregate() -> None:
         trade_cycle_id="cycle-1",
         applied_entry_package=AppliedEntryPackage(
             applied_desired_entry=DesiredEntry("long", 900, "100", "99", "103", "runner"),
-            accepted_risk_multiplier="1.2500",
             calculated_quantity="0.0100",
         ),
     )
@@ -207,7 +206,7 @@ def test_save_rejects_registered_snapshot_change_and_preserves_existing() -> Non
 def test_repeated_discovery_preserves_saved_risk_and_complete_cycle() -> None:
     repository = InMemoryStrategyInstanceRuntimeStateRepository()
     initial = repository.get_or_create(make_request())
-    cycle = CurrentTradeCycle("cycle-1", None)
+    cycle = _complete_cycle("cycle-1", quantity="0.01")
     saved = repository.save(replace(initial, risk_multiplier="1.25", current_trade_cycle=cycle))
 
     rediscovered = repository.get_or_create(make_request())
@@ -223,12 +222,12 @@ def test_concurrent_get_observes_only_complete_saved_aggregates() -> None:
     first = replace(
         initial,
         risk_multiplier="2",
-        current_trade_cycle=CurrentTradeCycle("cycle-a", None),
+        current_trade_cycle=_complete_cycle("cycle-a", quantity="0.02"),
     )
     second = replace(
         initial,
         risk_multiplier="3",
-        current_trade_cycle=CurrentTradeCycle("cycle-b", None),
+        current_trade_cycle=_complete_cycle("cycle-b", quantity="0.03"),
     )
     start = Barrier(4)
 
@@ -261,3 +260,13 @@ def test_concurrent_get_observes_only_complete_saved_aggregates() -> None:
         )
         for future in futures:
             future.result()
+
+
+def _complete_cycle(trade_cycle_id: str, *, quantity: str) -> CurrentTradeCycle:
+    return CurrentTradeCycle(
+        trade_cycle_id=trade_cycle_id,
+        applied_entry_package=AppliedEntryPackage(
+            applied_desired_entry=DesiredEntry("long", 900, "100", "99", "103", "runner"),
+            calculated_quantity=quantity,
+        ),
+    )

@@ -174,7 +174,6 @@ def frozen_trade_state() -> StrategyInstanceRuntimeState:
             "cycle-1",
             AppliedEntryPackage(
                 applied_desired_entry=desired_entry(),
-                accepted_risk_multiplier="1",
                 calculated_quantity="0.1",
             ),
         ),
