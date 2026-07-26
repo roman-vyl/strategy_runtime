@@ -388,15 +388,15 @@
             edge: "после захвата mutex",
             lane: 2,
             title: "Repository.get_or_create / reload",
-            detail: "Загружает свежий aggregate с <code>risk_multiplier</code> и optional <code>CurrentTradeCycle</code>.",
+            detail: "Загружает свежий aggregate с optional acknowledged <code>CurrentTradeCycle</code>.",
             status: "gap"
           },
           {
             edge: "new desired vs applied desired",
             lane: 1,
             title: "EntryDiff.decide",
-            detail: "Чистое решение: <code>NO_OP | APPLY | REPLACE | CANCEL</code>.",
-            status: "gap"
+            detail: "Чистое решение: <code>NoOp | Apply | Replace | Cancel</code> с payload, без multiplier.",
+            status: "current"
           },
           {
             edge: "NO_OP завершает; остальные строят command",
@@ -416,7 +416,7 @@
             edge: "один bounded PUT, без retry/redirect",
             lane: 3,
             title: "PUT …/trade-cycles/{trade_cycle_id}/entry-package",
-            detail: "<code>ticker + desired_entry|null + risk_multiplier</code>; strict JSON contract.",
+            detail: "I3 строит <code>ticker + desired_entry|null</code>; фактический ABI call в I4 читает multiplier directly from loaded state if needed.",
             status: "planned"
           },
           {
@@ -430,8 +430,8 @@
             edge: "valid acknowledgement only",
             lane: 2,
             title: "Entry result applier → Repository.save",
-            detail: "APPLY создаёт cycle; REPLACE обновляет awaiting entry; CANCEL/absent очищает cycle; failure сохраняет прежнее состояние.",
-            status: "gap"
+            detail: "Pure applier готов: APPLY создаёт cycle; REPLACE атомарно заменяет package; CANCEL/absent очищает cycle; invariant violation raises.",
+            status: "current"
           },
           {
             edge: "finally",
@@ -449,8 +449,9 @@
           }
         ],
         gates: [
-          "Свести расхождение статусов отмены: master plan говорит <code>entry_package_cancelled</code>, утверждённый client contract — <code>entry_package_absent</code>.",
-          "Зафиксировать минимальный persisted acknowledgement: client DTO несёт desired entry, accepted multiplier и quantity, но master plan также упоминает order/stop/take references.",
+          "I3 зафиксировал confirmed cancel как <code>EntryPackageAbsent</code>.",
+          "I3 зафиксировал persisted package как <code>applied_desired_entry + calculated_quantity</code>.",
+          "I3 полностью не осведомлён о <code>risk_multiplier</code>; I4 может читать его прямо из loaded state на фактическом ABI call boundary.",
           "До ABI acknowledgement новый <code>trade_cycle_id</code> существует как локально зарезервированная identity, но <code>CurrentTradeCycle</code> ещё не создаётся."
         ]
       },
@@ -562,8 +563,9 @@
             lane: 0,
             span: 4,
             title: "I2 · Aggregate + repository + shared mutex foundation",
-            detail: "Добавить <code>risk_multiplier=&quot;1&quot;</code>, целевой <code>CurrentTradeCycle</code>, phase/frozen context, <code>get/save</code>, id factory и keyed-mutex registry.",
-            status: "gap"
+            detail: "Добавлены canonical <code>risk_multiplier=&quot;1&quot;</code>, minimal acknowledged <code>CurrentTradeCycle</code>, <code>get/save</code>, id factory и keyed-mutex registry.",
+            status: "current",
+            note: "архивировано"
           },
           {
             id: "i3-pure-reconciliation",
@@ -572,8 +574,9 @@
             lane: 0,
             span: 4,
             title: "I3 · Pure entry reconciliation",
-            detail: "Реализовать equivalence, <code>NO_OP/APPLY/REPLACE/CANCEL</code>, command builder и acknowledgement applier как чистые компоненты со state-machine tests.",
-            status: "gap"
+            detail: "Реализованы equivalence, <code>NoOp/Apply/Replace/Cancel</code>, command builder и acknowledgement applier как pure fail-closed components.",
+            status: "current",
+            note: "архивировано"
           },
           {
             id: "i4-closed-bar-orchestration",

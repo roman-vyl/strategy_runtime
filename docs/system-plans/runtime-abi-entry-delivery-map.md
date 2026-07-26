@@ -74,7 +74,7 @@ unconnected to reconciliation and production composition.
 - [x] Replace the provisional cycle with minimal `CurrentTradeCycle`:
   `trade_cycle_id + applied_entry_package`.
 - [x] Add minimal `AppliedEntryPackage`: `applied_desired_entry +
-  accepted_risk_multiplier + calculated_quantity`.
+  calculated_quantity`.
 - [x] Keep phases, fill state, `FrozenExecutedEntryContext`, and
   position-management state outside I2.
 - [x] Add repository load and complete-aggregate save operations.
@@ -87,14 +87,23 @@ aggregate inside a per-instance critical section without calling ABI.
 
 ### I3 · Pure entry reconciliation
 
-- [ ] Create and approve a dedicated OpenSpec change.
-- [ ] Define exact `DesiredEntry` equivalence.
-- [ ] Implement `NO_OP`, `APPLY`, `REPLACE`, and `CANCEL` decision semantics.
-- [ ] Implement command construction for present and absent entry packages.
-- [ ] Implement acknowledgement-to-state transition rules.
-- [ ] Preserve the previous applied state for every rejection or unconfirmed
-  outcome.
-- [ ] Add exhaustive decision-table and state-machine tests.
+- [x] Create, approve, implement, verify, synchronize, and archive
+  `runtime-entry-reconciliation-v1`.
+- [x] Define exact `DesiredEntry` equivalence with no multiplier input.
+- [x] Implement closed `NoOp`, `Apply`, `Replace`, and `Cancel` decision
+  variants with payloads.
+- [x] Implement command construction for present and absent entry packages using
+  `EntryPackageRequest`.
+- [x] Keep `risk_multiplier` completely outside I3 reconciliation, decision
+  payloads, command models, acknowledgement validation, applied package state,
+  transitions, equivalence, and tests.
+- [x] Implement fail-closed acknowledgement-to-state transition rules with one
+  `EntryReconciliationInvariantError`.
+- [x] Preserve source-state value and avoid any state transition for `NO_OP`,
+  contradictory input, unconfirmed outcomes, and transport/protocol failures
+  handled later by I4.
+- [x] Add exhaustive decision-table, command-builder, state-applier,
+  architecture-boundary, and model-shape tests.
 
 Exit condition: pure components can derive one command and apply one valid
 acknowledgement without transport, HTTP, or composition dependencies.
@@ -154,13 +163,13 @@ explicit Live V1 reliability boundary.
 
 ## Decisions required before I4
 
-- [ ] Reconcile cancellation vocabulary. The master plan currently names
-  `entry_package_cancelled`, while the approved ABI client contract returns
-  `entry_package_absent`.
-- [ ] Define the persisted `applied_entry_package` summary. The master plan
-  mentions entry, stop, and take references, while the approved client success
-  DTO currently contains the applied desired entry, accepted risk multiplier,
-  and calculated quantity.
+- [x] Reconcile cancellation vocabulary for I3: a confirmed cancel uses
+  `EntryPackageAbsent`.
+- [x] Define the persisted I3 `AppliedEntryPackage` summary:
+  `applied_desired_entry + calculated_quantity`.
+- [x] Confirm I3 is unaware of `risk_multiplier`; I4 may read the existing
+  `StrategyInstanceRuntimeState.risk_multiplier` directly at the actual ABI
+  call boundary if the current ABI client still needs that value.
 - [ ] Decide whether the production Strategy Engine and ABI open-position HTTP
   adapters belong to I4 or to a prerequisite composition change.
 

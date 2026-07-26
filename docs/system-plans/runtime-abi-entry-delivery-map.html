@@ -1203,15 +1203,15 @@ html&gt;body{padding:0}&lt;/style&gt;
             edge: &quot;после захвата mutex&quot;,
             lane: 2,
             title: &quot;Repository.get_or_create / reload&quot;,
-            detail: &quot;Загружает свежий aggregate с &lt;code&gt;risk_multiplier&lt;/code&gt; и optional &lt;code&gt;CurrentTradeCycle&lt;/code&gt;.&quot;,
+            detail: &quot;Загружает свежий aggregate с optional acknowledged &lt;code&gt;CurrentTradeCycle&lt;/code&gt;.&quot;,
             status: &quot;gap&quot;
           },
           {
             edge: &quot;new desired vs applied desired&quot;,
             lane: 1,
             title: &quot;EntryDiff.decide&quot;,
-            detail: &quot;Чистое решение: &lt;code&gt;NO_OP | APPLY | REPLACE | CANCEL&lt;/code&gt;.&quot;,
-            status: &quot;gap&quot;
+            detail: &quot;Чистое решение: &lt;code&gt;NoOp | Apply | Replace | Cancel&lt;/code&gt; с payload, без multiplier.&quot;,
+            status: &quot;current&quot;
           },
           {
             edge: &quot;NO_OP завершает; остальные строят command&quot;,
@@ -1231,7 +1231,7 @@ html&gt;body{padding:0}&lt;/style&gt;
             edge: &quot;один bounded PUT, без retry/redirect&quot;,
             lane: 3,
             title: &quot;PUT …/trade-cycles/{trade_cycle_id}/entry-package&quot;,
-            detail: &quot;&lt;code&gt;ticker + desired_entry|null + risk_multiplier&lt;/code&gt;; strict JSON contract.&quot;,
+            detail: &quot;I3 строит &lt;code&gt;ticker + desired_entry|null&lt;/code&gt;; фактический ABI call в I4 читает multiplier directly from loaded state if needed.&quot;,
             status: &quot;planned&quot;
           },
           {
@@ -1245,8 +1245,8 @@ html&gt;body{padding:0}&lt;/style&gt;
             edge: &quot;valid acknowledgement only&quot;,
             lane: 2,
             title: &quot;Entry result applier → Repository.save&quot;,
-            detail: &quot;APPLY создаёт cycle; REPLACE обновляет awaiting entry; CANCEL/absent очищает cycle; failure сохраняет прежнее состояние.&quot;,
-            status: &quot;gap&quot;
+            detail: &quot;Pure applier готов: APPLY создаёт cycle; REPLACE атомарно заменяет package; CANCEL/absent очищает cycle; invariant violation raises.&quot;,
+            status: &quot;current&quot;
           },
           {
             edge: &quot;finally&quot;,
@@ -1264,8 +1264,9 @@ html&gt;body{padding:0}&lt;/style&gt;
           }
         ],
         gates: [
-          &quot;Свести расхождение статусов отмены: master plan говорит &lt;code&gt;entry_package_cancelled&lt;/code&gt;, утверждённый client contract — &lt;code&gt;entry_package_absent&lt;/code&gt;.&quot;,
-          &quot;Зафиксировать минимальный persisted acknowledgement: client DTO несёт desired entry, accepted multiplier и quantity, но master plan также упоминает order/stop/take references.&quot;,
+          &quot;I3 зафиксировал confirmed cancel как &lt;code&gt;EntryPackageAbsent&lt;/code&gt;.&quot;,
+          &quot;I3 зафиксировал persisted package как &lt;code&gt;applied_desired_entry + calculated_quantity&lt;/code&gt;.&quot;,
+          &quot;I3 полностью не осведомлён о &lt;code&gt;risk_multiplier&lt;/code&gt;; I4 может читать его прямо из loaded state на фактическом ABI call boundary.&quot;,
           &quot;До ABI acknowledgement новый &lt;code&gt;trade_cycle_id&lt;/code&gt; существует как локально зарезервированная identity, но &lt;code&gt;CurrentTradeCycle&lt;/code&gt; ещё не создаётся.&quot;
         ]
       },
@@ -1377,8 +1378,9 @@ html&gt;body{padding:0}&lt;/style&gt;
             lane: 0,
             span: 4,
             title: &quot;I2 · Aggregate + repository + shared mutex foundation&quot;,
-            detail: &quot;Добавить &lt;code&gt;risk_multiplier=&amp;quot;1&amp;quot;&lt;/code&gt;, целевой &lt;code&gt;CurrentTradeCycle&lt;/code&gt;, phase/frozen context, &lt;code&gt;get/save&lt;/code&gt;, id factory и keyed-mutex registry.&quot;,
-            status: &quot;gap&quot;
+            detail: &quot;Добавлены canonical &lt;code&gt;risk_multiplier=&amp;quot;1&amp;quot;&lt;/code&gt;, minimal acknowledged &lt;code&gt;CurrentTradeCycle&lt;/code&gt;, &lt;code&gt;get/save&lt;/code&gt;, id factory и keyed-mutex registry.&quot;,
+            status: &quot;current&quot;,
+            note: &quot;архивировано&quot;
           },
           {
             id: &quot;i3-pure-reconciliation&quot;,
@@ -1387,8 +1389,9 @@ html&gt;body{padding:0}&lt;/style&gt;
             lane: 0,
             span: 4,
             title: &quot;I3 · Pure entry reconciliation&quot;,
-            detail: &quot;Реализовать equivalence, &lt;code&gt;NO_OP/APPLY/REPLACE/CANCEL&lt;/code&gt;, command builder и acknowledgement applier как чистые компоненты со state-machine tests.&quot;,
-            status: &quot;gap&quot;
+            detail: &quot;Реализованы equivalence, &lt;code&gt;NoOp/Apply/Replace/Cancel&lt;/code&gt;, command builder и acknowledgement applier как pure fail-closed components.&quot;,
+            status: &quot;current&quot;,
+            note: &quot;архивировано&quot;
           },
           {
             id: &quot;i4-closed-bar-orchestration&quot;,
