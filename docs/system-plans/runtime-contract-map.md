@@ -376,16 +376,27 @@ The current contour does not:
 
 ## 12. Planned next seam
 
-I4 will then extend the same `StrategyRuntimeOrchestrator.process(...)` invocation
-beyond this currently implemented stopping point. The orchestrator will acquire
-the per-instance keyed mutex before loading state and will retain it through ABI
-position lookup, Engine projection, typed branching, live-entry application,
-and repository save.
+`EntryReconciliationOrchestrator` is already implemented. It receives only one
+`LiveEntryProjectedStrategyInstance` and extracts its exact source state from
+the embedded projection provenance:
 
-For `LiveEntryProjectedStrategyInstance`, the orchestrator will invoke the
-nested `EntryReconciliationOrchestrator` with the projection and the current
-aggregate already loaded inside the critical section. That nested operation
-will not acquire the mutex, reload state, or save independently.
+```text
+projection.source.resolved_state.runtime_state
+```
+
+The current stopping point remains the typed semantic projection contour; the
+complete closed-bar orchestration is not implemented yet. The next seam extends
+the same `StrategyRuntimeOrchestrator.process(...)` invocation so that it
+acquires the per-instance keyed mutex before loading state and retains it
+through ABI position lookup, Engine projection, typed branching, invocation of
+the existing nested orchestrator, and repository save.
+
+For `LiveEntryProjectedStrategyInstance`,
+`StrategyRuntimeOrchestrator` will call
+`EntryReconciliationOrchestrator.execute(projection)` under the caller-owned
+mutex and save replacement state when required. The nested operation accepts no
+separate aggregate argument and does not acquire the mutex, reload state, or
+save independently.
 
 For `OpenTradeProjectedStrategyInstance`,
 `StrategyRuntimeOrchestrator.process(unit)` will fail explicitly until the

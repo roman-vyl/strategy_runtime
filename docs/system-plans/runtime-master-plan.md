@@ -56,15 +56,31 @@ The following semantic components are implemented and tested:
 - typed live-entry and open-trade Engine requests and responses;
 - immutable desired-entry and position-management projection objects;
 - strict calculation-only Engine response DTOs bound through local synchronous
-  call context.
+  call context;
+- `EntryReconciliationOrchestrator` as a separate nested application operation
+  over one `LiveEntryProjectedStrategyInstance`.
 
 The orchestrator remains the coordinator. Each submodule returns to the same
 orchestration method and does not independently advance the pipeline.
 
 This stopping point is an implementation milestone, not the final
-responsibility boundary of the class. The approved I4 continuation extends the
-existing `StrategyRuntimeOrchestrator` in place as the top-level closed-bar
-workflow; it does not add another closed-bar or projection orchestrator.
+responsibility boundary of the class. The next closed-bar continuation extends
+the existing `StrategyRuntimeOrchestrator` in place as the top-level workflow;
+it does not add another closed-bar or projection orchestrator.
+
+The nested application operation is already implemented independently of that
+continuation:
+
+```text
+LiveEntryProjectedStrategyInstance
+→ EntryReconciliationOrchestrator.execute(projection)
+→ unchanged or replacement StrategyInstanceRuntimeState
+```
+
+It extracts `source_state` from
+`projection.source.resolved_state.runtime_state`; it does not accept a second
+aggregate argument, lock, reload, or save. The next implementation change wires
+this existing operation into the upper closed-bar workflow.
 
 The production bootstrap does not yet attach this semantic core to the utility
 handoff by default. That wiring decision does not change the implemented
@@ -323,12 +339,12 @@ Deployment constraints:
   parallel, but all mutations for one `strategy_instance_id` are serialized by
   one process-local keyed mutex.
 
-Closed-bar reconciliation and the ABI fill-webhook path are independent state
-writers for the same strategy-instance aggregate. Their top-level
-`StrategyRuntimeOrchestrator` and `AbiExecutionEventOrchestrator` paths acquire
-the same non-reentrant keyed mutex before loading mutable state.
+Closed-bar reconciliation and the ABI fill-webhook path will be independent
+state writers for the same strategy-instance aggregate. Their top-level
+`StrategyRuntimeOrchestrator` and `AbiExecutionEventOrchestrator` paths must
+acquire the same non-reentrant keyed mutex before loading mutable state.
 
-The complete closed-bar critical section is:
+The next change implements this complete closed-bar critical section:
 
 ```text
 acquire keyed mutex(strategy_instance_id)
@@ -341,10 +357,11 @@ acquire keyed mutex(strategy_instance_id)
 → release mutex
 ```
 
-The nested `EntryReconciliationOrchestrator` runs inside this critical section.
-It does not reacquire the mutex, reload the aggregate, or save repository state.
+The already implemented nested `EntryReconciliationOrchestrator` will run inside
+this critical section. It does not reacquire the mutex, reload the aggregate,
+or save repository state.
 
-The ABI webhook critical section is:
+The later ABI webhook change implements this separate critical section:
 
 ```text
 acquire the same keyed mutex(strategy_instance_id)
@@ -374,8 +391,8 @@ The repository's existing internal lock protects individual in-memory
 repository operations only. It is not a substitute for the shared
 strategy-instance mutex around both end-to-end writer workflows. This document
 records the required live boundary; the keyed-mutex wiring belongs to the
-future reconciliation/webhook implementation and must exist before those
-writers are enabled in Live V1.
+future closed-bar and webhook integrations and must exist before those writers
+are enabled in Live V1.
 
 The following production-hardening mechanisms are deferred:
 
@@ -415,16 +432,17 @@ optimization, but it cannot replace durable coordination and recovery.
 
 ## 11. Next implementation sequence
 
-1. Specify and implement the projection-result state applier.
-2. Decide the repository persistence policy and implement only the guarantees
-   required by that decision.
-3. Design the ABI execution callback and singular desired-entry freeze transition.
-4. Extend `StrategyRuntimeOrchestrator` to own the complete closed-bar keyed
-   critical section, add the same boundary to fill-webhook orchestration, and
-   keep nested live-entry reconciliation free of lock and repository ownership.
-5. Add entry/fill cross-flow integration tests and Live V1 writer guardrails.
+1. `EntryReconciliationOrchestrator` — implemented, verified, and archived.
+2. Next, extend the existing `StrategyRuntimeOrchestrator` to own the complete
+   closed-bar keyed critical section and call the existing nested operation for
+   `LiveEntryProjectedStrategyInstance`.
+3. Inspect the actual adjacent service interfaces, then decide and implement the
+   production HTTP adapter and composition seam separately.
+4. In a later change, design and implement the independent ABI fill-webhook
+   workflow and `AbiExecutionEventOrchestrator`; do not combine it with the
+   closed-bar orchestration change.
+5. Add entry/fill cross-flow integration tests and Live V1 writer guardrails
+   after both writer paths exist.
 6. Define and implement the open-trade branch, then run final full Live V1 E2E.
 7. Design closure transition, completed-cycle archival, and next-cycle creation.
 8. Extend processing journal events around semantic Runtime stages.
-10. Add production HTTP adapters only after the adjacent service contracts match
-   the cleaned Runtime boundary.

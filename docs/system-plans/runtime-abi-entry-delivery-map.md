@@ -24,31 +24,22 @@ The checklist below is the Git-tracked canonical progress record.
 
 ```mermaid
 flowchart TD
-    CURRENT["Implemented semantic projection contour"]
-    I1["I1 · ABI entry-package client"]
-    I2["I2 · Aggregate, repository, identity and mutex foundation"]
-    I3["I3 · Pure entry reconciliation"]
-    I4["I4 · Closed-bar reconciliation orchestration"]
-    I5["I5 · ABI fill webhook and execution state machine"]
-    I6["I6 · Entry/fill cross-flow E2E and guardrails"]
-    OPEN_GATE["Open-trade requirements gate"]
-    OPEN_IMPL["Open-trade branch design and implementation"]
-    FINAL["Final full Live V1 E2E"]
-    FUTURE["Stronger reliability and scale"]
+    I1["ABI entry-package client · DONE"]
+    I2["State foundation · DONE"]
+    I3["Pure entry reconciliation · DONE"]
+    I4A["EntryReconciliationOrchestrator · DONE"]
+    I4B["Closed-bar Runtime orchestration · NEXT"]
+    INTEGRATION["Production adapter and composition seam · LATER"]
+    I5["ABI fill webhook · LATER"]
+    I6["Entry/fill cross-flow · LATER"]
+    OPEN_GATE["Open-trade requirements gate · DEFERRED"]
+    OPEN_IMPL["Open-trade branch implementation · DEFERRED"]
+    FINAL["Final full Live V1 E2E · DEFERRED"]
+    FUTURE["Stronger reliability and scale · DEFERRED"]
 
-    CURRENT --> I4
-    I1 --> I4
-    I2 --> I3
-    I2 --> I4
-    I2 --> I5
-    I3 --> I4
-    I4 --> I5
-    I4 --> I6
-    I5 --> I6
-    I6 --> OPEN_GATE
-    OPEN_GATE --> OPEN_IMPL
-    OPEN_IMPL --> FINAL
-    FINAL --> FUTURE
+    I1 --> I2 --> I3 --> I4A --> I4B
+    I4B --> INTEGRATION --> I5 --> I6
+    I6 --> OPEN_GATE --> OPEN_IMPL --> FINAL --> FUTURE
 ```
 
 ## Canonical implementation progress
@@ -96,64 +87,76 @@ aggregate inside a per-instance critical section without calling ABI.
 - [x] Define exact `DesiredEntry` equivalence.
 - [x] Implement closed `NoOp`, `Apply`, `Replace`, and `Cancel` decision
   variants with payloads.
-- [x] Implement command construction for present and absent entry packages using
-  `EntryPackageRequest`.
+- [x] Implement transport-free command construction for present and absent
+  entry packages using `EntryReconciliationCommand`.
 - [x] Implement fail-closed acknowledgement-to-state transition rules with one
   `EntryReconciliationInvariantError`.
 - [x] Preserve source-state value and avoid any state transition for `NO_OP`,
-  contradictory input, unconfirmed outcomes, and transport/protocol failures
-  handled later by I4.
+  contradictory input, and unconfirmed outcomes; I4a now composes these pure
+  rules with the external execution boundary.
 - [x] Add exhaustive decision-table, command-builder, state-applier,
   architecture-boundary, and model-shape tests.
 
 Exit condition: pure components can derive one command and apply one valid
 acknowledgement without transport, HTTP, or composition dependencies.
 
-### I4 · Closed-bar reconciliation orchestration
+### I4a · Entry reconciliation application operation — DONE
+
+- [x] Implement and archive
+  `entry-reconciliation-orchestrator-v1`.
+- [x] Implement `EntryReconciliationOrchestrator.execute(projection)` with one
+  `LiveEntryProjectedStrategyInstance` input.
+- [x] Extract `source_state` from
+  `projection.source.resolved_state.runtime_state`.
+- [x] Add the narrow application execution port over
+  `EntryReconciliationCommand + StrategyInstanceRuntimeState`.
+- [x] Reserve a cycle identity exactly once and only for `Apply`; reuse the
+  current-cycle identity for `Replace` and `Cancel`.
+- [x] Complete `NoOp` without identity reservation, command construction,
+  external execution, or state application.
+- [x] Execute one external call for every command-bearing decision.
+- [x] Allow state application only after a valid successful confirmation.
+- [x] Return only unchanged or complete replacement aggregate state.
+- [x] Enforce one-way pure-to-application architecture separation and keep
+  mutex, repository load/save, transport adaptation, and production composition
+  outside the nested component.
+
+Exit condition: a tested nested application operation can reconcile one
+live-entry projection against the exact aggregate embedded in its provenance,
+without owning the upper closed-bar workflow.
+
+### I4b · Closed-bar Runtime orchestration — NEXT
 
 - [ ] Create and approve a dedicated OpenSpec change.
 - [ ] Extend the existing `StrategyRuntimeOrchestrator`; do not introduce
   another top-level closed-bar or projection orchestrator.
-- [ ] Add `EntryReconciliationOrchestrator` as the nested live-entry application
-  operation.
 - [ ] Make `StrategyRuntimeOrchestrator` own the keyed mutex across state load,
   ABI position lookup, Engine projection, typed branching, reconciliation,
   save, and every failure path.
-- [ ] Prohibit nested mutex acquisition, repository reload, and repository save
-  inside `EntryReconciliationOrchestrator`.
-- [ ] Route `LiveEntryProjectedStrategyInstance` into entry reconciliation.
+- [ ] Load the aggregate only after acquiring the mutex.
+- [ ] Perform ABI position lookup and Engine projection inside the critical
+  section.
+- [ ] Branch on the typed projection result.
+- [ ] Route `LiveEntryProjectedStrategyInstance` into the already implemented
+  `EntryReconciliationOrchestrator.execute(projection)`.
+- [ ] Save replacement state when the nested operation reports a logical
+  transition.
 - [ ] Make `StrategyRuntimeOrchestrator.process(unit)` fail explicitly for
   `OpenTradeProjectedStrategyInstance`; the handoff must not record or report
   that dispatch as successful.
-- [ ] Reserve a new `trade_cycle_id` for `APPLY` without creating
-  `CurrentTradeCycle` before acknowledgement.
-- [ ] Reuse the acknowledged cycle identity for `REPLACE` and `CANCEL`.
-- [ ] Preserve state on public ABI errors, timeout, network failure, and protocol
-  failure.
-- [ ] Adapt the ABI wire acknowledgement to the I3 confirmation boundary:
-  persist only `applied_desired_entry + calculated_quantity`.
-- [ ] Require bounded timeouts for every outbound call made while holding the
-  mutex.
-- [ ] Require the ABI entry-package acknowledgement to complete independently
-  of any Runtime webhook emitted by the same call.
-- [ ] Connect `StrategyCycleHandoffBoundary.dispatch(unit)` to
-  `StrategyRuntimeOrchestrator.process(unit)` in production composition.
-- [ ] Complete the required Strategy Engine and ABI position-lookup production
-  adapters or inject their production implementations.
-- [ ] Add closed-bar integration tests through a fake ABI.
-- [ ] Add a contention test proving that an ABI webhook for the same
-  `strategy_instance_id` blocks while `StrategyRuntimeOrchestrator` owns the
-  mutex across state load, ABI position lookup, Engine projection, and
-  live-entry reconciliation.
-- [ ] Prove that after the closed-bar critical section releases the mutex, the
-  webhook acquires it and loads fresh repository state rather than a snapshot
-  captured before waiting.
-- [ ] Prove that nested entry reconciliation never reacquires the non-reentrant
-  mutex.
+- [ ] Release the mutex on every success and failure path.
+- [ ] Add closed-bar orchestration, failure-path, and mutex-ownership tests.
 
 Exit condition: one closed-bar invocation is serialized from state load through
 projection and live-entry application, and it persists only a valid,
 identity-bound acknowledgement.
+
+### Production adapter and composition integration seam — LATER
+
+Closed-bar application orchestration is designed first. Production adapter and
+composition scope is decided only after inspecting the actual existing Strategy
+Engine, ABI position-lookup, ABI entry-package, and bootstrap interfaces. Those
+adapters and wiring are not automatically part of I4b.
 
 ### I5 · ABI fill webhook and execution state machine
 
@@ -202,14 +205,15 @@ entry/fill milestone, not final full Live V1 readiness.
 Exit condition: both typed projection branches are supported before Runtime is
 described as fully Live V1 ready.
 
-## Decisions required before I4
+## Decisions required before closed-bar Runtime orchestration
 
 - [x] Reconcile cancellation vocabulary for I3: a confirmed cancel uses
   `EntryPackageAbsent`.
 - [x] Define the persisted I3 `AppliedEntryPackage` summary:
   `applied_desired_entry + calculated_quantity`.
-- [ ] Decide whether the production Strategy Engine and ABI open-position HTTP
-  adapters belong to I4 or to a prerequisite composition change.
+- [x] Closed-bar application orchestration is designed first.
+- [x] Production adapter and composition scope is decided after inspecting the
+  actual existing service interfaces.
 
 ## Explicitly deferred
 

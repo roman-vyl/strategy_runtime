@@ -2,11 +2,12 @@
 
 Status: current state and lifecycle design. Domain models, the repository port,
 in-memory `get_or_create`, position resolution, and Engine projection are
-implemented. State-transition application and physical persistence remain open.
+implemented. Pure entry reconciliation and the nested
+`EntryReconciliationOrchestrator` application operation are also implemented;
+top-level closed-bar integration and physical persistence policy remain open.
 
 The implemented state model below remains authoritative for current code. Its
-approved but not yet implemented live-entry reconciliation continuation is
-defined by
+approved but not yet implemented top-level closed-bar continuation is defined by
 [`runtime-abi-entry-reconciliation-master-plan.md`](runtime-abi-entry-reconciliation-master-plan.md).
 
 ## 1. Aggregate ownership
@@ -126,10 +127,12 @@ successful acknowledgement
 ```
 
 Top-level `desired_entry = null` is data and means that no entry is currently
-desired. In the future reconciliation stage it cancels an acknowledged unfilled
-entry or remains a no-op when none is applied. No valid non-null cycle lacks an
-`AppliedEntryPackage`; successful cancellation clears `current_trade_cycle`.
-An absent cycle does not prove that ABI or the exchange is flat.
+desired. The implemented reconciliation operation selects cancellation for an
+acknowledged unfilled entry or remains a no-op when none is applied. The future
+top-level closed-bar workflow invokes that existing operation. No valid
+non-null cycle lacks an `AppliedEntryPackage`; successful cancellation clears
+`current_trade_cycle`. An absent cycle does not prove that ABI or the exchange
+is flat.
 
 ## 6. Execution and freeze transition
 
@@ -204,12 +207,14 @@ process-local non-reentrant keyed mutex per `strategy_instance_id` serializes
 both top-level writer paths. Different strategy instances may proceed in
 parallel.
 
-`StrategyRuntimeOrchestrator` owns the closed-bar critical section across
-`get_or_create/load → ABI position lookup → Engine projection → typed branch →
-live-entry reconciliation → save`. `AbiExecutionEventOrchestrator` independently
-owns the webhook critical section across `fresh load → event application →
-save`. Nested entry reconciliation does not acquire the mutex, reload state, or
-save independently.
+The next closed-bar extension makes `StrategyRuntimeOrchestrator` own the
+critical section across `get_or_create/load → ABI position lookup → Engine
+projection → typed branch → live-entry reconciliation → save`.
+`AbiExecutionEventOrchestrator` will independently own the later webhook
+critical section across `fresh load → event application → save`. The already
+implemented `EntryReconciliationOrchestrator` does not acquire the mutex, reload
+state, or save independently; its future integration receives one projection
+whose provenance already embeds the exact source aggregate.
 
 A webhook that waits behind reconciliation must reload state after acquiring
 the mutex. Holding the mutex across outbound calls is accepted for Live V1, so

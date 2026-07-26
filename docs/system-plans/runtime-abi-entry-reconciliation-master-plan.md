@@ -71,30 +71,34 @@ An ABI webhook does not resume, interrupt, or enter the middle of a previous MDS
 ## 3. Orchestrator structure and serialization ownership
 
 The existing `StrategyRuntimeOrchestrator` remains the single top-level
-coordinator for the closed-bar Runtime use case. I4 extends that orchestrator in
-place; it does not introduce another top-level closed-bar coordinator or a
-separate projection coordinator.
+coordinator for the closed-bar Runtime use case. The next change extends that
+orchestrator in place; it does not introduce another top-level closed-bar
+coordinator or a separate projection coordinator.
+
+`EntryReconciliationOrchestrator` is already implemented as the nested
+live-entry application operation. The upper workflow calls that existing
+component rather than creating it as part of the closed-bar extension.
 
 ```text
 StrategyCycleHandoffBoundary.dispatch(unit)
--> StrategyRuntimeOrchestrator.process(unit)
-   -> acquire keyed mutex(strategy_instance_id)
-   -> load or create current StrategyInstanceRuntimeState
-   -> resolve authoritative ABI position facts
-   -> obtain the typed Strategy Engine projection
-   -> branch on the projection type
-      ├── LiveEntryProjectedStrategyInstance
-      │   -> EntryReconciliationOrchestrator
-      │   -> save the acknowledged state transition when required
-      └── OpenTradeProjectedStrategyInstance
-          -> fail explicitly as unsupported until separately designed
-   -> release mutex
+→ StrategyRuntimeOrchestrator.process(unit)
+    → acquire keyed mutex(strategy_instance_id)
+    → load or create current StrategyInstanceRuntimeState
+    → resolve authoritative ABI position facts
+    → obtain the typed Strategy Engine projection
+    → branch on the projection type
+        ├── LiveEntryProjectedStrategyInstance
+        │   → existing EntryReconciliationOrchestrator.execute(projection)
+        │   → save replacement state when required
+        └── OpenTradeProjectedStrategyInstance
+            → fail explicitly as unsupported until separately designed
+    → release mutex
 ```
 
-`StrategyRuntimeOrchestrator` owns the complete closed-bar critical section.
-The nested `EntryReconciliationOrchestrator` runs inside that already-open
-critical section and does not acquire the keyed mutex, reload the aggregate, or
-save repository state independently.
+`StrategyRuntimeOrchestrator` will own the complete closed-bar critical section.
+The implemented nested `EntryReconciliationOrchestrator` will run inside that
+already-open critical section and does not acquire the keyed mutex, reload the
+aggregate, or save repository state independently.
 
 Realtime ABI callbacks start a separate Runtime use case:
 
@@ -269,17 +273,24 @@ ABI reconciliation.
 
 ## 11. `EntryReconciliationOrchestrator`
 
-The reconciliation orchestrator is invoked only inside the keyed critical
-section already owned by `StrategyRuntimeOrchestrator`. It receives:
+The reconciliation orchestrator is implemented as a nested application
+component. Its operation receives only:
 
 ```text
 LiveEntryProjectedStrategyInstance
-+
-current StrategyInstanceRuntimeState loaded by the caller
 ```
 
-It compares the new `desired_entry` with the currently applied
-`desired_entry` stored in `CurrentTradeCycle`:
+The first operation step extracts the exact source aggregate from the embedded
+projection provenance:
+
+```text
+source_state =
+    projection.source.resolved_state.runtime_state
+```
+
+It accepts no separate state argument and does not reload or derive a second
+snapshot. It compares the new `desired_entry` with the currently applied
+`desired_entry` stored in `source_state.current_trade_cycle`:
 
 ```text
 new desired_entry
@@ -289,16 +300,18 @@ currently applied desired_entry
 ```
 
 Its responsibility is to decide what must change, reserve an apply-only cycle
-identity when required, call the ABI entry-package port, validate and adapt a
-successful wire acknowledgement to the I3 confirmation boundary, and return
-the unchanged or replacement aggregate to `StrategyRuntimeOrchestrator`.
+identity when required, execute the command through its narrow application
+execution port, accept only an existing successful-confirmation variant, and
+return the unchanged or replacement aggregate to its caller. Concrete ABI
+request construction, response adaptation, and production wiring remain
+outside this component.
 
 It does not:
 
 - acquire or release the keyed mutex;
 - reload repository state;
 - save repository state;
-- accept a state snapshot obtained before the caller acquired the mutex.
+- accept a second state snapshot supplied by the caller.
 
 It does not contain exchange-specific create/amend/cancel sequences.
 
@@ -393,7 +406,8 @@ applied_desired_entry: DesiredEntry
 calculated_quantity
 ```
 
-I4 validates the wire result and adapts it to the pure I3 confirmation:
+A later concrete ABI adapter validates the wire result and adapts it to the
+existing pure confirmation boundary:
 
 ```text
 EntryAppliedConfirmation
@@ -407,6 +421,11 @@ EntryAppliedConfirmation
 calculated_quantity`. Exchange order references, attached-order references, and
 execution phase are not part of this acknowledgement or the minimal applied
 package.
+
+The implemented `EntryReconciliationOrchestrator` receives that confirmation
+through its transport-free application execution port and rejects values
+outside the closed successful-confirmation union before invoking the pure
+applier.
 
 ## 16. Creation and update of `CurrentTradeCycle`
 
@@ -690,33 +709,30 @@ orchestrators rather than direct HTTP-handler mutation.
 The accepted implementation direction is responsibility-based rather than a
 speculative file tree:
 
-- extend the existing `StrategyRuntimeOrchestrator` in place as the top-level
-  closed-bar workflow and keyed-mutex owner;
-- add `EntryReconciliationOrchestrator` to the existing
-  `runtime/entry_reconciliation` capability as a nested operation without
-  mutex, repository-load, or repository-save ownership;
-- add `AbiExecutionEventOrchestrator` during I5 as the independent ABI-webhook
+- the nested `EntryReconciliationOrchestrator` application component is
+  implemented and archived without mutex, repository-load, or repository-save
+  ownership;
+- the next change extends the existing `StrategyRuntimeOrchestrator` in place as
+  the top-level closed-bar workflow and keyed-mutex owner;
+- `AbiExecutionEventOrchestrator` remains a later independent ABI-webhook
   workflow and owner of that path's keyed critical section;
-- introduce no open-trade application component until that branch is separately
-  designed.
+- no open-trade application component is introduced until that branch is
+  separately designed.
 
-Planned delivery order:
+Implementation sequence:
 
-1. Approve this master plan.
-2. Create corresponding OpenSpec changes covering closed-bar orchestration,
-   fill events, and Runtime state updates.
-3. Validate the OpenSpec changes.
-4. Implement the approved OpenSpec tasks by extending
-   `StrategyRuntimeOrchestrator`, adding the nested
-   `EntryReconciliationOrchestrator`, adding `AbiExecutionEventOrchestrator`,
-   and integrating both top-level writer paths with the shared mutex and
-   repository.
-5. Add and run entry/fill state-machine and cross-flow tests with fake ABI.
-6. Define and implement the open-trade branch without preassigning a component
-   name.
-7. Run final full Live V1 end-to-end verification only after both typed
-   projection branches are supported.
-8. Archive each completed OpenSpec change after implementation and verification.
+```text
+EntryReconciliationOrchestrator                    DONE
+Closed-bar StrategyRuntimeOrchestrator extension   NEXT
+ABI execution-event workflow                       LATER
+Entry/fill cross-flow                              LATER
+Open-trade requirements and implementation         DEFERRED
+```
+
+The closed-bar extension calls the already implemented nested operation. It
+does not create a new top-level orchestrator or reimplement reconciliation.
+Production adapter and composition scope remains a subsequent integration seam
+until the actual existing service interfaces have been inspected.
 
 Deferred topics include:
 

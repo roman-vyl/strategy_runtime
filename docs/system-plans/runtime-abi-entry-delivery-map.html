@@ -5,18 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
-<title>Runtime Abi Entry Delivery Map.Fragment</title>
+<title>Runtime ABI Entry Delivery Map</title>
 <style>:root{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}html,body{margin:0}body{box-sizing:border-box;padding:1rem;background:inherit}iframe{display:block;width:100%;max-width:736px;height:calc(100vh - 2rem);margin:0 auto;border:0}</style>
 </head>
 <body>
-<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="Runtime Abi Entry Delivery Map.Fragment" srcdoc="&lt;!doctype html&gt;
+<iframe sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer" title="Runtime ABI Entry Delivery Map" srcdoc="&lt;!doctype html&gt;
 &lt;html lang=&quot;en&quot;&gt;
 &lt;head&gt;
 &lt;meta charset=&quot;utf-8&quot;&gt;
 &lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
 &lt;meta name=&quot;referrer&quot; content=&quot;no-referrer&quot;&gt;
 &lt;meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src &#x27;none&#x27;; script-src &#x27;unsafe-inline&#x27; &#x27;unsafe-eval&#x27; &#x27;wasm-unsafe-eval&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src &#x27;unsafe-inline&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src &#x27;none&#x27;; object-src &#x27;none&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;&quot;&gt;
-&lt;title&gt;Runtime Abi Entry Delivery Map.Fragment&lt;/title&gt;
+&lt;title&gt;Runtime ABI Entry Delivery Map&lt;/title&gt;
 &lt;style&gt;:root {
   color-scheme: light dark;
   background-color: var(--background) !important;
@@ -1094,7 +1094,7 @@ html&gt;body{padding:0}&lt;/style&gt;
     const views = {
       current: {
         title: &quot;Фактическая цепочка в текущем репозитории&quot;,
-        caption: &quot;Семантический контур реализован; production composition пока обрывается на handoff.&quot;,
+        caption: &quot;Семантический projection-контур и nested entry application operation реализованы; верхняя closed-bar интеграция остаётся следующим change.&quot;,
         steps: [
           {
             lane: 0,
@@ -1172,30 +1172,39 @@ html&gt;body{padding:0}&lt;/style&gt;
             edge: &quot;typed in-memory result&quot;,
             lane: 1,
             title: &quot;LiveEntryProjectedStrategyInstance | OpenTradeProjectedStrategyInstance&quot;,
-            detail: &quot;Текущая semantic цепочка здесь заканчивается, состояние не мутируется.&quot;,
+            detail: &quot;Текущая верхняя semantic цепочка здесь заканчивается и состояние не мутируется; live-entry projection уже может быть передан реализованной nested operation.&quot;,
             status: &quot;current&quot;
+          },
+          {
+            edge: &quot;LiveEntryProjectedStrategyInstance&quot;,
+            lane: 1,
+            title: &quot;EntryReconciliationOrchestrator.execute&quot;,
+            detail: &quot;Реализованный component принимает только projection, извлекает &lt;code&gt;source_state = projection.source.resolved_state.runtime_state&lt;/code&gt; из embedded provenance и возвращает unchanged/replacement aggregate. Mutex, reload и save ему не принадлежат.&quot;,
+            status: &quot;current&quot;,
+            note: &quot;реализовано · архивировано&quot;
           }
         ],
         gates: [
           &quot;&lt;code&gt;StrategyCycleHandoffBoundary.dispatch(unit)&lt;/code&gt; должен вызвать sink &lt;code&gt;StrategyRuntimeOrchestrator.process(unit)&lt;/code&gt; в production composition.&quot;,
-          &quot;Реализовать production HTTP adapters для ABI position lookup и Strategy Engine, если они не поставляются внешней композицией.&quot;,
-          &quot;Новый entry-контур должен начинаться после typed projection, не внутри router.&quot;
+          &quot;Следующий change расширяет существующий &lt;code&gt;StrategyRuntimeOrchestrator&lt;/code&gt; и вызывает уже готовый &lt;code&gt;EntryReconciliationOrchestrator&lt;/code&gt; после typed projection.&quot;,
+          &quot;Production adapter и composition scope определяется позже после проверки фактических интерфейсов соседних сервисов.&quot;
         ]
       },
       closed: {
-        title: &quot;Целевая closed-bar цепочка I4&quot;,
-        caption: &quot;StrategyRuntimeOrchestrator удерживает один keyed mutex через state load, position lookup, Engine projection, reconciliation и save.&quot;,
+        title: &quot;Следующая closed-bar Runtime orchestration&quot;,
+        caption: &quot;Gap находится в расширении существующего StrategyRuntimeOrchestrator; nested entry reconciliation уже реализована.&quot;,
         steps: [
           {
             lane: 0,
             title: &quot;StrategyCycleHandoffBoundary.dispatch → StrategyRuntimeOrchestrator.process&quot;,
-            detail: &quot;Существующий orchestrator расширяется как единственный верхний closed-bar workflow.&quot;,
-            status: &quot;gap&quot;
+            detail: &quot;Существующий orchestrator расширяется как единственный верхний closed-bar workflow; новый верхний orchestrator не создаётся.&quot;,
+            status: &quot;gap&quot;,
+            note: &quot;NEXT&quot;
           },
           {
             edge: &quot;strategy_instance_id&quot;,
             lane: 1,
-            title: &quot;StrategyRuntimeOrchestrator → KeyedMutex.acquire&quot;,
+            title: &quot;KeyedMutex.acquire&quot;,
             detail: &quot;Верхний orchestrator владеет полным critical section; mutex non-reentrant.&quot;,
             status: &quot;gap&quot;
           },
@@ -1223,61 +1232,20 @@ html&gt;body{padding:0}&lt;/style&gt;
           {
             edge: &quot;typed in-memory projection&quot;,
             lane: 1,
-            title: &quot;StrategyRuntimeOrchestrator typed branch&quot;,
-            detail: &quot;&lt;code&gt;LiveEntryProjectedStrategyInstance&lt;/code&gt; продолжает I4; &lt;code&gt;OpenTradeProjectedStrategyInstance&lt;/code&gt; завершается явной unsupported-ошибкой без мутации и успешного dispatch.&quot;,
+            title: &quot;Typed projection branch&quot;,
+            detail: &quot;&lt;code&gt;LiveEntryProjectedStrategyInstance&lt;/code&gt; вызывает existing nested operation; &lt;code&gt;OpenTradeProjectedStrategyInstance&lt;/code&gt; завершается явной unsupported-ошибкой без мутации и успешного dispatch.&quot;,
             status: &quot;gap&quot;
           },
           {
-            edge: &quot;LiveEntryProjectedStrategyInstance + loaded state&quot;,
+            edge: &quot;LiveEntryProjectedStrategyInstance&quot;,
             lane: 1,
-            title: &quot;EntryReconciliationOrchestrator&quot;,
-            detail: &quot;Вложенная операция не захватывает mutex повторно, не reload-ит state и не вызывает repository save.&quot;,
-            status: &quot;gap&quot;
+            title: &quot;Existing EntryReconciliationOrchestrator.execute&quot;,
+            detail: &quot;Уже реализован: извлекает source state из provenance projection, выполняет &lt;code&gt;NoOp | Apply | Replace | Cancel&lt;/code&gt; через application execution port и возвращает unchanged/replacement aggregate. Mutex, reload и save отсутствуют.&quot;,
+            status: &quot;current&quot;,
+            note: &quot;DONE · archived&quot;
           },
           {
-            edge: &quot;new desired vs applied desired&quot;,
-            lane: 1,
-            title: &quot;EntryDiff.decide&quot;,
-            detail: &quot;Чистое решение &lt;code&gt;NoOp | Apply | Replace | Cancel&lt;/code&gt;.&quot;,
-            status: &quot;current&quot;
-          },
-          {
-            edge: &quot;NO_OP завершает; остальные строят command&quot;,
-            lane: 2,
-            title: &quot;Trade-cycle identity selection&quot;,
-            detail: &quot;&lt;code&gt;APPLY&lt;/code&gt; резервирует новый id до вызова ABI; &lt;code&gt;REPLACE/CANCEL&lt;/code&gt; используют id текущего цикла.&quot;,
-            status: &quot;gap&quot;
-          },
-          {
-            edge: &quot;EntryPackageRequest&quot;,
-            lane: 1,
-            title: &quot;AbiEntryPackagePort.send&quot;,
-            detail: &quot;I4 передаёт сформированную command через bounded outbound port.&quot;,
-            status: &quot;planned&quot;
-          },
-          {
-            edge: &quot;один bounded PUT, без retry/redirect&quot;,
-            lane: 3,
-            title: &quot;PUT …/trade-cycles/{trade_cycle_id}/entry-package&quot;,
-            detail: &quot;ABI acknowledgement не должен синхронно ждать Runtime webhook, заблокированный тем же mutex.&quot;,
-            status: &quot;planned&quot;
-          },
-          {
-            edge: &quot;200 success | public ABI error | typed failure&quot;,
-            lane: 1,
-            title: &quot;Strict decode + identity binding&quot;,
-            detail: &quot;Закрытая success-форма и identity валидируются перед адаптацией в I3 confirmation.&quot;,
-            status: &quot;planned&quot;
-          },
-          {
-            edge: &quot;valid acknowledgement only&quot;,
-            lane: 2,
-            title: &quot;Entry result applier → StrategyRuntimeOrchestrator&quot;,
-            detail: &quot;Вложенная операция возвращает unchanged/replacement aggregate; верхний orchestrator сохраняет только подтверждённый transition.&quot;,
-            status: &quot;gap&quot;
-          },
-          {
-            edge: &quot;state changed&quot;,
+            edge: &quot;replacement aggregate when required&quot;,
             lane: 2,
             title: &quot;Repository.save&quot;,
             detail: &quot;Persisted package содержит только &lt;code&gt;applied_desired_entry + calculated_quantity&lt;/code&gt;.&quot;,
@@ -1292,11 +1260,10 @@ html&gt;body{padding:0}&lt;/style&gt;
           }
         ],
         gates: [
-          &quot;Mutex принадлежит &lt;code&gt;StrategyRuntimeOrchestrator&lt;/code&gt;; вложенный &lt;code&gt;EntryReconciliationOrchestrator&lt;/code&gt; не может повторно захватить non-reentrant lock.&quot;,
-          &quot;I3 зафиксировал confirmed cancel как &lt;code&gt;EntryPackageAbsent&lt;/code&gt;.&quot;,
-          &quot;I3 зафиксировал persisted package как &lt;code&gt;applied_desired_entry + calculated_quantity&lt;/code&gt;.&quot;,
+          &quot;Mutex принадлежит &lt;code&gt;StrategyRuntimeOrchestrator&lt;/code&gt;; реализованный &lt;code&gt;EntryReconciliationOrchestrator&lt;/code&gt; не захватывает lock, не reload-ит и не сохраняет state.&quot;,
+          &quot;Nested operation принимает только &lt;code&gt;LiveEntryProjectedStrategyInstance&lt;/code&gt;; source aggregate извлекается из embedded projection provenance.&quot;,
           &quot;&lt;code&gt;OpenTradeProjectedStrategyInstance&lt;/code&gt; не мутирует state и не может завершиться успешным dispatch до отдельного дизайна.&quot;,
-          &quot;До ABI acknowledgement новый &lt;code&gt;trade_cycle_id&lt;/code&gt; существует как локально зарезервированная identity, но &lt;code&gt;CurrentTradeCycle&lt;/code&gt; ещё не создаётся.&quot;
+          &quot;Production adapters и composition остаются отдельным последующим integration seam до проверки фактических сервисных интерфейсов.&quot;
         ]
       },
       webhook: {
@@ -1423,23 +1390,46 @@ html&gt;body{padding:0}&lt;/style&gt;
             note: &quot;архивировано&quot;
           },
           {
-            id: &quot;i4-closed-bar-orchestration&quot;,
+            id: &quot;i4-entry-reconciliation-application&quot;,
             trackable: true,
-            edge: &quot;I1 + I2 + I3&quot;,
+            edge: &quot;I3 даёт pure decision/build/apply&quot;,
             lane: 0,
             span: 4,
-            title: &quot;I4 · Closed-bar reconciliation orchestration&quot;,
-            detail: &quot;Расширить существующий &lt;code&gt;StrategyRuntimeOrchestrator&lt;/code&gt;: он удерживает mutex через load → position lookup → Engine projection → nested entry reconciliation → save; вложенная операция lock/reload/save не выполняет.&quot;,
-            status: &quot;gap&quot;
+            title: &quot;Entry reconciliation application operation&quot;,
+            detail: &quot;Реализованы &lt;code&gt;EntryReconciliationOrchestrator&lt;/code&gt;, application execution port, apply-only identity reservation, zero-call &lt;code&gt;NoOp&lt;/code&gt;, exactly-one execution, successful-confirmation-only application и unchanged/replacement aggregate.&quot;,
+            status: &quot;current&quot;,
+            note: &quot;DONE · archived&quot;
+          },
+          {
+            id: &quot;i4-closed-bar-orchestration&quot;,
+            trackable: true,
+            edge: &quot;nested application operation готова&quot;,
+            lane: 0,
+            span: 4,
+            title: &quot;Closed-bar Runtime orchestration&quot;,
+            detail: &quot;NEXT: расширить существующий &lt;code&gt;StrategyRuntimeOrchestrator&lt;/code&gt; как mutex owner через load → position lookup → Engine projection → typed branch → existing nested operation → save → release.&quot;,
+            status: &quot;gap&quot;,
+            note: &quot;NEXT&quot;
+          },
+          {
+            id: &quot;production-integration-seam&quot;,
+            trackable: true,
+            edge: &quot;после application orchestration design&quot;,
+            lane: 0,
+            span: 4,
+            title: &quot;Production adapter and composition integration seam&quot;,
+            detail: &quot;Проверить фактические интерфейсы Strategy Engine, ABI position lookup, ABI entry-package и bootstrap, затем отдельно определить adapter/composition scope.&quot;,
+            status: &quot;planned&quot;,
+            note: &quot;LATER&quot;
           },
           {
             id: &quot;i5-fill-webhook&quot;,
             trackable: true,
-            edge: &quot;acknowledged cycle уже существует&quot;,
+            edge: &quot;closed-bar writer готов&quot;,
             lane: 0,
             span: 4,
             title: &quot;I5 · ABI fill webhook + execution state machine&quot;,
-            detail: &quot;DTO/HTTP endpoint, &lt;code&gt;AbiExecutionEventOrchestrator&lt;/code&gt;, shared mutex, freeze on first fill, cumulative fill storage и phase transitions.&quot;,
+            detail: &quot;LATER: DTO/HTTP endpoint, &lt;code&gt;AbiExecutionEventOrchestrator&lt;/code&gt;, shared mutex, freeze on first fill, cumulative fill storage и phase transitions.&quot;,
             status: &quot;gap&quot;
           },
           {
@@ -1492,8 +1482,9 @@ html&gt;body{padding:0}&lt;/style&gt;
           }
         ],
         gates: [
-          &quot;I1–I3 реализованы и архивированы; следующий архитектурный инкремент — I4.&quot;,
-          &quot;I5 опирается на acknowledged cycle, создаваемый I4; I6 проверяет только entry/fill cross-flow.&quot;,
+          &quot;ABI client, state foundation, pure reconciliation и entry application operation реализованы и архивированы; следующий increment — closed-bar Runtime orchestration.&quot;,
+          &quot;Production adapter/composition scope определяется отдельным более поздним integration seam после проверки фактических интерфейсов.&quot;,
+          &quot;ABI fill webhook и entry/fill cross-flow остаются последующими отдельными changes.&quot;,
           &quot;Финальный full Live V1 E2E возможен только после дизайна и реализации open-trade branch.&quot;
         ]
       }
