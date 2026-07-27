@@ -1,0 +1,165 @@
+## 1. Orchestrator Contracts and Dependencies
+
+- [x] 1.1 Add
+  `OpenTradeProjectionUnsupportedError` and
+  `UnknownStrategyProjectionError` to the existing Runtime orchestrator error
+  boundary as distinct typed exceptions.
+- [x] 1.2 Extend `StrategyRuntimeOrchestrator` construction with the existing
+  shared `StrategyInstanceKeyedMutexRegistry` and existing
+  `EntryReconciliationOrchestrator`; do not introduce another top-level
+  orchestrator or replacement component protocols.
+- [ ] 1.3 Change
+  `StrategyRuntimeOrchestrator.process(unit:
+  StrategyBarProcessingUnit[DeploymentSpecification])` to return
+  `StrategyInstanceRuntimeState` and update only directly affected semantic
+  callers/tests and obsolete projection-return annotations.
+- [ ] 1.4 Preserve `dispatch(...) -> StrategyCycleDispatchOutcome` as a thin
+  adapter that reports success only after `process(...)` returns and catches no
+  semantic exception.
+
+## 2. Keyed Closed-Bar Critical Section
+
+- [ ] 2.1 Enter
+  `keyed_mutex_registry.hold(unit.strategy_instance_id)` before calling
+  `state_repository.get_or_create(...)`.
+- [ ] 2.2 Keep the existing ordered pipeline—repository get-or-create,
+  `OpenPositionResolver.resolve(...)`, and
+  `StrategyUseCaseRouter.route(...)` including its Strategy Engine call—inside
+  the same keyed context.
+- [ ] 2.3 Keep typed branching, live-entry reconciliation, logical-transition
+  comparison, and optional save inside that context, with release delegated to
+  normal context exit for both return and exception paths.
+- [ ] 2.4 Do not reacquire the non-reentrant mutex in
+  `EntryReconciliationOrchestrator`, treat the repository's internal lock as
+  workflow coordination, or move resolver/router/Engine rules into the
+  top-level orchestrator.
+
+## 3. Typed Projection Handling and State Flow
+
+- [ ] 3.1 Branch on the supported typed projection variants
+  `LiveEntryProjectedStrategyInstance` and
+  `OpenTradeProjectedStrategyInstance`, without string, mapping-shape,
+  class-name, or attribute-presence dispatch.
+- [ ] 3.2 For the live-entry type, call the existing
+  `EntryReconciliationOrchestrator.execute(projection)` exactly once with the
+  exact router result and no second state argument.
+- [ ] 3.3 Compare the returned aggregate with
+  `projection.source.resolved_state.runtime_state` using existing immutable
+  value equality; do not use Python object identity and do not add a result DTO
+  solely for `changed: bool`.
+- [ ] 3.4 Skip repository `save(...)` for every value-equal result; when
+  the nested operation returns a complete value-different
+  `StrategyInstanceRuntimeState`, save the complete aggregate exactly once and
+  only then return the result of `save(...)`.
+- [ ] 3.5 Raise `OpenTradeProjectionUnsupportedError` for the exact open-trade
+  type without nested reconciliation, save, projection return, or successful
+  dispatch.
+- [ ] 3.6 Raise `UnknownStrategyProjectionError` for every other runtime type
+  without nested reconciliation, save, fallback, or successful return.
+
+## 4. Sequencing and Persistence Tests
+
+- [ ] 4.1 Add an event-recording test proving keyed mutex acquisition occurs
+  before repository state load.
+- [ ] 4.2 Prove the same mutex remains held during state load, position
+  resolution, router and Strategy Engine projection, live-entry
+  reconciliation, and repository save.
+- [ ] 4.3 Prove a live-entry projection invokes the nested orchestrator exactly
+  once with the exact projection object and that `process(...)` returns its
+  final aggregate result.
+- [ ] 4.4 Test logical `NoOp` with the source aggregate itself and assert zero
+  repository save calls.
+- [ ] 4.5 Test a distinct Python aggregate object that is value-equal to source
+  and assert zero repository save calls, proving object identity is not the
+  transition test.
+- [ ] 4.6 Test a value-different nested-operation result and assert the exact
+  complete replacement is saved once, and the object returned by `save(...)`
+  is returned by `process(...)`.
+- [ ] 4.6b Test a value-equal nested-operation result that is a different
+  Python object and assert zero repository `save(...)` calls.
+- [ ] 4.6a Inject a fake repository whose `save(...)` returns a distinct
+  `saved_state` object different from the input aggregate; assert
+  `process(...)` returns the exact object returned by `save(...)`, not the
+  pre-save input.
+- [ ] 4.7 Assert the top-level orchestrator does not reload state for
+  reconciliation, pass state as a second nested-operation argument, partially
+  merge aggregate fields, or reproduce nested reconciliation rules.
+
+## 5. Concurrency and Release Tests
+
+- [ ] 5.1 Add a controlled two-thread test proving two invocations for the same
+  exact `strategy_instance_id` never overlap and the waiter does not load state
+  before the first invocation releases the key.
+- [ ] 5.2 Prove a waiting same-instance invocation loads the repository state
+  available after the preceding replacement save.
+- [ ] 5.3 Add a controlled two-thread test proving different strategy-instance
+  IDs can hold their critical sections and progress concurrently.
+- [ ] 5.4 Prove mutex release after a logical `NoOp` success and after a saved
+  replacement success by acquiring the same key again.
+- [ ] 5.5 Parameterize repository get-or-create, resolver, router/Engine,
+  reconciliation, and save exceptions and prove the same key can be acquired
+  again after each propagated exception.
+- [ ] 5.6 Prove mutex release after
+  `OpenTradeProjectionUnsupportedError` and
+  `UnknownStrategyProjectionError`.
+
+## 6. Typed Branch and Error-Boundary Tests
+
+- [ ] 6.1 Test exact `OpenTradeProjectedStrategyInstance` handling raises
+  `OpenTradeProjectionUnsupportedError`, calls no live-entry reconciliation or
+  save, returns no projection, and cannot produce successful dispatch.
+- [ ] 6.2 Test an unknown projection runtime type raises
+  `UnknownStrategyProjectionError`, with zero reconciliation and save calls and
+  no fallback.
+- [ ] 6.3 Test repository get-or-create, position resolver, Strategy Engine,
+  entry reconciliation, and repository save errors propagate without
+  translation, retry, fallback, suppression, or error-to-`NoOp` conversion.
+- [ ] 6.4 For every pre-save failure path, assert zero save calls and no partial
+  replacement persistence; for save failure, assert exactly one attempted
+  atomic save, no retry or compensating write, and no successful return.
+- [ ] 6.5 Test `dispatch(...)` returns the existing successful outcome only
+  after `process(...)` succeeds and otherwise propagates the exact exception
+  without constructing a failed outcome.
+- [ ] 6.6 Retain or extend the committed-bar orchestration test proving
+  `CommittedBarOrchestrator`, not `StrategyRuntimeOrchestrator`, converts a
+  propagated dispatch exception into
+  `strategy_cycle_dispatch_failed`.
+
+## 7. Architecture and Scope Guardrails
+
+- [ ] 7.1 Add or extend architecture tests proving this change modifies the
+  existing Runtime orchestrator and composes only the existing repository,
+  mutex, resolver, router/projection, state, and nested reconciliation
+  boundaries.
+- [ ] 7.2 Prove `EntryReconciliationOrchestrator` remains free of keyed-mutex,
+  repository get/load/save, top-level workflow, and production adapter
+  ownership.
+- [ ] 7.3 Confirm no production `StrategyCycleHandoffBoundary` wiring,
+  `bootstrap/application.py`, Strategy Engine HTTP adapter, ABI open-position
+  HTTP adapter, entry-reconciliation execution adapter, Runtime URL/timeout
+  configuration, Docker file, or cross-service integration test is changed.
+- [ ] 7.4 Confirm no canonical OpenSpec or system-plan file is changed during
+  implementation.
+
+## 8. Verification
+
+- [ ] 8.1 Run focused Runtime orchestrator sequencing, return-contract,
+  save-cardinality, typed-branch, error-propagation, mutex-release, and
+  concurrency tests.
+- [ ] 8.2 Run the complete Runtime pytest suite, Ruff lint and format checks,
+  mypy, and Python compilation checks using the repository's established
+  verification commands.
+- [ ] 8.3 Run strict OpenSpec validation for
+  `closed-bar-runtime-orchestration-v1`.
+- [ ] 8.4 Run repository-wide strict OpenSpec validation.
+- [ ] 8.5 Run `git diff --check`.
+- [ ] 8.6 Audit the final implementation diff and status to confirm the change
+  is limited to application orchestration and focused tests, with every
+  deferred integration seam and planning/canonical file unchanged.
+
+## 9. Canonical Documentation Sync
+
+- [ ] 9.1 Update the canonical `strategy-runtime-orchestrator` Purpose during
+  change application/closure so it describes typed post-projection handling,
+  conditional persistence, and final aggregate return rather than stopping
+  before state application.

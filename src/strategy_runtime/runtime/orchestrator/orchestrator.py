@@ -1,5 +1,9 @@
 """Semantic Strategy Runtime orchestrator through Engine projection response."""
 
+from strategy_runtime.runtime.coordination import StrategyInstanceKeyedMutexRegistry
+from strategy_runtime.runtime.entry_reconciliation_orchestrator import (
+    EntryReconciliationOrchestrator,
+)
 from strategy_runtime.runtime.open_position.ports import OpenPositionResolverPort
 from strategy_runtime.runtime.routing.models import (
     PositionResolvedStrategyInstance,
@@ -22,10 +26,14 @@ class StrategyRuntimeOrchestrator:
         state_repository: StrategyInstanceRuntimeStateRepository,
         open_position_resolver: OpenPositionResolverPort,
         use_case_router: StrategyUseCaseRouterPort,
+        keyed_mutex_registry: StrategyInstanceKeyedMutexRegistry,
+        entry_reconciliation_orchestrator: EntryReconciliationOrchestrator,
     ) -> None:
         self._state_repository = state_repository
         self._open_position_resolver = open_position_resolver
         self._use_case_router = use_case_router
+        self._keyed_mutex_registry = keyed_mutex_registry
+        self._entry_reconciliation_orchestrator = entry_reconciliation_orchestrator
 
     def process(
         self, unit: StrategyBarProcessingUnit[DeploymentSpecification]

@@ -3,10 +3,18 @@ from typing import Literal
 
 import pytest
 
+from strategy_runtime.runtime.coordination import StrategyInstanceKeyedMutexRegistry
 from strategy_runtime.runtime.engine.live_entry import LiveEntryProjectionResponse
 from strategy_runtime.runtime.engine.open_trade import (
     OpenTradeProjectionRequest,
     OpenTradeProjectionResponse,
+)
+from strategy_runtime.runtime.entry_reconciliation import (
+    EntryReconciliationCommand,
+    SuccessfulEntryConfirmation,
+)
+from strategy_runtime.runtime.entry_reconciliation_orchestrator.orchestrator import (
+    EntryReconciliationOrchestrator,
 )
 from strategy_runtime.runtime.open_position.errors import (
     OpenPositionLookupProtocolError,
@@ -497,10 +505,24 @@ def test_semantic_orchestrator_calls_each_scalar_stage_once_and_stops_at_project
     repository = CountingRepository(state)
     resolver_port = CountingResolver(resolved)
     router_port = CountingRouter(projected)
+
+    class _FailingExecutionPort:
+        def execute(
+            self,
+            command: EntryReconciliationCommand,
+            source_state: StrategyInstanceRuntimeState,
+        ) -> SuccessfulEntryConfirmation:
+            raise AssertionError("entry reconciliation must not be called in this test")
+
     orchestrator = StrategyRuntimeOrchestrator(
         state_repository=repository,
         open_position_resolver=resolver_port,
         use_case_router=router_port,
+        keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+        entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
+            trade_cycle_id_factory=lambda: "unused-trade-cycle-id",
+            execution_port=_FailingExecutionPort(),
+        ),
     )
 
     result = orchestrator.process(item.processing_unit)
