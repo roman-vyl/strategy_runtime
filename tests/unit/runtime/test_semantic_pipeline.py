@@ -10,8 +10,7 @@ from strategy_runtime.runtime.engine.open_trade import (
     OpenTradeProjectionResponse,
 )
 from strategy_runtime.runtime.entry_reconciliation import (
-    EntryReconciliationCommand,
-    SuccessfulEntryConfirmation,
+    EntryAbsentConfirmation,
 )
 from strategy_runtime.runtime.entry_reconciliation_orchestrator.orchestrator import (
     EntryReconciliationOrchestrator,
@@ -464,6 +463,7 @@ class CountingRepository:
     def __init__(self, state: StrategyInstanceRuntimeState) -> None:
         self.state = state
         self.requests: list[object] = []
+        self.save_calls: list[StrategyInstanceRuntimeState] = []
 
     def get_or_create(self, request):
         self.requests.append(request)
@@ -473,6 +473,7 @@ class CountingRepository:
         return self.state if strategy_instance_id == self.state.strategy_instance_id else None
 
     def save(self, state):
+        self.save_calls.append(state)
         self.state = state
         return state
 
@@ -497,22 +498,16 @@ class CountingRouter:
         return self.projected
 
 
-def test_semantic_orchestrator_calls_each_scalar_stage_once_and_stops_at_projection() -> None:
+def test_semantic_orchestrator_calls_each_scalar_stage_once_and_applies_live_entry_projection() -> (
+    None
+):
     state = runtime_state()
     resolved = resolved_state(position_open=False, state=state)
     item = PositionResolvedStrategyInstance(processing_unit(), resolved)
-    projected = LiveEntryProjectedStrategyInstance(item, desired_entry())
+    projected = LiveEntryProjectedStrategyInstance(item, None)
     repository = CountingRepository(state)
     resolver_port = CountingResolver(resolved)
     router_port = CountingRouter(projected)
-
-    class _FailingExecutionPort:
-        def execute(
-            self,
-            command: EntryReconciliationCommand,
-            source_state: StrategyInstanceRuntimeState,
-        ) -> SuccessfulEntryConfirmation:
-            raise AssertionError("entry reconciliation must not be called in this test")
 
     orchestrator = StrategyRuntimeOrchestrator(
         state_repository=repository,
@@ -520,14 +515,26 @@ def test_semantic_orchestrator_calls_each_scalar_stage_once_and_stops_at_project
         use_case_router=router_port,
         keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
         entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
-            trade_cycle_id_factory=lambda: "unused-trade-cycle-id",
-            execution_port=_FailingExecutionPort(),
+            trade_cycle_id_factory=lambda: "trade-cycle-id",
+            execution_port=type(
+                "_NoOpExecutionPort",
+                (),
+                {
+                    "execute": lambda self, command, source_state: EntryAbsentConfirmation(
+                        strategy_instance_id=source_state.strategy_instance_id,
+                        trade_cycle_id=command.trade_cycle_id,
+                    ),
+                },
+            )(),
         ),
     )
 
     result = orchestrator.process(item.processing_unit)
 
-    assert result is projected
+    assert isinstance(result, StrategyInstanceRuntimeState)
+    assert result.strategy_instance_id == state.strategy_instance_id
+    assert result == state
+    assert repository.save_calls == []
     assert len(repository.requests) == 1
     assert not hasattr(repository.requests[0], "risk_multiplier")
     assert "risk_multiplier" not in repository.requests[0].raw_spec

@@ -1,16 +1,24 @@
-"""Semantic Strategy Runtime orchestrator through Engine projection response."""
+"""Semantic Strategy Runtime orchestrator through final aggregate application."""
 
 from strategy_runtime.runtime.coordination import StrategyInstanceKeyedMutexRegistry
 from strategy_runtime.runtime.entry_reconciliation_orchestrator import (
     EntryReconciliationOrchestrator,
 )
 from strategy_runtime.runtime.open_position.ports import OpenPositionResolverPort
+from strategy_runtime.runtime.orchestrator.errors import (
+    OpenTradeProjectionUnsupportedError,
+    UnknownStrategyProjectionError,
+)
 from strategy_runtime.runtime.routing.models import (
+    LiveEntryProjectedStrategyInstance,
+    OpenTradeProjectedStrategyInstance,
     PositionResolvedStrategyInstance,
-    StrategyUseCaseProjectedInstance,
 )
 from strategy_runtime.runtime.routing.ports import StrategyUseCaseRouterPort
-from strategy_runtime.runtime.state.models import GetOrCreateStrategyInstanceRuntimeStateRequest
+from strategy_runtime.runtime.state.models import (
+    GetOrCreateStrategyInstanceRuntimeStateRequest,
+    StrategyInstanceRuntimeState,
+)
 from strategy_runtime.runtime.state.repository import StrategyInstanceRuntimeStateRepository
 from strategy_runtime.utility.committed_bar.models import (
     StrategyBarProcessingUnit,
@@ -37,20 +45,35 @@ class StrategyRuntimeOrchestrator:
 
     def process(
         self, unit: StrategyBarProcessingUnit[DeploymentSpecification]
-    ) -> StrategyUseCaseProjectedInstance:
-        deployment = unit.deployment
-        state = self._state_repository.get_or_create(
-            GetOrCreateStrategyInstanceRuntimeStateRequest(
-                strategy_instance_id=unit.strategy_instance_id,
-                strategy_id=deployment.strategy_id,
-                instrument=deployment.instrument,
-                base_timeframe=deployment.base_timeframe,
-                raw_spec=deployment.raw_spec,
-                source_path=deployment.source_path,
+    ) -> StrategyInstanceRuntimeState:
+        with self._keyed_mutex_registry.hold(unit.strategy_instance_id):
+            state = self._state_repository.get_or_create(
+                GetOrCreateStrategyInstanceRuntimeStateRequest(
+                    strategy_instance_id=unit.strategy_instance_id,
+                    strategy_id=unit.deployment.strategy_id,
+                    instrument=unit.deployment.instrument,
+                    base_timeframe=unit.deployment.base_timeframe,
+                    raw_spec=unit.deployment.raw_spec,
+                    source_path=unit.deployment.source_path,
+                )
             )
-        )
-        resolved = self._open_position_resolver.resolve(state)
-        return self._use_case_router.route(PositionResolvedStrategyInstance(unit, resolved))
+            resolved = self._open_position_resolver.resolve(state)
+            projection = self._use_case_router.route(
+                PositionResolvedStrategyInstance(unit, resolved)
+            )
+
+            if type(projection) is LiveEntryProjectedStrategyInstance:
+                source_state = projection.source.resolved_state.runtime_state
+                resulting_state = self._entry_reconciliation_orchestrator.execute(projection)
+                if resulting_state == source_state:
+                    return resulting_state
+                saved_state = self._state_repository.save(resulting_state)
+                return saved_state
+
+            if type(projection) is OpenTradeProjectedStrategyInstance:
+                raise OpenTradeProjectionUnsupportedError
+
+            raise UnknownStrategyProjectionError
 
     def dispatch(
         self, unit: StrategyBarProcessingUnit[DeploymentSpecification]
