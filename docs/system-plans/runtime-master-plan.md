@@ -84,10 +84,19 @@ aggregate argument, lock, reload, or save independently.
 The production bootstrap does not yet attach this semantic core to the utility
 handoff by default. That wiring decision does not change the implemented
 semantic boundary: the core is independently callable and the handoff accepts a
-downstream sink. Production outbound adapters (Strategy Engine, ABI
-open-position, ABI entry-package) and the composition graph that performs this
-attachment are the next implementation seam; see
-[`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md).
+downstream sink. The exact outbound-adapter state:
+
+- Strategy Engine live-entry/open-trade HTTP adapters — absent, `I4c`;
+- ABI open-position HTTP adapter — absent, `I4c`;
+- `EntryReconciliationExecutionPort` → `AbiEntryPackagePort` bridge — absent,
+  `I4c`;
+- `AbiEntryPackagePort` HTTP client — already implemented and
+  contract-tested;
+- its production composition into the application — absent until `I4d`.
+
+See
+[`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md)
+for the full breakdown.
 
 ## 3. Runtime state ownership
 
@@ -130,9 +139,10 @@ trade_cycle_id
 
 One `strategy_instance_id` may own many sequential `trade_cycle_id` values over its lifetime.
 
-Runtime keeps `trade_cycle_id` internal and sends no trade identifier to Strategy
-Engine. Engine-side `trade_id` removal is tracked by external cleanup plan 24.
-It must be removed without replacement by `trade_cycle_id`.
+Runtime keeps `trade_cycle_id` internal and sends no trade identifier to
+Strategy Engine. Engine cleanup plan 24 removed `trade_id` without replacing
+it with `trade_cycle_id`; that prerequisite is treated as satisfied for
+`I4c`/`I4d` (§10).
 
 ## 5. Implemented projection pipeline
 
@@ -261,11 +271,14 @@ projection, the new `desired_entry` replaces the complete mutable desired
 snapshot. A returned `null` explicitly clears a previously applied desired
 entry (`CANCEL`, confirmed by `EntryPackageAbsent`).
 
-`desired_entry_frozen` is Runtime-owned lifecycle metadata stored beside the
-singular object in the current placeholder cycle model. Once the executed entry
-context is frozen, its referenced `DesiredEntry` cannot be replaced. The
-transition that creates and freezes execution state is not part of the
-implemented projection contour.
+The current I4a/I4b cycle model does not persist a separate
+`desired_entry_frozen` field or `FrozenExecutedEntryContext`.
+
+Before I5, `CurrentTradeCycle` contains only `trade_cycle_id` and
+`applied_entry_package`. I5 will design the first-fill transition that
+freezes the accepted `DesiredEntry` together with execution facts. After that
+transition, live-entry replacement and cancellation no longer control the
+active trade.
 
 ### PositionManagementRecipe
 
@@ -342,10 +355,13 @@ still fails explicitly as unsupported.
 
 The implemented contour deliberately does not yet:
 
-- construct or send ABI HTTP requests through a production transport (the
-  application ports are exercised through fakes only until the production
-  adapters land — see
-  [`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md));
+- send Strategy Engine or ABI open-position requests through a production
+  HTTP transport, and does not yet compose the `EntryReconciliationExecutionPort`
+  → `AbiEntryPackagePort` bridge into the application — these three
+  components are absent until `I4c`/`I4d`. `AbiEntryPackagePort` itself
+  already has a real, contract-tested HTTP client; only its composition into
+  the application is missing (`I4d`). See
+  [`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md);
 - interpret or persist position-management recipes;
 - create, replace, freeze, close, or archive a trade cycle across the
   open-trade branch;

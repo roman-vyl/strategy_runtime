@@ -177,19 +177,26 @@ Change name: `runtime-production-outbound-adapters-v1`.
 - [ ] Implement the `AbiOpenPositionLookupPort` HTTP adapter against the
   ABI open-position contract fixed in the focused plan.
 - [ ] Implement the `EntryReconciliationExecutionPort` → `AbiEntryPackagePort`
-  bridge adapter (`EntryReconciliationCommand` + `source_state` →
+  bridge (`EntryReconciliationCommand` + `source_state` →
   `EntryPackageRequest` → ABI client → `EntryAppliedConfirmation` /
   `EntryAbsentConfirmation`). This is the fourth new piece (three HTTP
-  adapters above + this one bridge); the existing `AbiEntryPackagePort` HTTP
-  client itself is not rewritten.
+  adapters above + this one application-level bridge); the existing
+  `AbiEntryPackagePort` HTTP client itself is not rewritten.
 - [ ] Remove only the obsolete `EntryPackageApplied.accepted_risk_multiplier`
   response echo from the existing ABI entry-package client DTO; `risk_multiplier`
   travels to ABI one-way and is never returned or reconfirmed. No other change
   to that already-implemented, already-tested client.
-- [ ] Enforce strict DTOs, URL encoding, bounded timeouts, no retry, no
-  redirect, and typed network/timeout/protocol/public-error decoding on every
-  new adapter.
-- [ ] Add fake-HTTP contract tests for each adapter.
+- [ ] For each of the three HTTP adapters: enforce strict request/response
+  DTOs, URL/path encoding where applicable, bounded timeouts, no retry, no
+  redirect-following, and typed public/transport/timeout/protocol-error
+  decoding; add fake-HTTP contract tests for each.
+- [ ] For the bridge: exact command + `source_state` translation,
+  `risk_multiplier` from `source_state`, `DesiredEntry` →
+  `EntryPackageWireDesiredEntry` mapping, exactly one call to
+  `AbiEntryPackagePort`, typed-failure mapping — no HTTP ownership, URL
+  encoding, timeout/redirect configuration, mutex, repository load/save,
+  retry, or state mutation; cover it with ordinary typed unit/translation
+  tests, not fake-HTTP tests.
 
 Exit condition: all production outbound dependencies can be created and tested
 in isolation, but are not yet connected to the application or bootstrap.
@@ -221,12 +228,16 @@ Change name: `runtime-live-entry-production-composition-v1`.
   selected deployment → ABI `position_open=false` → Engine `desired_entry` →
   reconciliation `APPLY` → ABI entry-package acknowledgement → state save →
   `CurrentTradeCycle`.
-- [ ] Add failure-path and no-op tests: `desired_entry=null` on an initially
-  empty aggregate (`NO_OP`, zero ABI calls, zero saves) versus
-  `desired_entry=null` against an existing acknowledged cycle (`CANCEL`, one
-  ABI call, cycle cleared only after `EntryPackageAbsent`); Engine error; ABI
-  position-lookup error; ABI entry-package rejection; failed dispatch journal
-  outcome.
+- [ ] Add failure-path and no-op tests. Every closed-bar cycle always performs
+  the ABI open-position lookup before Engine projection; the cardinality
+  below is specifically about the ABI entry-package call:
+  - `desired_entry=null` + initially empty aggregate → `NO_OP` → zero ABI
+    entry-package calls → zero repository saves;
+  - `desired_entry=null` + existing acknowledged cycle → `CANCEL` →
+    exactly one ABI entry-package call → clear the cycle only after
+    `EntryPackageAbsent`;
+  - Engine error; ABI position-lookup error; ABI entry-package rejection;
+    failed dispatch journal outcome.
 - [ ] For each of the three outbound boundaries individually (ABI
   open-position lookup, Strategy Engine projection, ABI entry-package call):
   bounded timeout, zero automatic retry, no repository save after failure, and

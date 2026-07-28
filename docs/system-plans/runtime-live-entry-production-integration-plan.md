@@ -227,9 +227,11 @@ Error semantics:
 
 ## 4. Runtime outbound adapter responsibilities
 
-`I4c` implements, in isolation, bounded HTTP adapters/bridges behind four of
-the five application ports (the fifth, `AbiEntryPackagePort`, already has a
-production HTTP client — §3.1):
+`I4c` implements four new components behind four of the five application
+ports (the fifth, `AbiEntryPackagePort`, already has a production HTTP
+client — §3.1): three HTTP adapters and one application-level bridge. Their
+responsibilities are not the same, because only the first three own an HTTP
+transport.
 
 1. `StrategyEngineLiveEntryPort` → `POST /v1/strategy-evaluations/live-entry`.
 2. `StrategyEngineOpenTradePort` → `POST /v1/strategy-evaluations/open-trade`.
@@ -238,18 +240,21 @@ production HTTP client — §3.1):
    routes through the open-trade port at runtime, so it cannot be left
    unimplemented.
 3. `AbiOpenPositionLookupPort` → the open-position endpoint fixed in §3.2.
-4. The entry-execution bridge described in §5.
+4. The entry-execution bridge described in §5 — not an HTTP adapter.
 
-Every adapter:
+Each of the three HTTP adapters (1–3 above):
 
 - uses closed/strict request and response DTOs, rejecting unknown or
   obsolete fields;
-- URL-encodes path segments;
+- URL/path-encodes path segments where applicable;
 - applies a bounded timeout with no retry and no redirect-following;
-- decodes into one typed result union: success, typed public/business error,
-  transport error, timeout, protocol/decoding error;
+- decodes HTTP status and body into one typed result union: success, typed
+  public/business error, transport error, timeout, protocol/decoding error;
 - is covered by fake-HTTP contract tests (request shape, success decoding,
   every typed error branch, timeout, malformed response).
+
+The entry-execution bridge (4) owns none of the above — see §5 for its exact,
+narrower responsibilities.
 
 ## 5. Entry execution adaptation
 
@@ -271,11 +276,33 @@ EntryReconciliationCommand + source_state
                        → raised as a typed execution failure
 ```
 
-This bridge does not reimplement reconciliation decisions (`NoOp`/`Apply`/
-`Replace`/`Cancel` remain I3), does not acquire the mutex, and does not
-reload or save state — it only translates one transport-free command into
-one ABI wire call and adapts the wire result back into the closed
-confirmation union the orchestrator already accepts.
+This bridge is an application-level translator, not an HTTP adapter. Its
+responsibilities are exactly:
+
+- translate one `EntryReconciliationCommand` + `source_state` into one
+  `EntryPackageRequest`;
+- read `risk_multiplier` from `source_state`;
+- map `DesiredEntry` → `EntryPackageWireDesiredEntry`;
+- call the existing `AbiEntryPackagePort.send` exactly once;
+- map a successful result to the exact matching `SuccessfulEntryConfirmation`
+  variant (`EntryAppliedConfirmation` / `EntryAbsentConfirmation`);
+- map a public/transport/timeout/protocol result from `AbiEntryPackagePort`
+  into a typed execution failure.
+
+It explicitly does not:
+
+- own an HTTP transport, URL encoding, or timeout/redirect configuration —
+  all of that already lives inside the existing `AbiEntryPackagePort` HTTP
+  client, which this bridge calls but does not reimplement;
+- acquire the mutex, reload state, save state, retry, or otherwise mutate
+  Runtime state;
+- reimplement reconciliation decisions (`NoOp`/`Apply`/`Replace`/`Cancel`
+  remain I3).
+
+It is covered by ordinary typed unit/translation tests (command → request
+mapping, result → confirmation/failure mapping against a fake
+`AbiEntryPackagePort`), not fake-HTTP contract tests — there is no HTTP
+behavior in this component to contract-test.
 
 ## 6. Production composition graph
 
