@@ -59,11 +59,13 @@
 
 ## 4. Sequencing and Persistence Tests
 
-- [x] 4.1 Add an event-recording test proving keyed mutex acquisition occurs
-  before repository state load.
-- [x] 4.2 Prove the same mutex remains held during state load, position
-  resolution, router and Strategy Engine projection, live-entry
-  reconciliation, and repository save.
+- [x] 4.1 Add a test proving the real keyed lock is already held (verified by
+  a non-blocking probe of the exact per-key lock, not call-order alone) at
+  the moment repository state load runs.
+- [x] 4.2 Prove the same real keyed lock remains held during state load,
+  position resolution, router and Strategy Engine projection, live-entry
+  reconciliation, and repository save, using collaborators that probe the
+  real lock's hold state directly during each call.
 - [x] 4.3 Prove a live-entry projection invokes the nested orchestrator exactly
   once with the exact projection object and that `process(...)` returns its
   final aggregate result.
@@ -83,17 +85,27 @@
   pre-save input.
 - [x] 4.7 Assert the top-level orchestrator does not reload state for
   reconciliation, pass state as a second nested-operation argument, partially
-  merge aggregate fields, or reproduce nested reconciliation rules.
+  merge aggregate fields, or reproduce nested reconciliation rules. Uses a
+  fake whose `execute(self, projection)` accepts exactly one argument, so a
+  second-argument call fails with `TypeError` instead of silently succeeding.
 
 ## 5. Concurrency and Release Tests
 
 - [x] 5.1 Add a controlled two-thread test proving two invocations for the same
   exact `strategy_instance_id` never overlap and the waiter does not load state
-  before the first invocation releases the key.
+  before the first invocation releases the key. Uses a first-arrival gate that
+  blocks the lock winner mid-critical-section (after get_or_create already
+  returned) plus a deterministic snapshot of the event log taken while the
+  winner is gated, so a premature loser `get_or_create` call is structurally
+  impossible to miss rather than timing-dependent.
 - [x] 5.2 Prove a waiting same-instance invocation loads the repository state
-  available after the preceding replacement save.
+  available after the preceding replacement save, and passes that exact
+  post-save state into the resolver.
 - [x] 5.3 Add a controlled two-thread test proving different strategy-instance
-  IDs can hold their critical sections and progress concurrently.
+  IDs can hold their critical sections and progress concurrently, using a
+  `threading.Barrier` both threads must reach from *inside* their own
+  critical section — a wrongly shared/global lock deadlocks the barrier
+  instead of merely running slower.
 - [x] 5.4 Prove mutex release after a logical `NoOp` success and after a saved
   replacement success by acquiring the same key again.
 - [x] 5.5 Parameterize repository get-or-create, resolver, router/Engine,
@@ -114,6 +126,12 @@
 - [x] 6.3 Test repository get-or-create, position resolver, Strategy Engine,
   entry reconciliation, and repository save errors propagate without
   translation, retry, fallback, suppression, or error-to-`NoOp` conversion.
+  Uses sentinel exception instances, `exc_info.value is sentinel` identity
+  assertions, and exact downstream call-count assertions per stage
+  (get_or_create error: resolve=0/route=0/reconciliation=0/save=0; resolver
+  error: route=0/reconciliation=0/save=0; router error:
+  reconciliation=0/save=0; reconciliation error: execute=1/save=0; save
+  error: save attempts=1).
 - [x] 6.4 For every pre-save failure path, assert zero save calls and no partial
   replacement persistence; for save failure, assert exactly one attempted
   atomic save, no retry or compensating write, and no successful return.
@@ -145,13 +163,17 @@
 
 - [x] 8.1 Run focused Runtime orchestrator sequencing, return-contract,
   save-cardinality, typed-branch, error-propagation, mutex-release, and
-  concurrency tests.
+  concurrency tests (39 tests across `test_closed_bar_runtime_orchestration.py`,
+  `test_concurrency.py`, `test_architecture.py`), and confirm each rewritten
+  concurrency/sequencing proof breaks under the corresponding mutation
+  (load-before-lock, release-after-load, same-instance overlap, global
+  serialization of different IDs).
 - [x] 8.2 Run the complete Runtime pytest suite, Ruff lint and format checks,
   mypy, and Python compilation checks using the repository's established
   verification commands.
-- [ ] 8.3 Run strict OpenSpec validation for
+- [x] 8.3 Run strict OpenSpec validation for
   `closed-bar-runtime-orchestration-v1`.
-- [ ] 8.4 Run repository-wide strict OpenSpec validation.
+- [x] 8.4 Run repository-wide strict OpenSpec validation.
 - [x] 8.5 Run `git diff --check`.
 - [x] 8.6 Audit the final implementation diff and status to confirm the change
   is limited to application orchestration and focused tests, with every

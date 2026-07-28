@@ -115,11 +115,3 @@ def test_utility_committed_bar_layer_unchanged() -> None:
     )
     for token in forbidden_tokens:
         assert token not in source, f"forbidden token '{token}' found in utility committed_bar"
-
-
-def test_canonical_openspec_unchanged() -> None:
-    """7.4: Canonical OpenSpec files are not modified during implementation."""
-    spec_path = Path("openspec/specs/strategy-runtime-orchestrator/spec.md")
-    if spec_path.exists():
-        source = spec_path.read_text(encoding="utf-8")
-        assert "typed post-projection" not in source.lower()

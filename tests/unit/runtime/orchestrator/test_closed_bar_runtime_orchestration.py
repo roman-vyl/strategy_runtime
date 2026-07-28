@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import threading
 from dataclasses import replace
 from typing import Any
 from unittest.mock import MagicMock
@@ -135,21 +134,6 @@ def _live_projection(
     )
 
 
-def _open_projection() -> OpenTradeProjectedStrategyInstance:
-    state = _runtime_state()
-    return replace(
-        state,
-        current_trade_cycle=CurrentTradeCycle(
-            "cycle-1",
-            AppliedEntryPackage(
-                applied_desired_entry=_desired_entry(),
-                calculated_quantity="0.1",
-            ),
-        ),
-    )
-    # unreachable; kept for readability
-
-
 class _FakeExecutionPort:
     """Entry reconciliation execution port that returns a valid confirmation."""
 
@@ -165,32 +149,6 @@ class _FakeExecutionPort:
             applied_desired_entry=command.desired_entry,
             calculated_quantity=self.calculated_quantity,
         )
-
-
-class _RecordingMutexRegistry:
-    """Mutex registry that records event order around hold contexts."""
-
-    def __init__(self, real: StrategyInstanceKeyedMutexRegistry) -> None:
-        self._real = real
-        self.events: list[str] = []
-
-    def hold(self, strategy_instance_id: str) -> Any:
-        self.events.append(f"hold_acquired:{strategy_instance_id}")
-        ctx = self._real.hold(strategy_instance_id)
-        return _RecordingContext(ctx, self.events)
-
-
-class _RecordingContext:
-    def __init__(self, ctx: Any, events: list[str]) -> None:
-        self._ctx = ctx
-        self._events = events
-
-    def __enter__(self) -> None:
-        return self._ctx.__enter__()
-
-    def __exit__(self, *args: Any) -> None:
-        self._events.append("hold_released")
-        return self._ctx.__exit__(*args)
 
 
 class _FakeRepository:
@@ -280,74 +238,136 @@ class _FailingRouter:
         raise self._error
 
 
-def _make_orchestrator(
-    *,
-    repository: Any = None,
-    execution_port: Any = None,
-    mutex_registry: Any = None,
-) -> tuple[StrategyRuntimeOrchestrator, Any, Any, Any]:
-    state = _runtime_state()
-    repo = repository or _FakeRepository(state)
-    resolved = _resolved_state(position_open=False, state=state)
-    unit = _processing_unit()
-    item = PositionResolvedStrategyInstance(unit, resolved)
-    projected = LiveEntryProjectedStrategyInstance(item, _desired_entry())
-    ep = execution_port or _FakeExecutionPort()
-    entry_orch = EntryReconciliationOrchestrator(
-        trade_cycle_id_factory=lambda: "tc-factory-id",
-        execution_port=ep,
-    )
-    r = StrategyInstanceKeyedMutexRegistry()
-    mutex = mutex_registry or r
-    orch = StrategyRuntimeOrchestrator(
-        state_repository=repo,
-        open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
-        use_case_router=MagicMock(route=MagicMock(return_value=projected)),
-        keyed_mutex_registry=mutex,
-        entry_reconciliation_orchestrator=entry_orch,
-    )
-    return orch, repo, ep, projected
-
-
 # ---------------------------------------------------------------------------
 # 4. Sequencing and Persistence Tests
 # ---------------------------------------------------------------------------
 
 
+def _is_key_locked(registry: StrategyInstanceKeyedMutexRegistry, sid: str) -> bool:
+    """White-box probe of the real per-key lock's current hold state.
+
+    A non-blocking acquire attempt on the exact lock the production
+    ``hold(...)`` context manager uses proves whether the critical section is
+    genuinely held at the moment a collaborator is invoked - not merely that
+    ``hold()`` was called at some earlier point.
+    """
+    lock = registry._locks.get(sid)  # noqa: SLF001 - intentional white-box probe
+    if lock is None:
+        return False
+    acquired = lock.acquire(blocking=False)
+    if acquired:
+        lock.release()
+        return False
+    return True
+
+
+class _LockCheckingRepository:
+    """Repository whose get_or_create/save assert the real keyed lock is held."""
+
+    def __init__(
+        self,
+        state: StrategyInstanceRuntimeState,
+        registry: StrategyInstanceKeyedMutexRegistry,
+        sid: str,
+    ) -> None:
+        self._state = state
+        self._registry = registry
+        self._sid = sid
+        self.get_or_create_lock_states: list[bool] = []
+        self.save_lock_states: list[bool] = []
+
+    def get_or_create(
+        self, request: GetOrCreateStrategyInstanceRuntimeStateRequest
+    ) -> StrategyInstanceRuntimeState:
+        self.get_or_create_lock_states.append(_is_key_locked(self._registry, self._sid))
+        return self._state
+
+    def get(self, strategy_instance_id: str) -> StrategyInstanceRuntimeState | None:
+        return self._state if strategy_instance_id == self._sid else None
+
+    def save(self, state: StrategyInstanceRuntimeState) -> StrategyInstanceRuntimeState:
+        self.save_lock_states.append(_is_key_locked(self._registry, self._sid))
+        self._state = state
+        return state
+
+
+class _LockCheckingResolver:
+    """Resolver whose resolve asserts the real keyed lock is held."""
+
+    def __init__(
+        self,
+        resolved: PositionResolvedStrategyInstanceRuntimeState,
+        registry: StrategyInstanceKeyedMutexRegistry,
+        sid: str,
+    ) -> None:
+        self._resolved = resolved
+        self._registry = registry
+        self._sid = sid
+        self.lock_states: list[bool] = []
+
+    def resolve(
+        self, state: StrategyInstanceRuntimeState
+    ) -> PositionResolvedStrategyInstanceRuntimeState:
+        self.lock_states.append(_is_key_locked(self._registry, self._sid))
+        return self._resolved
+
+
+class _LockCheckingRouter:
+    """Router whose route asserts the real keyed lock is held."""
+
+    def __init__(
+        self,
+        projected: LiveEntryProjectedStrategyInstance,
+        registry: StrategyInstanceKeyedMutexRegistry,
+        sid: str,
+    ) -> None:
+        self._projected = projected
+        self._registry = registry
+        self._sid = sid
+        self.lock_states: list[bool] = []
+
+    def route(self, item: PositionResolvedStrategyInstance) -> LiveEntryProjectedStrategyInstance:
+        self.lock_states.append(_is_key_locked(self._registry, self._sid))
+        return self._projected
+
+
+class _LockCheckingExecutionPort:
+    """Execution port whose execute asserts the real keyed lock is held."""
+
+    def __init__(self, registry: StrategyInstanceKeyedMutexRegistry, sid: str) -> None:
+        self._registry = registry
+        self._sid = sid
+        self.lock_states: list[bool] = []
+
+    def execute(self, command: Any, source_state: Any) -> EntryAppliedConfirmation:
+        self.lock_states.append(_is_key_locked(self._registry, self._sid))
+        return EntryAppliedConfirmation(
+            strategy_instance_id=source_state.strategy_instance_id,
+            trade_cycle_id=command.trade_cycle_id,
+            applied_desired_entry=command.desired_entry,
+            calculated_quantity="0.5",
+        )
+
+
 class TestSequencingAndPersistence:
     def test_mutex_acquired_before_state_load(self) -> None:
-        events: list[str] = []
-        real = StrategyInstanceKeyedMutexRegistry()
-
-        class _EventMutex:
-            def hold(self, sid: str) -> _EventContext:
-                events.append("hold_acquired")
-                return _EventContext(real.hold(sid), events)
-
-        class _EventContext:
-            def __init__(self, ctx: Any, evts: list[str]) -> None:
-                self._ctx = ctx
-                self._events = evts
-
-            def __enter__(self) -> None:
-                return self._ctx.__enter__()
-
-            def __exit__(self, *args: Any) -> None:
-                self._events.append("hold_released")
-                return self._ctx.__exit__(*args)
-
+        """4.1: the real per-key lock is already held at the moment
+        get_or_create runs, and released once process(...) returns."""
+        registry = StrategyInstanceKeyedMutexRegistry()
         state = _runtime_state()
-        repo = _FakeRepository(state)
         resolved = _resolved_state(position_open=False, state=state)
         unit = _processing_unit()
         item = PositionResolvedStrategyInstance(unit, resolved)
         projected = LiveEntryProjectedStrategyInstance(item, None)
 
+        assert _is_key_locked(registry, _SID) is False
+
+        repo = _LockCheckingRepository(state, registry, _SID)
         orch = StrategyRuntimeOrchestrator(
             state_repository=repo,
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value=projected)),
-            keyed_mutex_registry=_EventMutex(),  # type: ignore[arg-type]
+            keyed_mutex_registry=registry,
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_FakeExecutionPort(),
@@ -355,60 +375,44 @@ class TestSequencingAndPersistence:
         )
 
         orch.process(unit)
-        assert events[0] == "hold_acquired"
+
+        assert repo.get_or_create_lock_states == [True]
+        assert _is_key_locked(registry, _SID) is False
 
     def test_mutex_held_through_all_stages(self) -> None:
-        call_order: list[str] = []
+        """4.2: the same real per-key lock stays held across get_or_create,
+        resolve, route, reconciliation execute, and save."""
+        registry = StrategyInstanceKeyedMutexRegistry()
         state = _runtime_state()
-        real_mutex = StrategyInstanceKeyedMutexRegistry()
-
-        class _OrderMutex:
-            def hold(self, sid: str) -> Any:
-                call_order.append("mutex:acquire")
-                return real_mutex.hold(sid)
-
-        ep = _FakeExecutionPort()
-        original_execute = ep.execute
-
-        def _tracked_execute(command: Any, source_state: Any) -> Any:
-            call_order.append("reconciliation:execute")
-            return original_execute(command, source_state)
-
-        ep.execute = _tracked_execute  # type: ignore[method-assign]
-
-        unit = _processing_unit()
         resolved = _resolved_state(position_open=False, state=state)
+        unit = _processing_unit()
         item = PositionResolvedStrategyInstance(unit, resolved)
         projected = LiveEntryProjectedStrategyInstance(item, _desired_entry())
 
-        repo = _FakeRepository(state)
-
-        def _tracked_resolve(s: Any) -> Any:
-            call_order.append("resolver:resolve")
-            return resolved
-
-        def _tracked_route(i: Any) -> Any:
-            call_order.append("router:route")
-            return projected
+        repo = _LockCheckingRepository(state, registry, _SID)
+        resolver = _LockCheckingResolver(resolved, registry, _SID)
+        router = _LockCheckingRouter(projected, registry, _SID)
+        execution_port = _LockCheckingExecutionPort(registry, _SID)
 
         orch = StrategyRuntimeOrchestrator(
             state_repository=repo,
-            open_position_resolver=MagicMock(resolve=MagicMock(side_effect=_tracked_resolve)),
-            use_case_router=MagicMock(route=MagicMock(side_effect=_tracked_route)),
-            keyed_mutex_registry=_OrderMutex(),  # type: ignore[arg-type]
+            open_position_resolver=resolver,
+            use_case_router=router,
+            keyed_mutex_registry=registry,
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
-                execution_port=ep,
+                execution_port=execution_port,
             ),
         )
 
         orch.process(unit)
-        assert call_order == [
-            "mutex:acquire",
-            "resolver:resolve",
-            "router:route",
-            "reconciliation:execute",
-        ]
+
+        assert repo.get_or_create_lock_states == [True]
+        assert resolver.lock_states == [True]
+        assert router.lock_states == [True]
+        assert execution_port.lock_states == [True]
+        assert repo.save_lock_states == [True]
+        assert _is_key_locked(registry, _SID) is False
 
     def test_live_entry_invokes_nested_orchestrator_exactly_once_with_exact_projection(
         self,
@@ -590,7 +594,12 @@ class TestSequencingAndPersistence:
         result = orch.process(unit)
         assert result is saved_return
 
-    def test_no_reload_for_reconciliation(self) -> None:
+    def test_no_reload_or_second_argument_for_reconciliation(self) -> None:
+        """4.7: the top-level orchestrator does not reload state for
+        reconciliation and does not pass state as a second nested-operation
+        argument. A fake whose execute(...) accepts exactly one argument
+        makes any second-argument call fail with TypeError rather than
+        silently succeed."""
         state = _runtime_state()
         resolved = _resolved_state(position_open=False, state=state)
         unit = _processing_unit()
@@ -598,26 +607,29 @@ class TestSequencingAndPersistence:
         projected = LiveEntryProjectedStrategyInstance(item, _desired_entry())
 
         repo = _FakeRepository(state)
-        original_get_or_create = repo.get_or_create
+        call_args: list[LiveEntryProjectedStrategyInstance] = []
 
-        def _tracked_get_or_create(request: Any) -> StrategyInstanceRuntimeState:
-            return original_get_or_create(request)
-
-        repo.get_or_create = _tracked_get_or_create  # type: ignore[method-assign]
+        class _SingleArgumentReconciliation:
+            def execute(
+                self, projection: LiveEntryProjectedStrategyInstance
+            ) -> StrategyInstanceRuntimeState:
+                call_args.append(projection)
+                return state
 
         orch = StrategyRuntimeOrchestrator(
             state_repository=repo,
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value=projected)),
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
-            entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
-                trade_cycle_id_factory=lambda: "tc-id",
-                execution_port=_FakeExecutionPort(),
-            ),
+            entry_reconciliation_orchestrator=_SingleArgumentReconciliation(),
         )
 
-        orch.process(unit)
-        assert len(repo.get_or_create_calls) == 1
+        result = orch.process(unit)
+
+        assert call_args == [projected]
+        assert repo.get_or_create_calls == ["get_or_create"]
+        assert repo.save_calls == []
+        assert result == state
 
 
 # ---------------------------------------------------------------------------
@@ -626,130 +638,9 @@ class TestSequencingAndPersistence:
 
 
 class TestConcurrencyAndRelease:
-    def test_same_instance_no_overlap(self) -> None:
-        events: list[str] = []
-        state = _runtime_state()
-        real_mutex = StrategyInstanceKeyedMutexRegistry()
-        barrier = threading.Barrier(2)
-
-        class _OrderingMutex:
-            def hold(self, sid: str) -> Any:
-                ctx = real_mutex.hold(sid)
-                return _BarrierContext(ctx, events, sid, barrier)
-
-        class _BarrierContext:
-            def __init__(
-                self, ctx: Any, events: list[str], sid: str, barrier: threading.Barrier
-            ) -> None:
-                self._ctx = ctx
-                self._events = events
-                self._sid = sid
-                self._barrier = barrier
-
-            def __enter__(self) -> None:
-                self._events.append(f"acquired:{self._sid}")
-                self._barrier.wait(timeout=5)
-                return self._ctx.__enter__()
-
-            def __exit__(self, *args: Any) -> None:
-                self._events.append(f"released:{self._sid}")
-                return self._ctx.__exit__(*args)
-
-        unit = _processing_unit()
-        resolved = _resolved_state(position_open=False, state=state)
-        item = PositionResolvedStrategyInstance(unit, resolved)
-        projected = LiveEntryProjectedStrategyInstance(item, None)
-        repo = _FakeRepository(state)
-
-        orch = StrategyRuntimeOrchestrator(
-            state_repository=repo,
-            open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
-            use_case_router=MagicMock(route=MagicMock(return_value=projected)),
-            keyed_mutex_registry=_OrderingMutex(),  # type: ignore[arg-type]
-            entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
-                trade_cycle_id_factory=lambda: "tc-id",
-                execution_port=_FakeExecutionPort(),
-            ),
-        )
-
-        results: list[tuple[str, Any]] = []
-
-        def _run(label: str) -> None:
-            try:
-                r = orch.process(unit)
-                results.append((label, r))
-            except Exception as e:
-                results.append((label, e))
-
-        t1 = threading.Thread(target=_run, args=("first",))
-        t2 = threading.Thread(target=_run, args=("second",))
-        t1.start()
-        t2.start()
-        t1.join(timeout=5)
-        t2.join(timeout=5)
-
-        assert len(results) == 2
-        acquired_indices = [i for i, e in enumerate(events) if e.startswith("acquired:")]
-        released_indices = [i for i, e in enumerate(events) if e.startswith("released:")]
-        for idx in acquired_indices:
-            assert released_indices[0] < idx or released_indices[-1] > idx
-
-    def test_different_instances_can_progress_concurrently(self) -> None:
-        state_a = _runtime_state(_SID)
-        state_b = _runtime_state(_SID_DIFFERENT)
-        resolved_a = _resolved_state(position_open=False, state=state_a)
-        resolved_b = _resolved_state(position_open=False, state=state_b)
-        unit_a = _processing_unit(_SID)
-        unit_b = _processing_unit(_SID_DIFFERENT)
-        item_a = PositionResolvedStrategyInstance(unit_a, resolved_a)
-        item_b = PositionResolvedStrategyInstance(unit_b, resolved_b)
-        proj_a = LiveEntryProjectedStrategyInstance(item_a, None)
-        proj_b = LiveEntryProjectedStrategyInstance(item_b, None)
-        repo_a = _FakeRepository(state_a)
-        repo_b = _FakeRepository(state_b)
-
-        orch_a = StrategyRuntimeOrchestrator(
-            state_repository=repo_a,
-            open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved_a)),
-            use_case_router=MagicMock(route=MagicMock(return_value=proj_a)),
-            keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
-            entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
-                trade_cycle_id_factory=lambda: "tc-a",
-                execution_port=_FakeExecutionPort(),
-            ),
-        )
-        orch_b = StrategyRuntimeOrchestrator(
-            state_repository=repo_b,
-            open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved_b)),
-            use_case_router=MagicMock(route=MagicMock(return_value=proj_b)),
-            keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
-            entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
-                trade_cycle_id_factory=lambda: "tc-b",
-                execution_port=_FakeExecutionPort(),
-            ),
-        )
-
-        barrier = threading.Barrier(2)
-        results_a: list[Any] = []
-        results_b: list[Any] = []
-
-        def _run_a() -> None:
-            barrier.wait(timeout=5)
-            results_a.append(orch_a.process(unit_a))
-
-        def _run_b() -> None:
-            barrier.wait(timeout=5)
-            results_b.append(orch_b.process(unit_b))
-
-        t1 = threading.Thread(target=_run_a)
-        t2 = threading.Thread(target=_run_b)
-        t1.start()
-        t2.start()
-        t1.join(timeout=5)
-        t2.join(timeout=5)
-
-        assert len(results_a) == 1
-        assert len(results_b) == 1
+    """5.1/5.2/5.3 (deterministic same- and different-instance overlap
+    proofs) live in test_concurrency.py; this class covers 5.4/5.5/5.6
+    mutex-release behavior only, using the real registry directly."""
 
     def test_mutex_released_after_noop_success(self) -> None:
         state = _runtime_state()
@@ -858,8 +749,6 @@ class TestConcurrencyAndRelease:
 
         if error_label == "reconciliation":
             ep: Any = MagicMock(execute=MagicMock(side_effect=error))
-        elif error_label == "open_trade" or error_label == "unknown":
-            ep = _FakeExecutionPort()
         else:
             ep = _FakeExecutionPort()
 
@@ -886,6 +775,111 @@ class TestConcurrencyAndRelease:
 # ---------------------------------------------------------------------------
 # 6. Typed Branch and Error-Boundary Tests
 # ---------------------------------------------------------------------------
+
+
+class _SentinelError(Exception):
+    """Distinct marker exception used to prove identity-preserving propagation."""
+
+
+class _CountingRepository:
+    """Repository recording exact get_or_create/save call counts."""
+
+    def __init__(
+        self,
+        state: StrategyInstanceRuntimeState,
+        *,
+        get_or_create_error: Exception | None = None,
+        save_error: Exception | None = None,
+    ) -> None:
+        self._state = state
+        self._get_or_create_error = get_or_create_error
+        self._save_error = save_error
+        self.get_or_create_call_count = 0
+        self.save_call_count = 0
+
+    def get_or_create(
+        self, request: GetOrCreateStrategyInstanceRuntimeStateRequest
+    ) -> StrategyInstanceRuntimeState:
+        self.get_or_create_call_count += 1
+        if self._get_or_create_error is not None:
+            raise self._get_or_create_error
+        return self._state
+
+    def get(self, strategy_instance_id: str) -> StrategyInstanceRuntimeState | None:
+        return self._state if strategy_instance_id == self._state.strategy_instance_id else None
+
+    def save(self, state: StrategyInstanceRuntimeState) -> StrategyInstanceRuntimeState:
+        self.save_call_count += 1
+        if self._save_error is not None:
+            raise self._save_error
+        return state
+
+
+class _CountingResolver:
+    """Resolver recording exact resolve call count."""
+
+    def __init__(
+        self,
+        *,
+        resolved: PositionResolvedStrategyInstanceRuntimeState | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self._resolved = resolved
+        self._error = error
+        self.call_count = 0
+
+    def resolve(
+        self, state: StrategyInstanceRuntimeState
+    ) -> PositionResolvedStrategyInstanceRuntimeState:
+        self.call_count += 1
+        if self._error is not None:
+            raise self._error
+        assert self._resolved is not None
+        return self._resolved
+
+
+class _CountingRouter:
+    """Router recording exact route call count."""
+
+    def __init__(
+        self,
+        *,
+        projected: LiveEntryProjectedStrategyInstance | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self._projected = projected
+        self._error = error
+        self.call_count = 0
+
+    def route(self, item: PositionResolvedStrategyInstance) -> LiveEntryProjectedStrategyInstance:
+        self.call_count += 1
+        if self._error is not None:
+            raise self._error
+        assert self._projected is not None
+        return self._projected
+
+
+class _CountingReconciliation:
+    """Nested reconciliation orchestrator recording exact execute call count."""
+
+    def __init__(
+        self,
+        *,
+        result: StrategyInstanceRuntimeState | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self._result = result
+        self._error = error
+        self.call_count = 0
+
+    def execute(
+        self, projection: LiveEntryProjectedStrategyInstance
+    ) -> StrategyInstanceRuntimeState:
+        self.call_count += 1
+        if self._error is not None:
+            raise self._error
+        assert self._result is not None
+        return self._result
 
 
 class TestTypedBranchAndErrorBoundary:
@@ -984,96 +978,121 @@ class TestTypedBranchAndErrorBoundary:
         assert ep.calls == []
         assert repo.save_calls == []
 
-    def test_get_or_create_error_propagates_without_save(self) -> None:
+    def test_get_or_create_error_propagates_with_zero_downstream_calls(self) -> None:
+        """6.3/6.4: get_or_create failure -> resolve=0, route=0,
+        reconciliation=0, save=0, and the exact raised exception propagates."""
+        sentinel = _SentinelError("get_or_create boom")
         state = _runtime_state()
-        error = RuntimeError("db down")
-        repo = _FailingRepository(state, get_or_create_error=error)
+        repo = _CountingRepository(state, get_or_create_error=sentinel)
+        resolver = _CountingResolver()
+        router = _CountingRouter()
+        reconciliation = _CountingReconciliation()
 
         orch = StrategyRuntimeOrchestrator(
             state_repository=repo,
-            open_position_resolver=MagicMock(),
-            use_case_router=MagicMock(),
+            open_position_resolver=resolver,
+            use_case_router=router,
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
-            entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
-                trade_cycle_id_factory=lambda: "tc-id",
-                execution_port=_FakeExecutionPort(),
-            ),
+            entry_reconciliation_orchestrator=reconciliation,
         )
 
-        with pytest.raises(RuntimeError, match="db down"):
+        with pytest.raises(_SentinelError) as exc_info:
             orch.process(_processing_unit())
-        assert repo.save_calls == []
 
-    def test_resolver_error_propagates_without_save(self) -> None:
+        assert exc_info.value is sentinel
+        assert resolver.call_count == 0
+        assert router.call_count == 0
+        assert reconciliation.call_count == 0
+        assert repo.save_call_count == 0
+
+    def test_resolver_error_propagates_with_zero_downstream_calls(self) -> None:
+        """6.3/6.4: resolver failure -> route=0, reconciliation=0, save=0."""
+        sentinel = _SentinelError("resolver boom")
         state = _runtime_state()
-        error = RuntimeError("resolver broken")
-        repo = _FakeRepository(state)
+        repo = _CountingRepository(state)
+        resolver = _CountingResolver(error=sentinel)
+        router = _CountingRouter()
+        reconciliation = _CountingReconciliation()
 
         orch = StrategyRuntimeOrchestrator(
             state_repository=repo,
-            open_position_resolver=_FailingResolver(error),
-            use_case_router=MagicMock(),
+            open_position_resolver=resolver,
+            use_case_router=router,
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
-            entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
-                trade_cycle_id_factory=lambda: "tc-id",
-                execution_port=_FakeExecutionPort(),
-            ),
+            entry_reconciliation_orchestrator=reconciliation,
         )
 
-        with pytest.raises(RuntimeError, match="resolver broken"):
+        with pytest.raises(_SentinelError) as exc_info:
             orch.process(_processing_unit())
-        assert repo.save_calls == []
 
-    def test_router_engine_error_propagates_without_save(self) -> None:
+        assert exc_info.value is sentinel
+        assert repo.get_or_create_call_count == 1
+        assert router.call_count == 0
+        assert reconciliation.call_count == 0
+        assert repo.save_call_count == 0
+
+    def test_router_engine_error_propagates_with_zero_downstream_calls(self) -> None:
+        """6.3/6.4: router/Engine failure -> reconciliation=0, save=0."""
+        sentinel = _SentinelError("engine boom")
         state = _runtime_state()
         resolved = _resolved_state(position_open=False, state=state)
-        error = RuntimeError("engine timeout")
-        repo = _FakeRepository(state)
+        repo = _CountingRepository(state)
+        resolver = _CountingResolver(resolved=resolved)
+        router = _CountingRouter(error=sentinel)
+        reconciliation = _CountingReconciliation()
 
         orch = StrategyRuntimeOrchestrator(
             state_repository=repo,
-            open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
-            use_case_router=_FailingRouter(error),
+            open_position_resolver=resolver,
+            use_case_router=router,
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
-            entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
-                trade_cycle_id_factory=lambda: "tc-id",
-                execution_port=_FakeExecutionPort(),
-            ),
+            entry_reconciliation_orchestrator=reconciliation,
         )
 
-        with pytest.raises(RuntimeError, match="engine timeout"):
+        with pytest.raises(_SentinelError) as exc_info:
             orch.process(_processing_unit())
-        assert repo.save_calls == []
 
-    def test_reconciliation_error_propagates_without_save(self) -> None:
+        assert exc_info.value is sentinel
+        assert resolver.call_count == 1
+        assert reconciliation.call_count == 0
+        assert repo.save_call_count == 0
+
+    def test_reconciliation_error_propagates_with_zero_save_calls(self) -> None:
+        """6.3/6.4: reconciliation failure -> execute=1, save=0."""
+        sentinel = _SentinelError("reconciliation boom")
         state = _runtime_state()
         resolved = _resolved_state(position_open=False, state=state)
         unit = _processing_unit()
         item = PositionResolvedStrategyInstance(unit, resolved)
         projected = LiveEntryProjectedStrategyInstance(item, _desired_entry())
-        error = RuntimeError("reconciliation broken")
-        repo = _FakeRepository(state)
+        repo = _CountingRepository(state)
+        reconciliation = _CountingReconciliation(error=sentinel)
 
         orch = StrategyRuntimeOrchestrator(
             state_repository=repo,
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value=projected)),
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
-            entry_reconciliation_orchestrator=MagicMock(execute=MagicMock(side_effect=error)),
+            entry_reconciliation_orchestrator=reconciliation,
         )
 
-        with pytest.raises(RuntimeError, match="reconciliation broken"):
+        with pytest.raises(_SentinelError) as exc_info:
             orch.process(unit)
-        assert repo.save_calls == []
 
-    def test_save_error_propagates_after_exactly_one_attempt(self) -> None:
+        assert exc_info.value is sentinel
+        assert reconciliation.call_count == 1
+        assert repo.save_call_count == 0
+
+    def test_save_error_propagates_after_exactly_one_attempt_no_retry(self) -> None:
+        """6.3/6.4: save failure -> exactly one save attempt, no retry, and
+        the exact exception raised by save(...) propagates by identity."""
+        sentinel = _SentinelError("save boom")
         state = _runtime_state()
         resolved = _resolved_state(position_open=False, state=state)
         unit = _processing_unit()
         item = PositionResolvedStrategyInstance(unit, resolved)
         projected = LiveEntryProjectedStrategyInstance(item, _desired_entry())
-        save_error = RuntimeError("save failed")
-        repo = _FailingRepository(state, save_error=save_error)
+        repo = _CountingRepository(state, save_error=sentinel)
 
         class _ApplyExecutionPort:
             def execute(self, command: Any, source_state: Any) -> EntryAppliedConfirmation:
@@ -1095,9 +1114,11 @@ class TestTypedBranchAndErrorBoundary:
             ),
         )
 
-        with pytest.raises(RuntimeError, match="save failed"):
+        with pytest.raises(_SentinelError) as exc_info:
             orch.process(unit)
-        assert len(repo.save_calls) == 1
+
+        assert exc_info.value is sentinel
+        assert repo.save_call_count == 1
 
     def test_dispatch_returns_success_only_after_process_succeeds(self) -> None:
         state = _runtime_state()
