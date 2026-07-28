@@ -187,7 +187,7 @@ class _FakeRepositoryDistinctReturn:
 
     def save(self, state: StrategyInstanceRuntimeState) -> StrategyInstanceRuntimeState:
         self.save_calls.append(state)
-        saved = replace(state, risk_multiplier="2")
+        saved = replace(state)
         self._state = saved
         return saved
 
@@ -562,7 +562,7 @@ class TestSequencingAndPersistence:
 
     def test_process_returns_exact_save_result(self) -> None:
         state = _runtime_state()
-        saved_return = replace(state, risk_multiplier="3")
+        saved_return = replace(state)
         resolved = _resolved_state(position_open=False, state=state)
         unit = _processing_unit()
         item = PositionResolvedStrategyInstance(unit, resolved)

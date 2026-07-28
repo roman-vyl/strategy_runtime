@@ -181,7 +181,7 @@
 
 ## 9. Canonical Documentation Sync
 
-- [ ] 9.1 Update the canonical `strategy-runtime-orchestrator` Purpose during
+- [x] 9.1 Update the canonical `strategy-runtime-orchestrator` Purpose during
   change application/closure so it describes typed post-projection handling,
   conditional persistence, and final aggregate return rather than stopping
   before state application.
