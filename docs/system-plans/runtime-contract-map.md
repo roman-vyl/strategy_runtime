@@ -4,9 +4,10 @@ Status: current implemented contract map for the semantic Engine-projection
 pipeline through closed-bar live-entry reconciliation and state application.
 Production HTTP adapters and transport wiring are outside this map.
 
-This map describes current implemented contracts only. The approved but not yet
-implemented continuation from live-entry projection through ABI reconciliation
-is defined by
+This map describes current implemented contracts only. Live-entry
+reconciliation and final aggregate application are implemented; production
+HTTP transport/composition (`I4c`/`I4d`) and the fill lifecycle (`I5`) are not.
+The full sequencing is defined by
 [`runtime-abi-entry-reconciliation-master-plan.md`](runtime-abi-entry-reconciliation-master-plan.md).
 
 ## 1. Invocation and cardinality
@@ -20,9 +21,8 @@ CommittedBarOrchestrator
 -> StrategyRuntimeOrchestrator.process(unit)
 ```
 
-The semantic submodule ports use tuple/sequence contracts where useful, but the
-current orchestrator passes one state and receives one projected result for each
-`StrategyBarProcessingUnit`.
+The pipeline is strictly scalar: one `StrategyBarProcessingUnit` produces one
+state, one resolved state, one typed projection, and one final aggregate.
 
 ## 2. Utility handoff
 
@@ -178,8 +178,9 @@ PositionResolvedStrategyInstanceRuntimeState
 └── executed_entry_price
 ```
 
-The resolver preserves item count, order, and identity. The current orchestrator
-invokes it with a one-item tuple.
+`OpenPositionResolver.resolve` is scalar: it takes one
+`StrategyInstanceRuntimeState` and returns one
+`PositionResolvedStrategyInstanceRuntimeState`, preserving identity.
 
 ## 6. Use-case router input and decision
 
@@ -377,8 +378,13 @@ The current contour does not yet:
 
 - persist or interpret the position-management recipe;
 - create or freeze a trade cycle across the open-trade branch;
-- send ABI or Strategy Engine requests through a production HTTP transport —
-  the application ports are exercised through fakes/tests only.
+- send every request through a production HTTP transport. Concretely:
+  - Strategy Engine live-entry/open-trade HTTP adapters — absent (`I4c`);
+  - ABI open-position HTTP adapter — absent (`I4c`);
+  - `EntryReconciliationExecutionPort` → `AbiEntryPackagePort` bridge — absent
+    (`I4c`);
+  - `AbiEntryPackagePort` HTTP client itself — already implemented and
+    contract-tested, but not yet composed into the application (`I4d`).
 
 ## 12. Planned next seam
 

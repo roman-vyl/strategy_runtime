@@ -605,7 +605,7 @@
             lane: 0,
             span: 4,
             title: "I4c · Production outbound adapters",
-            detail: "NEXT: <code>runtime-production-outbound-adapters-v1</code> — HTTP adapters для <code>StrategyEngineLiveEntryPort</code>, <code>StrategyEngineOpenTradePort</code>, <code>AbiOpenPositionLookupPort</code> и <code>EntryReconciliationExecutionPort</code>→<code>AbiEntryPackagePort</code> bridge; убрать <code>accepted_risk_multiplier</code> echo.",
+            detail: "NEXT: <code>runtime-production-outbound-adapters-v1</code> — 3 новых HTTP adapters (<code>StrategyEngineLiveEntryPort</code>, <code>StrategyEngineOpenTradePort</code>, <code>AbiOpenPositionLookupPort</code>) + 1 новый bridge (<code>EntryReconciliationExecutionPort</code>→<code>AbiEntryPackagePort</code>); существующий <code>AbiEntryPackagePort</code> HTTP client не переписывается, только убирается obsolete <code>accepted_risk_multiplier</code> echo.",
             status: "gap",
             note: "NEXT"
           },

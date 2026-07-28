@@ -7,9 +7,13 @@ operation, and the top-level closed-bar `StrategyRuntimeOrchestrator` critical
 section are all implemented. Production adapter/composition wiring and
 physical persistence policy remain open.
 
-The implemented state model below remains authoritative for current code. Its
-approved but not yet implemented top-level closed-bar continuation is defined by
-[`runtime-abi-entry-reconciliation-master-plan.md`](runtime-abi-entry-reconciliation-master-plan.md).
+The implemented state model below remains authoritative for current code.
+Closed-bar state application and the mutex-owned closed-bar writer are
+implemented; production outbound adapters and composition remain pending (see
+[`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md));
+fill execution state and the fill writer remain pending (see
+[`runtime-abi-entry-reconciliation-master-plan.md`](runtime-abi-entry-reconciliation-master-plan.md)
+and `I5`).
 
 ## 1. Aggregate ownership
 

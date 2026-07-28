@@ -179,10 +179,13 @@ Change name: `runtime-production-outbound-adapters-v1`.
 - [ ] Implement the `EntryReconciliationExecutionPort` → `AbiEntryPackagePort`
   bridge adapter (`EntryReconciliationCommand` + `source_state` →
   `EntryPackageRequest` → ABI client → `EntryAppliedConfirmation` /
-  `EntryAbsentConfirmation`).
-- [ ] Remove the obsolete `EntryPackageApplied.accepted_risk_multiplier`
-  response echo from the ABI entry-package client DTO; `risk_multiplier`
-  travels to ABI one-way and is never returned or reconfirmed.
+  `EntryAbsentConfirmation`). This is the fourth new piece (three HTTP
+  adapters above + this one bridge); the existing `AbiEntryPackagePort` HTTP
+  client itself is not rewritten.
+- [ ] Remove only the obsolete `EntryPackageApplied.accepted_risk_multiplier`
+  response echo from the existing ABI entry-package client DTO; `risk_multiplier`
+  travels to ABI one-way and is never returned or reconfirmed. No other change
+  to that already-implemented, already-tested client.
 - [ ] Enforce strict DTOs, URL encoding, bounded timeouts, no retry, no
   redirect, and typed network/timeout/protocol/public-error decoding on every
   new adapter.
@@ -218,9 +221,16 @@ Change name: `runtime-live-entry-production-composition-v1`.
   selected deployment → ABI `position_open=false` → Engine `desired_entry` →
   reconciliation `APPLY` → ABI entry-package acknowledgement → state save →
   `CurrentTradeCycle`.
-- [ ] Add failure-path tests: `desired_entry=null`, Engine error, ABI
-  position-lookup error, ABI entry-package rejection, timeout, zero retry,
-  failed dispatch journal outcome.
+- [ ] Add failure-path and no-op tests: `desired_entry=null` on an initially
+  empty aggregate (`NO_OP`, zero ABI calls, zero saves) versus
+  `desired_entry=null` against an existing acknowledged cycle (`CANCEL`, one
+  ABI call, cycle cleared only after `EntryPackageAbsent`); Engine error; ABI
+  position-lookup error; ABI entry-package rejection; failed dispatch journal
+  outcome.
+- [ ] For each of the three outbound boundaries individually (ABI
+  open-position lookup, Strategy Engine projection, ABI entry-package call):
+  bounded timeout, zero automatic retry, no repository save after failure, and
+  no downstream call triggered by a failed one.
 
 Exit condition: Runtime is fully wired end to end for the live-entry branch —
 MDS webhook → Engine → ABI client → acknowledged Runtime state — with a real

@@ -2,8 +2,9 @@
 
 Status: current architecture and implementation roadmap for Strategy Runtime.
 
-This document distinguishes the currently implemented Engine-projection contour
-from its approved but not yet implemented continuation. The latter is defined by
+This document distinguishes the currently implemented Engine-projection and
+live-entry reconciliation contour from its still-pending production transport,
+composition, and fill continuation. The full sequencing is defined by
 [`runtime-abi-entry-reconciliation-master-plan.md`](runtime-abi-entry-reconciliation-master-plan.md).
 
 ## 1. Current implemented foundation
@@ -135,9 +136,29 @@ It must be removed without replacement by `trade_cycle_id`.
 
 ## 5. Implemented projection pipeline
 
-The current semantic pipeline obtains state and transient position facts, then
-returns a typed Engine projection. It does not yet apply the projection back to
-the aggregate.
+The current implemented pipeline is:
+
+```text
+StrategyBarProcessingUnit
+-> acquire keyed mutex(strategy_instance_id)
+-> StrategyInstanceRuntimeStateRepository.get_or_create
+-> ABI open-position resolution
+-> Strategy Engine projection
+-> typed projection branch
+-> live-entry reconciliation (LiveEntryProjectedStrategyInstance only)
+-> conditional repository save
+-> release mutex
+-> final StrategyInstanceRuntimeState
+```
+
+`LiveEntryProjectedStrategyInstance` and `OpenTradeProjectedStrategyInstance`
+are typed intermediate results inside this pipeline, not its terminal output.
+`StrategyRuntimeOrchestrator.process(unit)` returns the final
+`StrategyInstanceRuntimeState`: unchanged when reconciliation is a no-op, or
+replaced when it applies, replaces, or cancels the desired entry package.
+Live-entry state application is implemented; `OpenTradeProjectedStrategyInstance`
+remains explicitly unsupported, and its state application is future scope (see
+§6).
 
 ### 5.1 Repository stage
 
@@ -206,14 +227,20 @@ The open-trade Engine request carries the frozen `DesiredEntry` and
 position-management calculation. ABI-supplied `executed_entry_price` remains a
 Runtime execution fact and is not transmitted to Engine.
 
-These projected objects are the terminal result of the currently implemented
-semantic contour.
+These projected objects are typed intermediate results, not the pipeline's
+terminal output: the live-entry projection is consumed by reconciliation
+inside the same orchestrator invocation (§8); the open-trade projection
+currently has no state application and causes explicit failure (§8).
 
-## 6. Projection objects and future state application
+## 6. Projection objects and state application
 
-The semantic projection contour defines two distinct immutable projection objects.
-Their lifecycle application is the responsibility of a future state-transition
-stage.
+The semantic projection contour defines two distinct immutable projection
+objects with different state-application status. `DesiredEntry` lifecycle
+application — live-entry reconciliation and final aggregate replacement — is
+implemented (§8; `runtime-abi-entry-reconciliation-master-plan.md`). Freezing
+the executed entry context on first fill is separate future scope owned by I5.
+`PositionManagementRecipe` application remains a future state-transition
+stage, deferred until the open-trade branch is designed.
 
 ### DesiredEntry
 
@@ -229,9 +256,10 @@ prices, and the locked exit profile.
 empty, non-finite, zero, or negative values fail closed at `DesiredEntry`
 construction.
 
-When the future state applier accepts this projection, the new `desired_entry`
-replaces the complete mutable desired snapshot. A returned `null` explicitly
-clears a previously applied desired entry.
+When the implemented `EntryReconciliationOrchestrator` accepts this
+projection, the new `desired_entry` replaces the complete mutable desired
+snapshot. A returned `null` explicitly clears a previously applied desired
+entry (`CANCEL`, confirmed by `EntryPackageAbsent`).
 
 `desired_entry_frozen` is Runtime-owned lifecycle metadata stored beside the
 singular object in the current placeholder cycle model. Once the executed entry
@@ -336,12 +364,14 @@ Deployment constraints:
   parallel, but all mutations for one `strategy_instance_id` are serialized by
   one process-local keyed mutex.
 
-Closed-bar reconciliation and the ABI fill-webhook path will be independent
-state writers for the same strategy-instance aggregate. Their top-level
-`StrategyRuntimeOrchestrator` and `AbiExecutionEventOrchestrator` paths must
-acquire the same non-reentrant keyed mutex before loading mutable state.
+Closed-bar reconciliation is implemented as one state writer for the
+strategy-instance aggregate. The ABI fill-webhook path (I5) will be the second,
+independent writer for the same aggregate. Both paths must acquire the same
+non-reentrant keyed mutex before loading mutable state;
+`StrategyRuntimeOrchestrator` already does so, and `AbiExecutionEventOrchestrator`
+must do so once implemented.
 
-The next change implements this complete closed-bar critical section:
+I4b already implements this complete closed-bar critical section:
 
 ```text
 acquire keyed mutex(strategy_instance_id)
@@ -354,9 +384,12 @@ acquire keyed mutex(strategy_instance_id)
 → release mutex
 ```
 
-The already implemented nested `EntryReconciliationOrchestrator` will run inside
-this critical section. It does not reacquire the mutex, reload the aggregate,
-or save repository state.
+`EntryReconciliationOrchestrator` runs inside it. It does not reacquire the
+mutex, reload the aggregate, or save repository state. Note that the ABI
+open-position lookup and Strategy Engine projection steps above call through
+application ports whose production HTTP transport is not yet wired; that
+remains I4c/I4d (see
+[`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md)).
 
 The later ABI webhook change implements this separate critical section:
 
@@ -387,9 +420,10 @@ exception path.
 The repository's existing internal lock protects individual in-memory
 repository operations only. It is not a substitute for the shared
 strategy-instance mutex around both end-to-end writer workflows. This document
-records the required live boundary; the keyed-mutex wiring belongs to the
-future closed-bar and webhook integrations and must exist before those writers
-are enabled in Live V1.
+records the required live boundary; the keyed-mutex wiring for the closed-bar
+writer is implemented, and the same wiring for the ABI fill webhook (I5)
+remains future work that must exist before that second writer is enabled in
+Live V1.
 
 The following production-hardening mechanisms are deferred:
 
@@ -408,18 +442,26 @@ optimization, but it cannot replace durable coordination and recovery.
 
 1. Retain the existing in-memory repository for Live V1; keep SQLite or another
    durable state adapter as a future gate.
-2. Define state-result application and repository update semantics.
-3. Define when `trade_cycle_id` is created and how a cycle is completed.
+2. State-result application and repository update semantics — defined and
+   implemented (I4a/I4b).
+3. `trade_cycle_id` creation on the first successful `APPLY` — defined and
+   implemented (I4a). Cycle completion, closure, and archival semantics remain
+   open.
 4. Define the ABI execution notification/callback path that freezes the exact
-   accepted `DesiredEntry` with its execution facts.
+   accepted `DesiredEntry` with its execution facts — remains open, owned by
+   I5.
 5. Decide whether the future asynchronous Runtime ↔ ABI command boundary needs
    one Runtime-owned `command_id`; do not introduce one before that boundary
    proves it necessary.
-6. Apply Engine cleanup plans 24–29 before production HTTP integration.
-7. Implement and verify production ABI and Strategy Engine adapters.
-8. Implement and verify top-level ownership of the shared per-instance mutex,
-   bounded outbound-call timeouts, and prohibition of nested mutex acquisition
-   before enabling both Live V1 writers.
+6. Engine cleanup plans 24–29 are treated as a satisfied prerequisite for
+   Runtime production HTTP integration (I4c/I4d).
+7. Production ABI and Strategy Engine HTTP adapters and the composition graph
+   that wires them remain open — this is `I4c`/`I4d`.
+8. Top-level ownership of the shared per-instance keyed mutex, bounded
+   outbound-call timeouts, and prohibition of nested mutex acquisition are
+   implemented for the closed-bar writer (I4b). Shared ownership of the same
+   mutex with the second writer (`AbiExecutionEventOrchestrator`) remains open
+   until I5.
 9. Treat entry/fill cross-flow verification as an intermediate gate; design and
    implement the open-trade branch before claiming final full Live V1 E2E
    readiness.

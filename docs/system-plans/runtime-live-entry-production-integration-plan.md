@@ -16,15 +16,23 @@ and archived. `StrategyRuntimeOrchestrator.process(unit)` owns the complete
 keyed critical section and returns the final `StrategyInstanceRuntimeState`.
 None of this is reachable from the production bootstrap: `build_application`
 composes only the utility contour and stops at an optional
-`StrategyCycleHandoffSink`, and every application port
+`StrategyCycleHandoffSink`. Of the five application ports involved
 (`StrategyEngineLiveEntryPort`, `StrategyEngineOpenTradePort`,
 `AbiOpenPositionLookupPort`, `EntryReconciliationExecutionPort`,
-`AbiEntryPackagePort`) is exercised only through fakes in tests.
+`AbiEntryPackagePort`), four are exercised only through fakes in tests; the
+fifth, `AbiEntryPackagePort`, already has a real, contract-tested HTTP
+implementation (`abi-entry-package-client-v1`) that is simply not composed
+into the application yet.
 
 This plan covers exactly two increments:
 
-- `I4c` — implement and contract-test the production outbound adapters for
-  these five ports in isolation.
+- `I4c` — implement and contract-test three new production HTTP adapters
+  (`StrategyEngineLiveEntryPort`, `StrategyEngineOpenTradePort`,
+  `AbiOpenPositionLookupPort`) and one new application bridge
+  (`EntryReconciliationExecutionPort` → the existing `AbiEntryPackagePort`
+  client), in isolation. The existing `AbiEntryPackagePort` HTTP client is not
+  rewritten; `I4c` only removes its `accepted_risk_multiplier` response echo
+  (§3.1).
 - `I4d` — wire those adapters, the semantic core, and configuration into one
   production composition root, and prove the live-entry vertical slice with a
   real HTTP-shaped E2E test.
@@ -59,10 +67,82 @@ Accepted properties:
 - a distinguishable `market_stream_not_found` condition;
 - a typed HTTP error envelope for validation and internal failures.
 
+Exact live-entry request:
+
+```json
+{
+  "strategy_id": "...",
+  "raw_spec": {},
+  "ticker": "BTCUSDT.P",
+  "base_timeframe": "5m",
+  "target_bar_open_time_ms": 1720000000000
+}
+```
+
+Exact live-entry response — either an absent desire or a singular
+`DesiredEntry`:
+
+```json
+{
+  "desired_entry": null
+}
+```
+
+The Runtime-side `OpenTradeProjectionRequest` port model (`strategy_id`,
+`raw_spec`, `ticker`, `base_timeframe`, `target_bar_open_time_ms`,
+`desired_entry`, `entry_bar_open_time_ms`) maps to this exact Engine wire
+request:
+
+```text
+strategy_id
+raw_spec
+ticker
+base_timeframe
+target_bar_open_time_ms
+executed_trade_receipt
+```
+
+`executed_trade_receipt` bundles the frozen entry plan with its execution
+timestamp:
+
+```text
+side
+source_plan_bar_open_time_ms
+entry_bar_open_time_ms
+planned_entry_price
+initial_stop_price
+initial_take_price
+locked_exit_profile
+```
+
+It does **not** contain `executed_entry_price`, `strategy_instance_id`, or
+`trade_cycle_id` — consistent with the existing rule that
+`executed_entry_price` stays a Runtime/ABI execution fact never sent to
+Engine, and that Runtime business identities do not cross the Engine
+boundary (`runtime-master-plan.md` §7). The adapter is a pure rename/regroup
+of the same fields the port model already carries; it does not require any
+new execution fact.
+
+Exact Engine error envelope, used for every non-2xx Engine response:
+
+```json
+{
+  "error": "validation_failed",
+  "message": "...",
+  "details": {},
+  "request_id": "..."
+}
+```
+
+`market_stream_not_found` is a distinct typed Engine error surfaced as
+`HTTP 404` and decoded into its own error variant, not conflated with generic
+validation or internal-error cases.
+
 `I4c` writes the adapter directly against this contract and the existing
 `strategy_runtime.runtime.engine.live_entry` / `...open_trade` port
 definitions. No new Engine-side design work is in scope here; Engine
-repository cleanup plans 24–29 remain a separate external track.
+repository cleanup plans 24–29 are treated as a satisfied prerequisite (see
+`runtime-master-plan.md` §10) and remain a separate external track.
 
 ## 3. Required ABI contracts
 
@@ -126,15 +206,30 @@ Response when a position is open:
 Rule: the absence of an open position for a `strategy_instance_id` is
 `HTTP 200` with `position_open=false`, never `HTTP 404`. A newly deployed
 strategy instance legitimately has no ABI record yet; that is not an error
-condition. `404` (or any non-2xx) is reserved for a malformed
-`strategy_instance_id` path segment or an actual ABI-side fault, both
-surfaced through the adapter's typed public/protocol/transport error union —
-never silently coerced into `position_open=false`.
+condition.
+
+Error semantics:
+
+- `strategy_instance_id` is an opaque external identifier; Runtime does not
+  impose its own regex/format validation on it before sending it to ABI;
+- a malformed request or path-encoding problem is ABI's own public error,
+  surfaced as ABI's future `400`/`422` contract — Runtime decodes it as a
+  typed public error, it does not invent the validation rule itself;
+- an ABI internal fault or unavailability is `5xx`, decoded as a typed
+  internal/unavailable error;
+- an unexpected `404` does **not** mean a flat/closed position — it is
+  decoded as a typed protocol/public failure, exactly like any other
+  unexpected non-2xx response;
+- only a successful `200` with `position_open=false` in the body means "no
+  open position"; every other outcome (any unexpected non-2xx, malformed
+  body, timeout, transport failure) becomes a typed public/protocol/transport
+  failure and is never silently coerced into `position_open=false`.
 
 ## 4. Runtime outbound adapter responsibilities
 
-`I4c` implements, in isolation, bounded HTTP adapters behind the five
-existing application ports:
+`I4c` implements, in isolation, bounded HTTP adapters/bridges behind four of
+the five application ports (the fifth, `AbiEntryPackagePort`, already has a
+production HTTP client — §3.1):
 
 1. `StrategyEngineLiveEntryPort` → `POST /v1/strategy-evaluations/live-entry`.
 2. `StrategyEngineOpenTradePort` → `POST /v1/strategy-evaluations/open-trade`.
@@ -225,9 +320,11 @@ RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS
 
 Ownership rules for `I4d`:
 
-- exactly one `StrategyInstanceRuntimeStateRepository` instance and one
-  `StrategyInstanceKeyedMutexRegistry` instance for the process lifetime; I5
-  reuses both rather than constructing its own;
+- one repository instance and one keyed-mutex registry for one constructed
+  Runtime application/service lifetime: exactly one
+  `StrategyInstanceRuntimeStateRepository` instance and one
+  `StrategyInstanceKeyedMutexRegistry` instance; I5 reuses both rather than
+  constructing its own;
 - HTTP clients for Engine and ABI are constructed once at startup with bounded
   connect/read timeouts and closed on shutdown;
 - test overrides (fakes injected in place of the HTTP adapters) remain
@@ -263,14 +360,29 @@ POST /v1/webhooks/closed-bar
 → CurrentTradeCycle
 ```
 
-Required failure-path coverage:
+Required failure-path and no-op coverage:
 
-- `desired_entry=null` (no-op, no ABI call);
+- `desired_entry=null` on an initially empty aggregate
+  (`source_state.current_trade_cycle=null`) → `NO_OP` → zero ABI
+  entry-package calls → zero repository saves;
+- `desired_entry=null` against an existing acknowledged `CurrentTradeCycle` →
+  `CANCEL` → exactly one ABI entry-package call → the cycle is cleared only
+  after an `EntryPackageAbsent` confirmation, never optimistically before it;
 - Strategy Engine error;
 - ABI open-position lookup error;
 - ABI entry-package rejection (typed public error);
-- timeout on either outbound call, with zero retry;
 - failed dispatch journal outcome.
+
+Timeout/no-retry coverage applies individually to each of the three outbound
+boundaries in the pipeline — ABI open-position lookup, Strategy Engine
+projection, and the ABI entry-package call. For each one, verify:
+
+- a bounded timeout is enforced;
+- zero automatic retry follows a timeout or failure;
+- no repository save follows that failure;
+- any downstream call that would depend on the failed one is not invoked
+  (e.g. a Strategy Engine timeout must not still trigger an ABI
+  entry-package call).
 
 A real executor bot on the other side of ABI is explicitly out of scope; ABI
 may still be a fake HTTP server in this test. What must be real is the
