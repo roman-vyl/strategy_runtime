@@ -63,13 +63,12 @@ The following semantic components are implemented and tested:
 The orchestrator remains the coordinator. Each submodule returns to the same
 orchestration method and does not independently advance the pipeline.
 
-This stopping point is an implementation milestone, not the final
-responsibility boundary of the class. The next closed-bar continuation extends
-the existing `StrategyRuntimeOrchestrator` in place as the top-level workflow;
-it does not add another closed-bar or projection orchestrator.
+The closed-bar continuation is implemented: `StrategyRuntimeOrchestrator` owns
+the complete keyed critical section and `process(unit)` returns the final
+`StrategyInstanceRuntimeState`, not a bare projection. It does not add another
+closed-bar or projection orchestrator.
 
-The nested application operation is already implemented independently of that
-continuation:
+The nested application operation runs inside that critical section:
 
 ```text
 LiveEntryProjectedStrategyInstance
@@ -79,13 +78,15 @@ LiveEntryProjectedStrategyInstance
 
 It extracts `source_state` from
 `projection.source.resolved_state.runtime_state`; it does not accept a second
-aggregate argument, lock, reload, or save. The next implementation change wires
-this existing operation into the upper closed-bar workflow.
+aggregate argument, lock, reload, or save independently.
 
 The production bootstrap does not yet attach this semantic core to the utility
 handoff by default. That wiring decision does not change the implemented
 semantic boundary: the core is independently callable and the handoff accepts a
-downstream sink.
+downstream sink. Production outbound adapters (Strategy Engine, ABI
+open-position, ABI entry-package) and the composition graph that performs this
+attachment are the next implementation seam; see
+[`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md).
 
 ## 3. Runtime state ownership
 
@@ -305,25 +306,21 @@ plans 24–29.
 
 ## 8. Current stopping point
 
-The implemented semantic contour stops after producing one validated:
+For the live-entry branch, the implemented closed-bar orchestration reconciles
+the Engine projection through `EntryReconciliationOrchestrator` and returns the
+final `StrategyInstanceRuntimeState`, saving replacement state when the nested
+operation reports a logical transition. `OpenTradeProjectedStrategyInstance`
+still fails explicitly as unsupported.
 
-```text
-LiveEntryProjectedStrategyInstance
-```
+The implemented contour deliberately does not yet:
 
-or:
-
-```text
-OpenTradeProjectedStrategyInstance
-```
-
-It deliberately does not:
-
-- mutate `StrategyInstanceRuntimeState`;
-- create, replace, freeze, close, or archive a trade cycle;
-- persist entry or position-management recipes;
-- construct ABI execution commands;
-- call ABI execution endpoints;
+- construct or send ABI HTTP requests through a production transport (the
+  application ports are exercised through fakes only until the production
+  adapters land — see
+  [`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md));
+- interpret or persist position-management recipes;
+- create, replace, freeze, close, or archive a trade cycle across the
+  open-trade branch;
 - interpret Engine calculations as exchange operations.
 
 ## 9. Live V1 concurrency model
@@ -433,14 +430,20 @@ optimization, but it cannot replace durable coordination and recovery.
 ## 11. Next implementation sequence
 
 1. `EntryReconciliationOrchestrator` — implemented, verified, and archived.
-2. Next, extend the existing `StrategyRuntimeOrchestrator` to own the complete
-   closed-bar keyed critical section and call the existing nested operation for
-   `LiveEntryProjectedStrategyInstance`.
-3. Inspect the actual adjacent service interfaces, then decide and implement the
-   production HTTP adapter and composition seam separately.
+2. `StrategyRuntimeOrchestrator` closed-bar critical section, calling the
+   existing nested operation for `LiveEntryProjectedStrategyInstance` —
+   implemented, verified, and archived (`closed-bar-runtime-orchestration-v1`).
+3. Next, implement the production outbound adapters (Strategy Engine
+   live-entry/open-trade, ABI open-position lookup, ABI entry-package
+   execution bridge) as an isolated, independently testable seam, then wire
+   them and the semantic core into the production composition root behind the
+   closed-bar HTTP webhook. See
+   [`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md)
+   for the exact contracts and split into `I4c` (production outbound adapters)
+   and `I4d` (production composition and live-entry vertical slice).
 4. In a later change, design and implement the independent ABI fill-webhook
    workflow and `AbiExecutionEventOrchestrator`; do not combine it with the
-   closed-bar orchestration change.
+   production composition change.
 5. Add entry/fill cross-flow integration tests and Live V1 writer guardrails
    after both writer paths exist.
 6. Define and implement the open-trade branch, then run final full Live V1 E2E.

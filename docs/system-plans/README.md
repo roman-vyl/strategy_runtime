@@ -14,7 +14,11 @@ The documents are intentionally layered:
 4. [`runtime-abi-entry-reconciliation-master-plan.md`](runtime-abi-entry-reconciliation-master-plan.md)
    — approved but not yet implemented continuation from the Engine live-entry
    projection through ABI entry reconciliation and Runtime state updates.
-5. [`overall-central-journal.md`](overall-central-journal.md) — deferred
+5. [`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md)
+   — architectural source of truth for the production adapter and
+   composition seam (`I4c`/`I4d`) between closed-bar orchestration and the
+   ABI fill webhook, including the fixed ABI open-position wire contract.
+6. [`overall-central-journal.md`](overall-central-journal.md) — deferred
    cross-service journal initiative outside the active Runtime sequence.
 
 The documents explicitly distinguish:

@@ -712,8 +712,14 @@ speculative file tree:
 - the nested `EntryReconciliationOrchestrator` application component is
   implemented and archived without mutex, repository-load, or repository-save
   ownership;
-- the next change extends the existing `StrategyRuntimeOrchestrator` in place as
-  the top-level closed-bar workflow and keyed-mutex owner;
+- the existing `StrategyRuntimeOrchestrator` is extended in place as the
+  top-level closed-bar workflow and keyed-mutex owner (implemented and
+  archived as `closed-bar-runtime-orchestration-v1`);
+- the next changes implement the production outbound adapters and the
+  production composition root that attach this semantic core to real Strategy
+  Engine and ABI endpoints, split as `I4c` (`runtime-production-outbound-adapters-v1`)
+  and `I4d` (`runtime-live-entry-production-composition-v1`); see
+  [`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md);
 - `AbiExecutionEventOrchestrator` remains a later independent ABI-webhook
   workflow and owner of that path's keyed critical section;
 - no open-trade application component is introduced until that branch is
@@ -723,16 +729,20 @@ Implementation sequence:
 
 ```text
 EntryReconciliationOrchestrator                    DONE
-Closed-bar StrategyRuntimeOrchestrator extension   NEXT
-ABI execution-event workflow                       LATER
-Entry/fill cross-flow                              LATER
+Closed-bar StrategyRuntimeOrchestrator extension   DONE
+I4c · Production outbound adapters                 NEXT
+I4d · Production composition + live-entry E2E       AFTER I4c
+ABI execution-event workflow (I5)                  AFTER I4d
+Entry/fill cross-flow (I6)                          LATER
 Open-trade requirements and implementation         DEFERRED
 ```
 
-The closed-bar extension calls the already implemented nested operation. It
-does not create a new top-level orchestrator or reimplement reconciliation.
-Production adapter and composition scope remains a subsequent integration seam
-until the actual existing service interfaces have been inspected.
+`I4c` and `I4d` formalize the production adapter and composition integration
+seam that this master plan already required between closed-bar orchestration
+and the fill webhook; they are not a new architectural direction. `I4c`
+implements and contract-tests the outbound adapters in isolation; `I4d` wires
+them, the semantic core, and configuration into one production composition
+root and proves the live-entry vertical slice end to end.
 
 Deferred topics include:
 
