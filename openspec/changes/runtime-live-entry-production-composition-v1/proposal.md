@@ -35,10 +35,12 @@ the real outbound adapters instead of stopping at an unattached sink.
 
 ## What Changes
 
-- Compose exactly one production graph in `build_application`: existing
-  utility contour → `StrategyCycleHandoffBoundary` → the existing
-  `StrategyRuntimeOrchestrator.process` as the default production sink →
-  shared `StrategyInstanceRuntimeStateRepository` and shared
+- Compose exactly one production graph in `build_application`, reached only
+  through the default construction mode (`strategy_cycle_handoff` not
+  supplied): existing utility contour → `StrategyCycleHandoffBoundary` → a
+  thin, `None`-returning sink function that calls the existing
+  `StrategyRuntimeOrchestrator.process(unit)` and discards its result → shared
+  `StrategyInstanceRuntimeStateRepository` and shared
   `StrategyInstanceKeyedMutexRegistry` → `OpenPositionResolver` (the existing
   `HttpxAbiOpenPositionLookupAdapter`) → `StrategyUseCaseRouter` (the existing
   `HttpxStrategyEngineLiveEntryAdapter` / `HttpxStrategyEngineOpenTradeAdapter`)
@@ -46,15 +48,21 @@ the real outbound adapters instead of stopping at an unattached sink.
   `AbiEntryPackageExecutionBridge` over the existing `HttpxAbiEntryPackageAdapter`.
   No new top-level orchestrator, reconciliation component, or outbound adapter
   is introduced; every component composed here already exists and is already
-  tested in isolation.
+  tested in isolation. When an explicit `strategy_cycle_handoff` override is
+  supplied instead (the existing test seam), none of the semantic graph or the
+  four outbound HTTP clients is constructed, and the five config fields below
+  are not required.
 - Add five required production config inputs
   (`RUNTIME_STRATEGY_ENGINE_BASE_URL`, `RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS`,
   `RUNTIME_ABI_BASE_URL`, `RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS`,
-  `RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS`) following the existing
-  `RUNTIME_*` convention in `strategy_runtime.config.loader`. Invalid or missing
-  production config fails startup readiness closed (`ready=False`), matching
-  the existing not-ready pattern already used for invalid `RuntimeConfig`; it
-  never yields a partially constructed production graph.
+  `RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS`), required only for the default
+  construction mode above, following the existing `RUNTIME_*` convention in
+  `strategy_runtime.config.loader`. Invalid or missing production config fails
+  startup readiness closed (`ready=False`), matching the existing not-ready
+  pattern already used for invalid `RuntimeConfig`. Resource construction may
+  proceed partway before an invalid field is rejected by a later adapter
+  constructor; a partially constructed *ready* production graph is never
+  returned — every client already constructed is closed first.
 - Give the composition root single, explicit ownership of the four production
   HTTP clients it constructs (`HttpxStrategyEngineLiveEntryAdapter`,
   `HttpxStrategyEngineOpenTradeAdapter`, `HttpxAbiOpenPositionLookupAdapter`,
@@ -82,9 +90,10 @@ the real outbound adapters instead of stopping at an unattached sink.
   unsupported open-trade branch.
 - Add architecture/scope guardrail tests proving exactly one repository
   instance and one keyed-mutex-registry instance are shared across the graph,
-  the four HTTP clients are not constructed per request, and the production
-  sink is the real `StrategyRuntimeOrchestrator.process`, not a test override,
-  by default.
+  the four HTTP clients are not constructed per request, and the default
+  production sink is the thin function calling
+  `StrategyRuntimeOrchestrator.process`, not a test override, unless one is
+  explicitly supplied.
 
 ## Capabilities
 
@@ -102,10 +111,11 @@ the real outbound adapters instead of stopping at an unattached sink.
 ### Modified Capabilities
 
 - `strategy-cycle-handoff`: Add the requirement that production composition
-  attaches the existing `StrategyRuntimeOrchestrator.process` as the
-  boundary's production sink, replacing the previously unattached (no-op)
-  production default; the boundary's own dispatch mechanics (attached/
-  unattached sink behavior, exception propagation) are unchanged.
+  attaches a thin, `None`-returning sink function that calls the existing
+  `StrategyRuntimeOrchestrator.process` as the boundary's production sink,
+  replacing the previously unattached (no-op) production default; the
+  boundary's own dispatch mechanics (attached/unattached sink behavior,
+  exception propagation) are unchanged.
 
 ## Impact
 

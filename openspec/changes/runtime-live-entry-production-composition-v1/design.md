@@ -114,8 +114,8 @@ selector, processing journal) is byte-for-byte the existing implementation.
 above. It constructs, in dependency order:
 
 1. The existing utility contour (unchanged construction).
-2. Five outbound HTTP clients (four owned adapter instances; see §6 for the
-   exact set) from the new config fields.
+2. Four outbound HTTP clients (one per adapter instance; see §6 for the exact
+   set) from the new config fields.
 3. `OpenPositionResolver(abi_lookup=<open-position adapter>)`.
 4. `StrategyUseCaseRouter(live_entry_engine=<...>, open_trade_engine=<...>)`.
 5. `AbiEntryPackageExecutionBridge(abi_entry_package=<entry-package client>)`.
@@ -123,27 +123,74 @@ above. It constructs, in dependency order:
 7. One `StrategyInstanceKeyedMutexRegistry()`.
 8. `EntryReconciliationOrchestrator(trade_cycle_id_factory=new_trade_cycle_id, execution_port=<bridge>)`.
 9. `StrategyRuntimeOrchestrator(state_repository=<6>, open_position_resolver=<3>, use_case_router=<4>, keyed_mutex_registry=<7>, entry_reconciliation_orchestrator=<8>)`.
-10. `StrategyCycleHandoffBoundary(sink=<9>.process)` — or `.dispatch`; see the
-    open note in §"Sink signature" below.
+10. A thin, `None`-returning sink function wrapping `<9>.process(unit)` (see
+    the closed "Sink signature" decision below), passed as
+    `StrategyCycleHandoffBoundary(sink=<that function>)`.
 
 No step above introduces a new class; every constructor signature already
 exists on `main`. `I4d` only adds the call sites and the config plumbing that
 feeds them.
 
-**Sink signature note.** `StrategyCycleHandoffSink[DeploymentT]` is
-`Callable[[StrategyBarProcessingUnit[DeploymentT]], None]` — it discards the
-return value. `StrategyRuntimeOrchestrator.process` returns
-`StrategyInstanceRuntimeState`, so the production sink is a thin closure
-`lambda unit: orchestrator.process(unit)` (discarding the result) rather than
-`.process` passed directly as the sink; `orchestrator.dispatch` already has the
-matching `-> StrategyCycleDispatchOutcome`-free... no — `dispatch` returns
-`StrategyCycleDispatchOutcome`, also non-`None`. Either way the sink callable
-must discard whatever `process`/`dispatch` returns. Tasks §6 decides the exact
-one-line adapter; both `process` and `dispatch` call the identical critical
-section, so the choice is a wiring detail, not a behavioral one — `dispatch`
-already exists specifically to satisfy this exact port shape (it wraps
-`process` and returns a discardable outcome), so it is the natural choice
-unless implementation finds a reason to prefer the bare closure over `process`.
+**Sink signature (closed).** `StrategyCycleHandoffSink[DeploymentT]` is
+`Callable[[StrategyBarProcessingUnit[DeploymentT]], None]`: it must return
+`None`. Neither `StrategyRuntimeOrchestrator.process` (returns
+`StrategyInstanceRuntimeState`) nor `.dispatch` (returns
+`StrategyCycleDispatchOutcome`) satisfies that signature directly, and
+`StrategyCycleHandoffBoundary` itself already builds the final
+`StrategyCycleDispatchOutcome` that `CommittedBarOrchestrator` consumes — using
+`.dispatch` as the sink would construct a second, inner
+`StrategyCycleDispatchOutcome` that is immediately discarded by the boundary,
+for no behavioral benefit. The production sink is therefore a thin,
+`None`-returning function that calls `.process` and discards its return value:
+
+```python
+def process_strategy_cycle(
+    unit: StrategyBarProcessingUnit[DeploymentSpecification],
+) -> None:
+    strategy_runtime_orchestrator.process(unit)
+```
+
+This is a wiring detail, not a new component: it introduces no class, and
+neither `StrategyRuntimeOrchestrator.process` nor `.dispatch` changes
+signature. `.dispatch` remains available for any caller that wants a
+`StrategyCycleDispatchOutcome` directly (none does, in this graph);
+`StrategyCycleHandoffBoundary` is that caller for `CommittedBarOrchestrator`,
+and it calls the thin sink, not `.dispatch`, to avoid the redundant nested
+outcome above.
+
+## 2a. Default production path vs. test override path
+
+`build_application` has exactly two construction modes, and this change keeps
+them structurally distinct — one never partially resembles the other:
+
+**Default production composition** (`strategy_cycle_handoff` is `None`):
+
+- all five outbound config fields (§7) are mandatory for `ready=True`;
+- the complete semantic graph (§2 steps 3–9) and all four outbound HTTP
+  clients (§2 step 2, §6) are constructed;
+- the thin sink (§2 step 10) invokes `StrategyRuntimeOrchestrator.process`.
+
+**Explicit test override** (`strategy_cycle_handoff` is supplied):
+
+- the existing utility-only test seam is preserved exactly as implemented
+  today;
+- the caller-supplied sink is attached to `StrategyCycleHandoffBoundary`
+  instead of the thin production sink;
+- the semantic Runtime graph and the four outbound HTTP clients are **not**
+  constructed;
+- the five outbound config fields are **not** required for the application to
+  report `ready=True`.
+
+This distinction is required to preserve the existing
+`tests/integration/committed_bar/test_production_composition.py` contract: it
+calls `build_application(..., strategy_cycle_handoff=received.append)`
+supplying only the existing utility-only configuration
+(`RUNTIME_SPECS_PATH`, `RUNTIME_JOURNAL_PATH`) and asserts a ready
+application. If the five outbound fields were unconditionally mandatory
+regardless of the override, that existing test would start reporting
+`ready=False` — a regression this change must not cause. The override remains
+a Python test seam, never a documented production/environment configuration
+path.
 
 ## 3. Background webhook lifecycle
 
@@ -205,12 +252,20 @@ Four owned clients: `HttpxStrategyEngineLiveEntryAdapter`,
 the existing `HttpxAbiEntryPackageAdapter`. All four already implement
 `close()` and the `__enter__`/`__exit__` context-manager protocol.
 
-Contracted lifecycle (implementation-agnostic — the exact FastAPI wiring
-mechanism, e.g. a `lifespan` context manager vs. an equivalent, is an
-implementation choice `tasks.md` resolves, not a decision this design pins):
+No new semantic orchestrator, reconciliation component, domain service, or
+outbound adapter class is introduced by this lifecycle requirement. A small
+composition-root lifecycle owner — a plain object or closure bundling the four
+client references and one close-all operation — is allowed and is the
+expected shape of the "single explicit owner" below; it is a lifecycle
+convenience, not a new architectural layer. The exact FastAPI wiring mechanism
+(a `lifespan` context manager vs. an equivalent) is left to `tasks.md`, not
+pinned by this design.
+
+Contracted lifecycle:
 
 - Each of the four clients is constructed exactly once, during
-  `build_application`, after config validation succeeds.
+  `build_application`, for the default production construction mode only
+  (§2a); no client is constructed under the test-override mode.
 - The same four instances are reused for every background committed-bar cycle
   and every strategy instance for the lifetime of the application; no adapter
   is constructed per request or per cycle.
@@ -218,14 +273,21 @@ implementation choice `tasks.md` resolves, not a decision this design pins):
   once. Closing is idempotent per client (`close()` may safely be the only
   call), and the composition root is the only code path that calls it — no
   adapter closes itself, and no per-request code path closes a shared client.
-- If constructing the graph fails partway (e.g., the Engine clients succeed
-  but the ABI base URL is invalid), every client already constructed before
-  the failure is closed before `build_application` returns the not-ready
-  application; no client is leaked because a later step in construction failed.
-- Invalid or missing production config never reaches partial graph
-  construction: config is loaded and validated before any HTTP client is
-  constructed, exactly as journal/specs-path preparation already precedes
-  catalog construction today.
+- Construction happens in a deterministic order (§2 steps). A later client's
+  constructor may reject invalid configuration (missing variable, malformed
+  URL, non-finite/non-positive timeout) after one or more earlier clients
+  already constructed successfully — that is allowed as a transient
+  construction-time state. What is never allowed is returning a *ready*
+  application with that partially constructed set of clients: the moment a
+  constructor rejects its configuration, every client already constructed
+  before it is closed, and `build_application` returns the not-ready
+  application instead.
+- Config is loaded and parsed before any HTTP client construction begins
+  (mirroring journal/specs-path preparation already preceding catalog
+  construction today), but loading/parsing success does not by itself
+  guarantee every adapter constructor will accept its fields — the adapters'
+  own URL/timeout validation (§7) is the final gate, and it can still reject a
+  field after earlier clients were built.
 
 ## 7. Config and readiness
 
@@ -255,8 +317,11 @@ five new fields plus adapter construction all happen inside the same
 `try/except Exception` block that already exists; any failure — a missing
 variable, an unparsable timeout, an invalid URL, or an adapter constructor
 `ValueError` — produces `ready=False` via the existing
-`create_http_app(ready=False, ...)` branch. No new retry, circuit breaker, or
-speculative-policy field is introduced.
+`create_http_app(ready=False, ...)` branch, after closing any client already
+constructed before that failure (§6). No new retry, circuit breaker, or
+speculative-policy field is introduced. These five fields, and the adapter
+construction they gate, apply only to the default production construction
+mode (§2a); the test-override mode requires none of them.
 
 ## 8. Background success sequence (happy path)
 
@@ -279,14 +344,32 @@ speculative-policy field is introduced.
 | Strategy Engine projection fails | ABI entry-package is never called | No | Unaffected |
 | `desired_entry=null`, no current cycle | `NO_OP` decided | No | Unaffected |
 | `desired_entry=null`, acknowledged current cycle | `CANCEL` decided; requires `EntryPackageAbsent` | Only after confirmed `EntryPackageAbsent`; cycle is cleared, not left partially cancelled | Unaffected |
-| ABI entry-package call fails (public/transport/protocol) | `EntryReconciliationExecutionError` raised | No — the prior aggregate is returned unchanged by `StrategyRuntimeOrchestrator`'s existing exception propagation | Unaffected |
-| `position_open=True` | Engine open-trade adapter may be called (it exists and is wired) | No — `StrategyRuntimeOrchestrator` still raises `OpenTradeProjectionUnsupportedError`; open-trade application remains unimplemented | Unaffected |
+| ABI entry-package call fails (public/transport/protocol) | `EntryReconciliationExecutionError` raised, propagating out of `EntryReconciliationOrchestrator` and `StrategyRuntimeOrchestrator` | No — repository retains the prior aggregate; no save is attempted | Unaffected |
+| `position_open=True` | Engine open-trade adapter may be called (it exists and is wired); `StrategyRuntimeOrchestrator` raises `OpenTradeProjectionUnsupportedError`, propagating the same way | No — open-trade application remains unimplemented | Unaffected |
 | Any of the above | Recorded by `CommittedBarOrchestrator`'s existing per-unit exception handling as a failed `StrategyCycleDispatchOutcome`, journaled by the existing `JsonlProcessingJournal` | — | Unaffected |
 
 Every row reuses existing, already-tested exception types and existing
 `StrategyRuntimeOrchestrator`/`EntryReconciliationOrchestrator` propagation
 behavior (see the archived `strategy-runtime-orchestrator` spec, "Closed-bar
 semantic errors propagate without recovery"); `I4d` adds no new failure type.
+
+**Propagation rule (applies to every row above).** Every failure or explicit
+error above is raised out of `EntryReconciliationOrchestrator` and/or
+`StrategyRuntimeOrchestrator.process` uncaught by the semantic core.
+`StrategyCycleHandoffBoundary` does not catch it either — it does not
+fabricate a successful `StrategyCycleDispatchOutcome` internally. The
+exception reaches its existing catch point in
+`CommittedBarOrchestrator.process`, which converts it into the existing
+failed `StrategyCycleDispatchOutcome` and journals it via
+`JsonlProcessingJournal`, exactly as it already does today for any dispatcher
+exception. The observable production result of a background failure is
+therefore: a failed-dispatch journal record, a repository holding no new save
+for that cycle, and no downstream call that depended on the failed one — not
+a raised exception surfacing out of the HTTP/background boundary itself. Test
+coverage (tasks §8) verifies both layers: the uncaught propagation at the
+component level (out of `EntryReconciliationOrchestrator`/
+`StrategyRuntimeOrchestrator`), and the journaled/observable outcome at the
+full `TestClient`/background-contour level.
 
 ## 10. State-save rules
 

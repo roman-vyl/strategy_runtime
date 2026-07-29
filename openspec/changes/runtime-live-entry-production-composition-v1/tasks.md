@@ -25,6 +25,11 @@
   each of missing/non-numeric/non-finite/non-positive timeout, and
   missing/malformed (non-`http`/`https`, no host) base URL, individually
   yields `ready=False` without raising past `build_application`.
+- [ ] 1.6 Confirm the five fields are required only for the default
+  production construction path (`strategy_cycle_handoff is None`, design.md
+  §2a); when an explicit `strategy_cycle_handoff` override is supplied,
+  `build_application` does not require or validate any of the five fields,
+  matching the existing utility-only test seam.
 
 ## 2. Production Application Bundle / Composition Root
 
@@ -34,18 +39,26 @@
   `AbiEntryPackageExecutionBridge`, the shared repository and mutex registry
   (§3), `EntryReconciliationOrchestrator`, and `StrategyRuntimeOrchestrator`,
   using only their existing constructors.
-- [ ] 2.2 Decide and document the exact production sink closure passed to
-  `StrategyCycleHandoffBoundary` (a thin wrapper discarding
-  `StrategyRuntimeOrchestrator.process`'s or `.dispatch`'s return value; see
-  design.md §2 "Sink signature note"); prefer `dispatch` unless implementation
-  finds a concrete reason to call `process` directly.
+- [ ] 2.2 Implement the closed production sink decision (design.md §2
+  "Sink signature (closed)"): a thin, `None`-returning function that calls
+  `StrategyRuntimeOrchestrator.process(unit)` and discards its return value,
+  passed as `StrategyCycleHandoffBoundary(sink=<that function>)`. Do not use
+  `.dispatch` as the sink (it would construct a second, discarded
+  `StrategyCycleDispatchOutcome`).
 - [ ] 2.3 Preserve the existing `strategy_cycle_handoff` override parameter on
   `build_application` exactly as today: when supplied, it replaces the
-  production sink; when omitted, the composed `StrategyRuntimeOrchestrator`
-  sink is used.
+  production sink; when omitted, the thin sink calling
+  `StrategyRuntimeOrchestrator.process` is used.
 - [ ] 2.4 Do not introduce a new top-level orchestrator, reconciliation
   component, or outbound adapter class; every new call in `build_application`
   must reference an existing, already-tested class or function.
+- [ ] 2.5 Confirm the two construction modes stay distinct (design.md §2a):
+  when `strategy_cycle_handoff` is `None`, the five outbound config fields are
+  mandatory and the full semantic graph plus the four HTTP clients are
+  constructed; when `strategy_cycle_handoff` is supplied, the existing
+  utility-only test seam is preserved unchanged — the semantic graph and the
+  four HTTP clients are not constructed, and the five outbound fields are not
+  required for the application to become ready.
 
 ## 3. Shared Repository and Mutex Wiring
 
@@ -120,6 +133,13 @@
   still fully replaces the production sink when supplied, matching the
   existing `test_production_composition_runs_the_complete_utility_contour`
   usage pattern.
+- [ ] 6.4 Confirm the existing
+  `tests/integration/committed_bar/test_production_composition.py` test
+  continues to pass unmodified: `build_application` called with
+  `strategy_cycle_handoff=received.append` and only the existing utility-only
+  config (`RUNTIME_SPECS_PATH`, `RUNTIME_JOURNAL_PATH`) still returns a ready
+  application, without requiring any of the five outbound config fields and
+  without constructing any of the four outbound HTTP clients.
 
 ## 7. Background Vertical Live-Entry E2E
 
@@ -159,13 +179,23 @@
   protocol error, public error — each individually): assert the ABI
   entry-package endpoint is never called and no repository save occurs.
 - [ ] 8.5 ABI entry-package failure (timeout, network failure, protocol error,
-  public error — each individually): assert `EntryReconciliationExecutionError`
-  propagates and no repository save occurs; the prior aggregate is unchanged.
+  public error — each individually): at the component level, assert
+  `EntryReconciliationExecutionError` propagates uncaught out of
+  `EntryReconciliationOrchestrator.execute(...)` and
+  `StrategyRuntimeOrchestrator.process(...)`. At the full
+  `TestClient`/background-contour level, assert the observable result is a
+  failed `StrategyCycleDispatchOutcome` journaled by
+  `CommittedBarOrchestrator` (design.md §9 propagation rule) — not an
+  exception escaping the HTTP/background boundary — that the repository holds
+  no new save for that cycle, and that no call depending on the failed one is
+  invoked.
 - [ ] 8.6 `position_open=true`: assert the open-trade Engine adapter may be
   called by `StrategyUseCaseRouter`, but `StrategyRuntimeOrchestrator` still
-  raises `OpenTradeProjectionUnsupportedError`, no repository save occurs, and
-  the failed dispatch outcome is journaled — the open-trade branch remains
-  explicitly unsupported end to end in production composition.
+  raises `OpenTradeProjectionUnsupportedError`, which propagates the same way
+  as 8.5 (uncaught out of the semantic core, caught only by
+  `CommittedBarOrchestrator`); assert no repository save occurs and the failed
+  dispatch outcome is journaled — the open-trade branch remains explicitly
+  unsupported end to end in production composition.
 - [ ] 8.7 For each of the three outbound boundaries individually (ABI
   open-position lookup, Strategy Engine projection, ABI entry-package call),
   assert: exactly one call attempt (no automatic retry), the bounded timeout
