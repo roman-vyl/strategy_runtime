@@ -28,9 +28,10 @@ flowchart TD
     I2["State foundation · DONE"]
     I3["Pure entry reconciliation · DONE"]
     I4A["EntryReconciliationOrchestrator · DONE"]
-    I4B["Closed-bar Runtime orchestration · NEXT"]
-    INTEGRATION["Production adapter and composition seam · LATER"]
-    I5["ABI fill webhook · LATER"]
+    I4B["Closed-bar Runtime orchestration · DONE"]
+    I4C["I4c · Production outbound adapters · DONE"]
+    I4D["I4d · Production composition + live-entry E2E · NEXT"]
+    I5["ABI fill webhook · AFTER I4d"]
     I6["Entry/fill cross-flow · LATER"]
     OPEN_GATE["Open-trade requirements gate · DEFERRED"]
     OPEN_IMPL["Open-trade branch implementation · DEFERRED"]
@@ -38,7 +39,7 @@ flowchart TD
     FUTURE["Stronger reliability and scale · DEFERRED"]
 
     I1 --> I2 --> I3 --> I4A --> I4B
-    I4B --> INTEGRATION --> I5 --> I6
+    I4B --> I4C --> I4D --> I5 --> I6
     I6 --> OPEN_GATE --> OPEN_IMPL --> FINAL --> FUTURE
 ```
 
@@ -125,40 +126,132 @@ Exit condition: a tested nested application operation can reconcile one
 live-entry projection against the exact aggregate embedded in its provenance,
 without owning the upper closed-bar workflow.
 
-### I4b · Closed-bar Runtime orchestration — NEXT
+### I4b · Closed-bar Runtime orchestration — DONE
 
-- [ ] Create and approve a dedicated OpenSpec change.
-- [ ] Extend the existing `StrategyRuntimeOrchestrator`; do not introduce
+- [x] Create and approve a dedicated OpenSpec change
+  (`closed-bar-runtime-orchestration-v1`).
+- [x] Extend the existing `StrategyRuntimeOrchestrator`; do not introduce
   another top-level closed-bar or projection orchestrator.
-- [ ] Make `StrategyRuntimeOrchestrator` own the keyed mutex across state load,
+- [x] Make `StrategyRuntimeOrchestrator` own the keyed mutex across state load,
   ABI position lookup, Engine projection, typed branching, reconciliation,
   save, and every failure path.
-- [ ] Load the aggregate only after acquiring the mutex.
-- [ ] Perform ABI position lookup and Engine projection inside the critical
+- [x] Load the aggregate only after acquiring the mutex.
+- [x] Perform ABI position lookup and Engine projection inside the critical
   section.
-- [ ] Branch on the typed projection result.
-- [ ] Route `LiveEntryProjectedStrategyInstance` into the already implemented
+- [x] Branch on the typed projection result.
+- [x] Route `LiveEntryProjectedStrategyInstance` into the already implemented
   `EntryReconciliationOrchestrator.execute(projection)`.
-- [ ] Save replacement state when the nested operation reports a logical
+- [x] Save replacement state when the nested operation reports a logical
   transition.
-- [ ] Make `StrategyRuntimeOrchestrator.process(unit)` fail explicitly for
+- [x] Make `StrategyRuntimeOrchestrator.process(unit)` fail explicitly for
   `OpenTradeProjectedStrategyInstance`; the handoff must not record or report
   that dispatch as successful.
-- [ ] Release the mutex on every success and failure path.
-- [ ] Add closed-bar orchestration, failure-path, and mutex-ownership tests.
+- [x] Release the mutex on every success and failure path.
+- [x] Add closed-bar orchestration, failure-path, and mutex-ownership tests.
+- [x] Change verified and archived as
+  `openspec/changes/archive/2026-07-28-closed-bar-runtime-orchestration-v1`.
 
 Exit condition: one closed-bar invocation is serialized from state load through
 projection and live-entry application, and it persists only a valid,
 identity-bound acknowledgement.
 
-### Production adapter and composition integration seam — LATER
+Production adapter and composition scope was intentionally decided only after
+closed-bar application orchestration was designed and after the actual
+existing Strategy Engine, ABI position-lookup, ABI entry-package, and
+bootstrap interfaces were inspected. That inspection is now formalized below as
+`I4c` and `I4d`; they are the same production integration seam this map always
+carried, not a newly discovered stage. See
+[`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md)
+for the full contract detail behind both.
 
-Closed-bar application orchestration is designed first. Production adapter and
-composition scope is decided only after inspecting the actual existing Strategy
-Engine, ABI position-lookup, ABI entry-package, and bootstrap interfaces. Those
-adapters and wiring are not automatically part of I4b.
+### I4c · Production outbound adapters — DONE
 
-### I5 · ABI fill webhook and execution state machine
+Change name: `runtime-production-outbound-adapters-v1`.
+
+- [x] Create and approve the OpenSpec change.
+- [x] Implement the Strategy Engine `StrategyEngineLiveEntryPort` HTTP adapter
+  against `POST /v1/strategy-evaluations/live-entry`.
+- [x] Implement the Strategy Engine `StrategyEngineOpenTradePort` HTTP adapter
+  against `POST /v1/strategy-evaluations/open-trade` (required by
+  `StrategyUseCaseRouter` even though the first E2E only exercises live-entry).
+- [x] Implement the `AbiOpenPositionLookupPort` HTTP adapter against the
+  ABI open-position contract fixed in the focused plan.
+- [x] Implement the `EntryReconciliationExecutionPort` → `AbiEntryPackagePort`
+  bridge (`EntryReconciliationCommand` + `source_state` →
+  `EntryPackageRequest` → ABI client → `EntryAppliedConfirmation` /
+  `EntryAbsentConfirmation`). This is the fourth new piece (three HTTP
+  adapters above + this one application-level bridge); the existing
+  `AbiEntryPackagePort` HTTP client itself is not rewritten.
+- [x] Remove only the obsolete `EntryPackageApplied.accepted_risk_multiplier`
+  response echo from the existing ABI entry-package client DTO; `risk_multiplier`
+  travels to ABI one-way and is never returned or reconfirmed. No other change
+  to that already-implemented, already-tested client.
+- [x] For each of the three HTTP adapters: enforce strict request/response
+  DTOs, URL/path encoding where applicable, bounded timeouts, no retry, no
+  redirect-following, and typed public/transport/timeout/protocol-error
+  decoding; add fake-HTTP contract tests for each.
+- [x] For the bridge: exact command + `source_state` translation,
+  `risk_multiplier` from `source_state`, `DesiredEntry` →
+  `EntryPackageWireDesiredEntry` mapping, exactly one call to
+  `AbiEntryPackagePort`, typed-failure mapping — no HTTP ownership, URL
+  encoding, timeout/redirect configuration, mutex, repository load/save,
+  retry, or state mutation; cover it with ordinary typed unit/translation
+  tests, not fake-HTTP tests.
+- [x] Change verified and archived as
+  `openspec/changes/archive/2026-07-29-runtime-production-outbound-adapters-v1`.
+
+Exit condition: all production outbound dependencies are implemented and
+tested in isolation, verified against all contract requirements, and archived.
+All are ready for composition in `I4d`; none are yet connected to the
+application or bootstrap.
+
+### I4d · Production composition and live-entry vertical slice — AFTER I4c
+
+Change name: `runtime-live-entry-production-composition-v1`.
+
+- [ ] Create and approve the OpenSpec change.
+- [ ] Add `RUNTIME_STRATEGY_ENGINE_BASE_URL`,
+  `RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS`, `RUNTIME_ABI_BASE_URL`,
+  `RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS`, and
+  `RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS` to Runtime configuration.
+- [ ] Compose one production graph: MDS closed-bar HTTP webhook →
+  `FilesystemDeploymentCatalog` → `CommittedBarDeploymentSelector` →
+  `CommittedBarOrchestrator` → `StrategyCycleHandoffBoundary` →
+  `StrategyRuntimeOrchestrator` (shared repository, shared keyed-mutex
+  registry) → `OpenPositionResolver` (ABI adapter) → `StrategyUseCaseRouter`
+  (Engine live-entry/open-trade adapters) →
+  `EntryReconciliationOrchestrator` → execution adapter → ABI entry-package
+  client.
+- [ ] Own exactly one repository instance and one keyed-mutex registry for the
+  application lifetime; I5 reuses both.
+- [ ] Bound HTTP client lifetimes and add clean shutdown.
+- [ ] Fail startup readiness when production configuration is invalid.
+- [ ] Default the handoff to the wired semantic Runtime; keep test overrides
+  available but not the production default.
+- [ ] Add a vertical integration test: `POST /v1/webhooks/closed-bar` →
+  selected deployment → ABI `position_open=false` → Engine `desired_entry` →
+  reconciliation `APPLY` → ABI entry-package acknowledgement → state save →
+  `CurrentTradeCycle`.
+- [ ] Add failure-path and no-op tests. Every closed-bar cycle always performs
+  the ABI open-position lookup before Engine projection; the cardinality
+  below is specifically about the ABI entry-package call:
+  - `desired_entry=null` + initially empty aggregate → `NO_OP` → zero ABI
+    entry-package calls → zero repository saves;
+  - `desired_entry=null` + existing acknowledged cycle → `CANCEL` →
+    exactly one ABI entry-package call → clear the cycle only after
+    `EntryPackageAbsent`;
+  - Engine error; ABI position-lookup error; ABI entry-package rejection;
+    failed dispatch journal outcome.
+- [ ] For each of the three outbound boundaries individually (ABI
+  open-position lookup, Strategy Engine projection, ABI entry-package call):
+  bounded timeout, zero automatic retry, no repository save after failure, and
+  no downstream call triggered by a failed one.
+
+Exit condition: Runtime is fully wired end to end for the live-entry branch —
+MDS webhook → Engine → ABI client → acknowledged Runtime state — with a real
+executor bot optionally still replaced by a fake ABI.
+
+### I5 · ABI fill webhook and execution state machine — AFTER I4d
 
 - [ ] Confirm the ABI/Bybit cumulative quantity and average-price source.
 - [ ] Create and approve a dedicated OpenSpec change.

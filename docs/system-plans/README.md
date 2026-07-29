@@ -12,9 +12,15 @@ The documents are intentionally layered:
 3. [`runtime-contract-map.md`](runtime-contract-map.md) — exact implemented
    module-to-module request, response, identity, and projection seams.
 4. [`runtime-abi-entry-reconciliation-master-plan.md`](runtime-abi-entry-reconciliation-master-plan.md)
-   — approved but not yet implemented continuation from the Engine live-entry
-   projection through ABI entry reconciliation and Runtime state updates.
-5. [`overall-central-journal.md`](overall-central-journal.md) — deferred
+   — authoritative live-entry reconciliation/fill roadmap from the Engine
+   live-entry projection through ABI entry reconciliation and Runtime state
+   updates. `I3`, `I4a`, and `I4b` are implemented; `I4c` through `I6` remain
+   in the active sequence.
+5. [`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md)
+   — architectural source of truth for the production adapter and
+   composition seam (`I4c`/`I4d`) between closed-bar orchestration and the
+   ABI fill webhook, including the fixed ABI open-position wire contract.
+6. [`overall-central-journal.md`](overall-central-journal.md) — deferred
    cross-service journal initiative outside the active Runtime sequence.
 
 The documents explicitly distinguish:

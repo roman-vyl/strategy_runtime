@@ -50,7 +50,6 @@ def test_present_request_preserves_raw_path_body_and_decimal_lexemes() -> None:
 
     assert isinstance(result, EntryPackageApplied)
     assert result.applied_desired_entry.planned_entry_price == "-001.2300e+2"
-    assert result.accepted_risk_multiplier == "+000.2500e1"
     assert result.calculated_quantity == "0.00100"
     assert len(fake.requests) == 1
     sent = fake.requests[0]
@@ -518,7 +517,6 @@ def applied_body(request: EntryPackageRequest) -> dict[str, Any]:
         "trade_cycle_id": request.trade_cycle_id,
         "status": "entry_package_applied",
         "applied_desired_entry": desired_entry_body(request.desired_entry),
-        "accepted_risk_multiplier": request.risk_multiplier,
         "calculated_quantity": "0.00100",
     }
 

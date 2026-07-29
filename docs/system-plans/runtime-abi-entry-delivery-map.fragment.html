@@ -279,7 +279,7 @@
     const views = {
       current: {
         title: "Фактическая цепочка в текущем репозитории",
-        caption: "Семантический projection-контур и nested entry application operation реализованы; верхняя closed-bar интеграция остаётся следующим change.",
+        caption: "Semantic projection-контур, nested entry application operation и верхняя closed-bar orchestration реализованы; следующий increment — production outbound adapters (I4c).",
         steps: [
           {
             lane: 0,
@@ -313,7 +313,7 @@
             edge: "sink должен вызвать semantic pipeline",
             lane: 1,
             title: "StrategyRuntimeOrchestrator.process",
-            detail: "Скалярная цепочка реализована и покрыта unit-тестами, но не подключена в <code>build_application</code>.",
+            detail: "Owns the complete keyed critical section (load → position lookup → projection → typed branch → reconciliation → save → release) and returns the final aggregate; реализовано и покрыто тестами, но не подключено в <code>build_application</code>.",
             status: "current"
           },
           {
@@ -370,62 +370,64 @@
           }
         ],
         gates: [
-          "<code>StrategyCycleHandoffBoundary.dispatch(unit)</code> должен вызвать sink <code>StrategyRuntimeOrchestrator.process(unit)</code> в production composition.",
-          "Следующий change расширяет существующий <code>StrategyRuntimeOrchestrator</code> и вызывает уже готовый <code>EntryReconciliationOrchestrator</code> после typed projection.",
-          "Production adapter и composition scope определяется позже после проверки фактических интерфейсов соседних сервисов."
+          "<code>StrategyCycleHandoffBoundary.dispatch(unit)</code> должен вызвать sink <code>StrategyRuntimeOrchestrator.process(unit)</code> в production composition — это остаётся I4d, не I4b.",
+          "Closed-bar orchestration (I4b) реализована и архивирована; следующий change (I4c) реализует production HTTP adapters для ABI position lookup, ABI entry-package и Strategy Engine.",
+          "Production adapter и composition scope формализован как I4c/I4d в runtime-live-entry-production-integration-plan.md."
         ]
       },
       closed: {
-        title: "Следующая closed-bar Runtime orchestration",
-        caption: "Gap находится в расширении существующего StrategyRuntimeOrchestrator; nested entry reconciliation уже реализована.",
+        title: "Closed-bar Runtime orchestration — critical section (реализовано)",
+        caption: "StrategyRuntimeOrchestrator владеет полным critical section и вызывает nested entry reconciliation; оставшийся gap — production HTTP adapters (I4c), а не сама orchestration.",
         steps: [
           {
             lane: 0,
             title: "StrategyCycleHandoffBoundary.dispatch → StrategyRuntimeOrchestrator.process",
-            detail: "Существующий orchestrator расширяется как единственный верхний closed-bar workflow; новый верхний orchestrator не создаётся.",
-            status: "gap",
-            note: "NEXT"
+            detail: "Существующий orchestrator расширен как единственный верхний closed-bar workflow; новый верхний orchestrator не создавался.",
+            status: "current",
+            note: "DONE · archived"
           },
           {
             edge: "strategy_instance_id",
             lane: 1,
             title: "KeyedMutex.acquire",
             detail: "Верхний orchestrator владеет полным critical section; mutex non-reentrant.",
-            status: "gap"
+            status: "current"
           },
           {
             edge: "после захвата mutex",
             lane: 2,
             title: "Repository.get_or_create / load",
             detail: "Загружает текущий aggregate до любых state-dependent внешних вычислений.",
-            status: "gap"
+            status: "current"
           },
           {
             edge: "state → authoritative position facts",
             lane: 3,
             title: "ABI open-position lookup",
-            detail: "Lookup выполняется внутри того же critical section с bounded timeout.",
-            status: "gap"
+            detail: "Lookup выполняется внутри того же critical section с bounded timeout; production HTTP adapter — предмет I4c, сейчас только port + fake.",
+            status: "gap",
+            note: "HTTP adapter — I4c"
           },
           {
             edge: "resolved state + processing unit",
             lane: 3,
             title: "Strategy Engine projection",
-            detail: "Engine projection также выполняется внутри critical section с bounded timeout.",
-            status: "gap"
+            detail: "Engine projection также выполняется внутри critical section с bounded timeout; production HTTP client — предмет I4c.",
+            status: "gap",
+            note: "HTTP adapter — I4c"
           },
           {
             edge: "typed in-memory projection",
             lane: 1,
             title: "Typed projection branch",
             detail: "<code>LiveEntryProjectedStrategyInstance</code> вызывает existing nested operation; <code>OpenTradeProjectedStrategyInstance</code> завершается явной unsupported-ошибкой без мутации и успешного dispatch.",
-            status: "gap"
+            status: "current"
           },
           {
             edge: "LiveEntryProjectedStrategyInstance",
             lane: 1,
             title: "Existing EntryReconciliationOrchestrator.execute",
-            detail: "Уже реализован: извлекает source state из provenance projection, выполняет <code>NoOp | Apply | Replace | Cancel</code> через application execution port и возвращает unchanged/replacement aggregate. Mutex, reload и save отсутствуют.",
+            detail: "Извлекает source state из provenance projection, выполняет <code>NoOp | Apply | Replace | Cancel</code> через application execution port и возвращает unchanged/replacement aggregate. Mutex, reload и save отсутствуют.",
             status: "current",
             note: "DONE · archived"
           },
@@ -434,21 +436,21 @@
             lane: 2,
             title: "Repository.save",
             detail: "Persisted package содержит только <code>applied_desired_entry + calculated_quantity</code>.",
-            status: "gap"
+            status: "current"
           },
           {
             edge: "finally",
             lane: 2,
             title: "KeyedMutex.release",
             detail: "Освобождается на success, rejection, timeout, unsupported branch и любом exception path.",
-            status: "gap"
+            status: "current"
           }
         ],
         gates: [
           "Mutex принадлежит <code>StrategyRuntimeOrchestrator</code>; реализованный <code>EntryReconciliationOrchestrator</code> не захватывает lock, не reload-ит и не сохраняет state.",
           "Nested operation принимает только <code>LiveEntryProjectedStrategyInstance</code>; source aggregate извлекается из embedded projection provenance.",
           "<code>OpenTradeProjectedStrategyInstance</code> не мутирует state и не может завершиться успешным dispatch до отдельного дизайна.",
-          "Production adapters и composition остаются отдельным последующим integration seam до проверки фактических сервисных интерфейсов."
+          "Production outbound adapters (I4c) и production composition (I4d) остаются следующими отдельными changes; см. runtime-live-entry-production-integration-plan.md."
         ]
       },
       webhook: {
@@ -591,30 +593,41 @@
             edge: "nested application operation готова",
             lane: 0,
             span: 4,
-            title: "Closed-bar Runtime orchestration",
-            detail: "NEXT: расширить существующий <code>StrategyRuntimeOrchestrator</code> как mutex owner через load → position lookup → Engine projection → typed branch → existing nested operation → save → release.",
+            title: "I4b · Closed-bar Runtime orchestration",
+            detail: "Существующий <code>StrategyRuntimeOrchestrator</code> расширен как mutex owner через load → position lookup → Engine projection → typed branch → existing nested operation → save → release; <code>process(unit)</code> возвращает final aggregate.",
+            status: "current",
+            note: "DONE · archived"
+          },
+          {
+            id: "i4c-production-outbound-adapters",
+            trackable: true,
+            edge: "closed-bar orchestration готова",
+            lane: 0,
+            span: 4,
+            title: "I4c · Production outbound adapters",
+            detail: "NEXT: <code>runtime-production-outbound-adapters-v1</code> — 3 новых HTTP adapters (<code>StrategyEngineLiveEntryPort</code>, <code>StrategyEngineOpenTradePort</code>, <code>AbiOpenPositionLookupPort</code>) + 1 новый bridge (<code>EntryReconciliationExecutionPort</code>→<code>AbiEntryPackagePort</code>); существующий <code>AbiEntryPackagePort</code> HTTP client не переписывается, только убирается obsolete <code>accepted_risk_multiplier</code> echo.",
             status: "gap",
             note: "NEXT"
           },
           {
-            id: "production-integration-seam",
+            id: "i4d-production-composition",
             trackable: true,
-            edge: "после application orchestration design",
+            edge: "I4c adapters протестированы изолированно",
             lane: 0,
             span: 4,
-            title: "Production adapter and composition integration seam",
-            detail: "Проверить фактические интерфейсы Strategy Engine, ABI position lookup, ABI entry-package и bootstrap, затем отдельно определить adapter/composition scope.",
+            title: "I4d · Production composition + live-entry E2E",
+            detail: "AFTER I4c: <code>runtime-live-entry-production-composition-v1</code> — config, один production graph, shared repository/mutex registry, readiness, vertical integration test MDS webhook → Engine → ABI client → acknowledged state.",
             status: "planned",
-            note: "LATER"
+            note: "AFTER I4c"
           },
           {
             id: "i5-fill-webhook",
             trackable: true,
-            edge: "closed-bar writer готов",
+            edge: "production composition готова",
             lane: 0,
             span: 4,
             title: "I5 · ABI fill webhook + execution state machine",
-            detail: "LATER: DTO/HTTP endpoint, <code>AbiExecutionEventOrchestrator</code>, shared mutex, freeze on first fill, cumulative fill storage и phase transitions.",
+            detail: "AFTER I4d: DTO/HTTP endpoint, <code>AbiExecutionEventOrchestrator</code>, shared mutex, freeze on first fill, cumulative fill storage и phase transitions.",
             status: "gap"
           },
           {
@@ -667,9 +680,9 @@
           }
         ],
         gates: [
-          "ABI client, state foundation, pure reconciliation и entry application operation реализованы и архивированы; следующий increment — closed-bar Runtime orchestration.",
-          "Production adapter/composition scope определяется отдельным более поздним integration seam после проверки фактических интерфейсов.",
-          "ABI fill webhook и entry/fill cross-flow остаются последующими отдельными changes.",
+          "ABI client, state foundation, pure reconciliation, entry application operation и closed-bar Runtime orchestration реализованы и архивированы; следующий increment — production outbound adapters (I4c).",
+          "Production adapter/composition scope формализован как I4c/I4d в runtime-live-entry-production-integration-plan.md после проверки фактических интерфейсов.",
+          "ABI fill webhook (I5) и entry/fill cross-flow остаются последующими отдельными changes после I4d.",
           "Финальный full Live V1 E2E возможен только после дизайна и реализации open-trade branch."
         ]
       }

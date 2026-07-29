@@ -1,14 +1,19 @@
 # Runtime state and lifecycle plan
 
 Status: current state and lifecycle design. Domain models, the repository port,
-in-memory `get_or_create`, position resolution, and Engine projection are
-implemented. Pure entry reconciliation and the nested
-`EntryReconciliationOrchestrator` application operation are also implemented;
-top-level closed-bar integration and physical persistence policy remain open.
+in-memory `get_or_create`, position resolution, Engine projection, pure entry
+reconciliation, the nested `EntryReconciliationOrchestrator` application
+operation, and the top-level closed-bar `StrategyRuntimeOrchestrator` critical
+section are all implemented. Production adapter/composition wiring and
+physical persistence policy remain open.
 
-The implemented state model below remains authoritative for current code. Its
-approved but not yet implemented top-level closed-bar continuation is defined by
-[`runtime-abi-entry-reconciliation-master-plan.md`](runtime-abi-entry-reconciliation-master-plan.md).
+The implemented state model below remains authoritative for current code.
+Closed-bar state application and the mutex-owned closed-bar writer are
+implemented; production outbound adapters and composition remain pending (see
+[`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md));
+fill execution state and the fill writer remain pending (see
+[`runtime-abi-entry-reconciliation-master-plan.md`](runtime-abi-entry-reconciliation-master-plan.md)
+and `I5`).
 
 ## 1. Aggregate ownership
 
@@ -80,10 +85,10 @@ of the same identity and rejects a collision where the same
 
 ## 4. Nested trade cycle
 
-`CurrentTradeCycle` is implemented as a state model, but the current semantic
-projection contour does not create or update it. A future state-transition step
-will create a cycle after accepting a live-entry projection according to the
-final lifecycle policy.
+`CurrentTradeCycle` is implemented as a state model. The closed-bar
+orchestration creates and updates it through `EntryReconciliationOrchestrator`
+after accepting a live-entry projection and a successful (fake, pre-production)
+ABI acknowledgement.
 
 Current implemented shape:
 
@@ -103,17 +108,18 @@ execution context, and position-management state are not part of the current
 model. Open-position facts resolved from ABI remain transient.
 
 A strategy instance can have at most one current cycle in the active aggregate.
-Cycle creation/application, fill processing, and completed-cycle archival are
-not implemented.
+Cycle creation/application through entry reconciliation is implemented. Fill
+processing and completed-cycle archival are not implemented.
 
 ## 5. Desired-entry lifecycle
 
-Each successful live-entry projection currently returns one complete
+Each successful live-entry projection returns one complete
 `desired_entry: DesiredEntry | null` inside
-`LiveEntryProjectedStrategyInstance`. It does not mutate the repository, choose
-a side, or arbitrate between plans.
+`LiveEntryProjectedStrategyInstance`. The router itself does not mutate the
+repository, choose a side, or arbitrate between plans; the closed-bar
+orchestrator applies the reconciliation result afterward.
 
-Future reconciliation will use these complete-snapshot semantics:
+Reconciliation uses these complete-snapshot semantics:
 
 ```text
 no existing cycle
@@ -128,10 +134,11 @@ successful acknowledgement
 
 Top-level `desired_entry = null` is data and means that no entry is currently
 desired. The implemented reconciliation operation selects cancellation for an
-acknowledged unfilled entry or remains a no-op when none is applied. The future
-top-level closed-bar workflow invokes that existing operation. No valid
-non-null cycle lacks an `AppliedEntryPackage`; successful cancellation clears
-`current_trade_cycle`. An absent cycle does not prove that ABI or the exchange
+acknowledged unfilled entry or remains a no-op when none is applied. The
+top-level closed-bar orchestrator invokes that operation inside its keyed
+critical section. No valid non-null cycle lacks an `AppliedEntryPackage`;
+successful cancellation clears `current_trade_cycle`. An absent cycle does not
+prove that ABI or the exchange
 is flat.
 
 ## 6. Execution and freeze transition
@@ -207,14 +214,19 @@ process-local non-reentrant keyed mutex per `strategy_instance_id` serializes
 both top-level writer paths. Different strategy instances may proceed in
 parallel.
 
-The next closed-bar extension makes `StrategyRuntimeOrchestrator` own the
-critical section across `get_or_create/load → ABI position lookup → Engine
-projection → typed branch → live-entry reconciliation → save`.
+`StrategyRuntimeOrchestrator` owns the critical section across
+`get_or_create/load → ABI position lookup → Engine projection → typed branch →
+live-entry reconciliation → save`. This closed-bar writer is implemented and
+verified, but not yet reachable through the production bootstrap: production
+outbound adapters and the composition graph that attach it to real Strategy
+Engine/ABI endpoints and the closed-bar webhook are the next seam (see
+[`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md)).
 `AbiExecutionEventOrchestrator` will independently own the later webhook
-critical section across `fresh load → event application → save`. The already
-implemented `EntryReconciliationOrchestrator` does not acquire the mutex, reload
-state, or save independently; its future integration receives one projection
-whose provenance already embeds the exact source aggregate.
+critical section across `fresh load → event application → save`; that fill
+writer is not implemented. The already implemented
+`EntryReconciliationOrchestrator` does not acquire the mutex, reload state, or
+save independently; it receives one projection whose provenance already embeds
+the exact source aggregate.
 
 A webhook that waits behind reconciliation must reload state after acquiring
 the mutex. Holding the mutex across outbound calls is accepted for Live V1, so

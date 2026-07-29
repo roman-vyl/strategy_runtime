@@ -1,12 +1,13 @@
 # Runtime closed-bar contract map
 
 Status: current implemented contract map for the semantic Engine-projection
-pipeline. Production HTTP adapters and projection-result state application are
-outside this map.
+pipeline through closed-bar live-entry reconciliation and state application.
+Production HTTP adapters and transport wiring are outside this map.
 
-This map describes current implemented contracts only. The approved but not yet
-implemented continuation from live-entry projection through ABI reconciliation
-is defined by
+This map describes current implemented contracts only. Live-entry
+reconciliation and final aggregate application are implemented; production
+HTTP transport/composition (`I4c`/`I4d`) and the fill lifecycle (`I5`) are not.
+The full sequencing is defined by
 [`runtime-abi-entry-reconciliation-master-plan.md`](runtime-abi-entry-reconciliation-master-plan.md).
 
 ## 1. Invocation and cardinality
@@ -20,9 +21,8 @@ CommittedBarOrchestrator
 -> StrategyRuntimeOrchestrator.process(unit)
 ```
 
-The semantic submodule ports use tuple/sequence contracts where useful, but the
-current orchestrator passes one state and receives one projected result for each
-`StrategyBarProcessingUnit`.
+The pipeline is strictly scalar: one `StrategyBarProcessingUnit` produces one
+state, one resolved state, one typed projection, and one final aggregate.
 
 ## 2. Utility handoff
 
@@ -178,8 +178,9 @@ PositionResolvedStrategyInstanceRuntimeState
 └── executed_entry_price
 ```
 
-The resolver preserves item count, order, and identity. The current orchestrator
-invokes it with a one-item tuple.
+`OpenPositionResolver.resolve` is scalar: it takes one
+`StrategyInstanceRuntimeState` and returns one
+`PositionResolvedStrategyInstanceRuntimeState`, preserving identity.
 
 ## 6. Use-case router input and decision
 
@@ -353,52 +354,45 @@ are calculation facts, not entity identities.
 
 ## 11. Semantic orchestrator output and stopping point
 
-For each input unit, `StrategyRuntimeOrchestrator.process` returns exactly one:
+`StrategyRuntimeOrchestrator.process(unit)` owns the complete closed-bar keyed
+critical section: it acquires the per-instance mutex before loading state and
+retains it through ABI position lookup, Engine projection, typed branching,
+reconciliation, and save. For each input unit it returns the final:
 
 ```text
-LiveEntryProjectedStrategyInstance
+StrategyInstanceRuntimeState
 ```
 
-or:
+not a bare projection object. Internally, for `LiveEntryProjectedStrategyInstance`
+it calls `EntryReconciliationOrchestrator.execute(projection)` and saves the
+replacement aggregate only when the nested operation reports a logical
+transition; otherwise it returns the unchanged source state. The nested
+operation accepts no separate aggregate argument and does not acquire the
+mutex, reload state, or save independently.
 
-```text
-OpenTradeProjectedStrategyInstance
-```
+For `OpenTradeProjectedStrategyInstance`, `process(unit)` raises
+`OpenTradeProjectionUnsupportedError` explicitly; the handoff must not record
+or report that dispatch as successful.
 
-The current contour does not:
+The current contour does not yet:
 
-- persist the projected recipe;
-- mutate the aggregate;
-- create or freeze a trade cycle;
-- create ABI commands;
-- interpret protection or close signals;
-- perform exchange reconciliation.
+- persist or interpret the position-management recipe;
+- create or freeze a trade cycle across the open-trade branch;
+- send every request through a production HTTP transport. Concretely:
+  - Strategy Engine live-entry/open-trade HTTP adapters — absent (`I4c`);
+  - ABI open-position HTTP adapter — absent (`I4c`);
+  - `EntryReconciliationExecutionPort` → `AbiEntryPackagePort` bridge — absent
+    (`I4c`);
+  - `AbiEntryPackagePort` HTTP client itself — already implemented and
+    contract-tested, but not yet composed into the application (`I4d`).
 
 ## 12. Planned next seam
 
-`EntryReconciliationOrchestrator` is already implemented. It receives only one
-`LiveEntryProjectedStrategyInstance` and extracts its exact source state from
-the embedded projection provenance:
-
-```text
-projection.source.resolved_state.runtime_state
-```
-
-The current stopping point remains the typed semantic projection contour; the
-complete closed-bar orchestration is not implemented yet. The next seam extends
-the same `StrategyRuntimeOrchestrator.process(...)` invocation so that it
-acquires the per-instance keyed mutex before loading state and retains it
-through ABI position lookup, Engine projection, typed branching, invocation of
-the existing nested orchestrator, and repository save.
-
-For `LiveEntryProjectedStrategyInstance`,
-`StrategyRuntimeOrchestrator` will call
-`EntryReconciliationOrchestrator.execute(projection)` under the caller-owned
-mutex and save replacement state when required. The nested operation accepts no
-separate aggregate argument and does not acquire the mutex, reload state, or
-save independently.
-
-For `OpenTradeProjectedStrategyInstance`,
-`StrategyRuntimeOrchestrator.process(unit)` will fail explicitly until the
-position-management branch is separately designed. The handoff must not record
-or report that dispatch as successful.
+The typed semantic projection contour and the closed-bar critical section are
+both implemented. The next seam is production transport, not application
+orchestration: implement the production HTTP adapters for the Strategy Engine
+live-entry/open-trade ports, the ABI open-position lookup port, and the ABI
+entry-package execution bridge, then wire the semantic core into the
+production composition root behind the closed-bar HTTP webhook. See
+[`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md)
+for the exact wire contracts and the `I4c`/`I4d` change split.

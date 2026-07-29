@@ -23,7 +23,6 @@ _APPLIED_FIELDS = frozenset(
         "trade_cycle_id",
         "status",
         "applied_desired_entry",
-        "accepted_risk_multiplier",
         "calculated_quantity",
     }
 )
@@ -99,9 +98,6 @@ def _decode_success(payload: object, request: EntryPackageRequest) -> EntryPacka
                 ),
                 trade_cycle_id=_non_empty_string(body["trade_cycle_id"], "trade_cycle_id"),
                 applied_desired_entry=_decode_desired_entry(body["applied_desired_entry"]),
-                accepted_risk_multiplier=_string(
-                    body["accepted_risk_multiplier"], "accepted_risk_multiplier"
-                ),
                 calculated_quantity=_string(
                     body["calculated_quantity"], "calculated_quantity"
                 ),

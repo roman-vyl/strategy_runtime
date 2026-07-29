@@ -1,6 +1,6 @@
 # Runtime ↔ ABI entry reconciliation master plan
 
-Status: discussion-approved high-level plan for the second half of the Runtime live-entry pipeline. This document is not an OpenSpec change and does not yet authorize implementation.
+Status: authoritative live-entry reconciliation/fill roadmap for the second half of the Runtime live-entry pipeline. `I3`, `I4a`, and `I4b` are implemented and archived. `I4c`, `I4d`, `I5`, and `I6` remain planned; this document itself is not an OpenSpec change and does not by itself authorize their implementation.
 
 The live-entry behavior in this plan starts when Runtime owns one typed Strategy
 Engine projection result and ends when ABI execution events have updated the
@@ -11,13 +11,19 @@ application, and save.
 
 ## 1. Scope and starting boundary
 
-The implemented first half of the closed-bar pipeline currently ends with one
-of two typed objects:
+The closed-bar pipeline produces one of two typed intermediate projection
+objects:
 
 ```text
 LiveEntryProjectedStrategyInstance
 OpenTradeProjectedStrategyInstance
 ```
+
+These are not the pipeline's terminal output. The live-entry branch already
+proceeds through reconciliation and final aggregate application inside the
+same `StrategyRuntimeOrchestrator.process(unit)` invocation (I4a/I4b,
+implemented). The open-trade branch remains explicitly unsupported until it is
+separately designed.
 
 This plan covers only the live-entry branch:
 
@@ -71,9 +77,12 @@ An ABI webhook does not resume, interrupt, or enter the middle of a previous MDS
 ## 3. Orchestrator structure and serialization ownership
 
 The existing `StrategyRuntimeOrchestrator` remains the single top-level
-coordinator for the closed-bar Runtime use case. The next change extends that
-orchestrator in place; it does not introduce another top-level closed-bar
-coordinator or a separate projection coordinator.
+coordinator for the closed-bar Runtime use case. `I4b` extended that
+orchestrator in place; it did not introduce another top-level closed-bar
+coordinator or a separate projection coordinator. The next stage here is
+`I4c`/`I4d` (production outbound adapters and composition — see
+[`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md)),
+not a further orchestrator extension.
 
 `EntryReconciliationOrchestrator` is already implemented as the nested
 live-entry application operation. The upper workflow calls that existing
@@ -95,10 +104,10 @@ StrategyCycleHandoffBoundary.dispatch(unit)
     → release mutex
 ```
 
-`StrategyRuntimeOrchestrator` will own the complete closed-bar critical section.
-The implemented nested `EntryReconciliationOrchestrator` will run inside that
-already-open critical section and does not acquire the keyed mutex, reload the
-aggregate, or save repository state independently.
+`StrategyRuntimeOrchestrator` owns the complete closed-bar critical section.
+`EntryReconciliationOrchestrator` already runs inside that critical section and
+does not acquire the keyed mutex, reload the aggregate, or save repository
+state independently.
 
 Realtime ABI callbacks start a separate Runtime use case:
 
@@ -431,21 +440,35 @@ applier.
 
 Runtime creates the first `CurrentTradeCycle` only after ABI successfully acknowledges the package.
 
-For first apply:
+Currently implemented model (I4a/I4b):
+
+```text
+CurrentTradeCycle
+├── trade_cycle_id
+└── applied_entry_package: AppliedEntryPackage
+    ├── applied_desired_entry
+    └── calculated_quantity
+```
+
+For first apply, the implemented model creates:
 
 ```text
 current_trade_cycle = CurrentTradeCycle(
-    phase = awaiting_entry,
+    trade_cycle_id = newly reserved identity,
     applied_entry_package = AppliedEntryPackage(
         applied_desired_entry = acknowledged desired_entry,
         calculated_quantity = acknowledged calculated quantity,
     ),
-    frozen_entry_context = null,
-    ...
 )
 ```
 
-For replace, Runtime updates the existing `awaiting_entry` execution only after the replacement acknowledgement succeeds.
+For replace, Runtime updates the existing `applied_entry_package` only after the replacement acknowledgement succeeds.
+
+The `phase`, fill aggregates, `FrozenExecutedEntryContext`, and first/last fill
+timestamps shown in `§17`–`§21` below are the target model for `I5`. They are
+not part of the current implemented model and are not in scope for `I4c`:
+`I4c` implements production transport for the model above exactly as it
+exists today, without adding fill-lifecycle fields.
 
 If ABI fails or rejects the desired change:
 
@@ -712,8 +735,14 @@ speculative file tree:
 - the nested `EntryReconciliationOrchestrator` application component is
   implemented and archived without mutex, repository-load, or repository-save
   ownership;
-- the next change extends the existing `StrategyRuntimeOrchestrator` in place as
-  the top-level closed-bar workflow and keyed-mutex owner;
+- the existing `StrategyRuntimeOrchestrator` is extended in place as the
+  top-level closed-bar workflow and keyed-mutex owner (implemented and
+  archived as `closed-bar-runtime-orchestration-v1`);
+- the next changes implement the production outbound adapters and the
+  production composition root that attach this semantic core to real Strategy
+  Engine and ABI endpoints, split as `I4c` (`runtime-production-outbound-adapters-v1`)
+  and `I4d` (`runtime-live-entry-production-composition-v1`); see
+  [`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md);
 - `AbiExecutionEventOrchestrator` remains a later independent ABI-webhook
   workflow and owner of that path's keyed critical section;
 - no open-trade application component is introduced until that branch is
@@ -723,16 +752,20 @@ Implementation sequence:
 
 ```text
 EntryReconciliationOrchestrator                    DONE
-Closed-bar StrategyRuntimeOrchestrator extension   NEXT
-ABI execution-event workflow                       LATER
-Entry/fill cross-flow                              LATER
+Closed-bar StrategyRuntimeOrchestrator extension   DONE
+I4c · Production outbound adapters                 NEXT
+I4d · Production composition + live-entry E2E       AFTER I4c
+ABI execution-event workflow (I5)                  AFTER I4d
+Entry/fill cross-flow (I6)                          LATER
 Open-trade requirements and implementation         DEFERRED
 ```
 
-The closed-bar extension calls the already implemented nested operation. It
-does not create a new top-level orchestrator or reimplement reconciliation.
-Production adapter and composition scope remains a subsequent integration seam
-until the actual existing service interfaces have been inspected.
+`I4c` and `I4d` formalize the production adapter and composition integration
+seam that this master plan already required between closed-bar orchestration
+and the fill webhook; they are not a new architectural direction. `I4c`
+implements and contract-tests the outbound adapters in isolation; `I4d` wires
+them, the semantic core, and configuration into one production composition
+root and proves the live-entry vertical slice end to end.
 
 Deferred topics include:
 
