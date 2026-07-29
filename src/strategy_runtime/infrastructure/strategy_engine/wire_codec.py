@@ -54,6 +54,7 @@ _CLOSE_SIGNAL_FIELDS = frozenset({"active", "reason", "component_id", "layer"})
 
 def encode_live_entry_request(request: LiveEntryProjectionRequest) -> dict[str, object]:
     """Create the exact five-field Engine live-entry request body."""
+    _validate_live_entry_request(request)
     return {
         "strategy_id": request.strategy_id,
         "raw_spec": _unfreeze_json(request.raw_spec),
@@ -61,6 +62,16 @@ def encode_live_entry_request(request: LiveEntryProjectionRequest) -> dict[str, 
         "base_timeframe": request.base_timeframe,
         "target_bar_open_time_ms": request.target_bar_open_time_ms,
     }
+
+
+def _validate_live_entry_request(request: LiveEntryProjectionRequest) -> None:
+    if type(request) is not LiveEntryProjectionRequest:
+        raise TypeError("request must be LiveEntryProjectionRequest")
+    _require_request_string(request.strategy_id, "strategy_id")
+    _require_request_string(request.ticker, "ticker")
+    _require_request_string(request.base_timeframe, "base_timeframe")
+    _require_json_object_mapping(request.raw_spec, "raw_spec")
+    _require_exact_int(request.target_bar_open_time_ms, "target_bar_open_time_ms")
 
 
 def decode_live_entry_response(
@@ -79,6 +90,7 @@ def decode_live_entry_response(
 
 def encode_open_trade_request(request: OpenTradeProjectionRequest) -> dict[str, object]:
     """Create the exact six-field Engine open-trade request body."""
+    _validate_open_trade_request(request)
     entry = request.desired_entry
     return {
         "strategy_id": request.strategy_id,
@@ -96,6 +108,19 @@ def encode_open_trade_request(request: OpenTradeProjectionRequest) -> dict[str, 
             "locked_exit_profile": entry.locked_exit_profile,
         },
     }
+
+
+def _validate_open_trade_request(request: OpenTradeProjectionRequest) -> None:
+    if type(request) is not OpenTradeProjectionRequest:
+        raise TypeError("request must be OpenTradeProjectionRequest")
+    _require_request_string(request.strategy_id, "strategy_id")
+    _require_request_string(request.ticker, "ticker")
+    _require_request_string(request.base_timeframe, "base_timeframe")
+    _require_json_object_mapping(request.raw_spec, "raw_spec")
+    _require_exact_int(request.target_bar_open_time_ms, "target_bar_open_time_ms")
+    _require_exact_int(request.entry_bar_open_time_ms, "entry_bar_open_time_ms")
+    if type(request.desired_entry) is not DesiredEntry:
+        raise TypeError("desired_entry must be DesiredEntry")
 
 
 def decode_open_trade_response(
@@ -222,6 +247,21 @@ def _raise_engine_public_error(status_code: int, payload: object) -> NoReturn:
         details=frozen_details,
         request_id=request_id,
     )
+
+
+def _require_request_string(value: object, name: str) -> None:
+    if type(value) is not str:
+        raise TypeError(f"{name} must be a string")
+
+
+def _require_json_object_mapping(value: object, name: str) -> None:
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{name} must be a JSON object mapping")
+
+
+def _require_exact_int(value: object, name: str) -> None:
+    if type(value) is not int:
+        raise TypeError(f"{name} must be a JSON integer, not a boolean")
 
 
 def _unfreeze_json(value: FrozenJsonValue) -> object:

@@ -1,5 +1,6 @@
 import json
 from collections.abc import Callable
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -65,6 +66,26 @@ def test_request_shape_is_closed_and_preserves_raw_spec_and_decimals() -> None:
     assert "trade_cycle_id" not in body
     assert "instance_id" not in body
     assert "executed_entry_price" not in body
+
+
+def test_boolean_target_bar_open_time_ms_is_rejected_before_http_call() -> None:
+    request = replace(make_request(), target_bar_open_time_ms=True)
+    fake = FakeEngine(lambda _: json_response(200, {"desired_entry": None}))
+
+    with pytest.raises(TypeError):
+        project(fake, request)
+
+    assert fake.requests == []
+
+
+def test_non_object_raw_spec_is_rejected_before_http_call() -> None:
+    request = replace(make_request(), raw_spec="not-an-object")
+    fake = FakeEngine(lambda _: json_response(200, {"desired_entry": None}))
+
+    with pytest.raises(TypeError):
+        project(fake, request)
+
+    assert fake.requests == []
 
 
 def test_decodes_present_desired_entry_with_domain_normalization() -> None:

@@ -1,5 +1,6 @@
 import json
 from collections.abc import Callable
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -73,6 +74,46 @@ def test_request_regroups_into_executed_trade_receipt_without_new_facts() -> Non
     assert "executed_entry_price" not in receipt
     assert "strategy_instance_id" not in receipt
     assert "trade_cycle_id" not in receipt
+
+
+def test_boolean_target_bar_open_time_ms_is_rejected_before_http_call() -> None:
+    request = replace(make_request(), target_bar_open_time_ms=True)
+    fake = FakeEngine(lambda _: json_response(200, success_body()))
+
+    with pytest.raises(TypeError):
+        project(fake, request)
+
+    assert fake.requests == []
+
+
+def test_boolean_entry_bar_open_time_ms_is_rejected_before_http_call() -> None:
+    request = replace(make_request(), entry_bar_open_time_ms=True)
+    fake = FakeEngine(lambda _: json_response(200, success_body()))
+
+    with pytest.raises(TypeError):
+        project(fake, request)
+
+    assert fake.requests == []
+
+
+def test_non_object_raw_spec_is_rejected_before_http_call() -> None:
+    request = replace(make_request(), raw_spec="not-an-object")
+    fake = FakeEngine(lambda _: json_response(200, success_body()))
+
+    with pytest.raises(TypeError):
+        project(fake, request)
+
+    assert fake.requests == []
+
+
+def test_wrong_type_desired_entry_is_rejected_before_http_call() -> None:
+    request = replace(make_request(), desired_entry="not-a-desired-entry")
+    fake = FakeEngine(lambda _: json_response(200, success_body()))
+
+    with pytest.raises(TypeError):
+        project(fake, request)
+
+    assert fake.requests == []
 
 
 def test_decodes_complete_projection_response() -> None:

@@ -71,9 +71,11 @@ def test_new_engine_adapters_module_has_no_forbidden_dependencies() -> None:
     )
 
 
-def test_existing_abi_entry_package_client_is_unmodified_by_this_change() -> None:
-    """9.3 (scoped): the shared Engine wire codec/adapters do not touch the
-    archived ABI entry-package HTTP client module or its helpers."""
+def test_engine_adapters_do_not_depend_on_abi_entry_package_client() -> None:
+    """The shared Engine wire codec/adapters have no dependency on the ABI
+    entry-package client's transport-free models or codec. This does not
+    assert anything about that client's own content, which a later I4c task
+    may change independently."""
     engine_source = "\n".join(
         path.read_text(encoding="utf-8")
         for path in STRATEGY_ENGINE_INFRASTRUCTURE_PACKAGE.glob("*.py")
