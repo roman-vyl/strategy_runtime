@@ -74,9 +74,6 @@ def test_new_engine_adapters_module_has_no_forbidden_dependencies() -> None:
 def test_existing_abi_entry_package_client_is_unmodified_by_this_change() -> None:
     """9.3 (scoped): the shared Engine wire codec/adapters do not touch the
     archived ABI entry-package HTTP client module or its helpers."""
-    source_path = Path("src/strategy_runtime/runtime/abi/entry_package_codec.py")
-    assert "accepted_risk_multiplier" in source_path.read_text(encoding="utf-8")
-
     engine_source = "\n".join(
         path.read_text(encoding="utf-8")
         for path in STRATEGY_ENGINE_INFRASTRUCTURE_PACKAGE.glob("*.py")

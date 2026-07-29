@@ -134,14 +134,10 @@ def assert_success_schemas(
         "trade_cycle_id",
         "status",
         "applied_desired_entry",
-        "accepted_risk_multiplier",
         "calculated_quantity",
     }
     assert applied["properties"]["status"] == {"const": "entry_package_applied"}
-    assert applied["properties"]["accepted_risk_multiplier"] == {
-        "type": "string",
-        "format": "positive-exact-decimal",
-    }
+    assert "accepted_risk_multiplier" not in applied["properties"]
     assert applied["properties"]["calculated_quantity"] == {
         "type": "string",
         "format": "exact-decimal",

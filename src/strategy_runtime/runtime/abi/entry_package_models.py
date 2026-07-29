@@ -61,7 +61,6 @@ class EntryPackageApplied:
     strategy_instance_id: str
     trade_cycle_id: str
     applied_desired_entry: EntryPackageWireDesiredEntry
-    accepted_risk_multiplier: str
     calculated_quantity: str
 
     status: ClassVar[Literal["entry_package_applied"]] = "entry_package_applied"
@@ -71,9 +70,6 @@ class EntryPackageApplied:
         _require_non_empty_string(self.trade_cycle_id, "trade_cycle_id")
         if type(self.applied_desired_entry) is not EntryPackageWireDesiredEntry:
             raise TypeError("applied_desired_entry must be EntryPackageWireDesiredEntry")
-        _require_positive_exact_decimal_text(
-            self.accepted_risk_multiplier, "accepted_risk_multiplier"
-        )
         _require_exact_decimal_text(self.calculated_quantity, "calculated_quantity")
 
 

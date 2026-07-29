@@ -66,9 +66,6 @@ def test_new_open_position_adapter_module_has_no_forbidden_dependencies() -> Non
 
 
 def test_existing_abi_entry_package_client_is_untouched_by_open_position_adapter() -> None:
-    source_path = Path("src/strategy_runtime/runtime/abi/entry_package_codec.py")
-    assert "accepted_risk_multiplier" in source_path.read_text(encoding="utf-8")
-
     open_position_source = "\n".join(
         path.read_text(encoding="utf-8") for path in ABI_INFRASTRUCTURE_PACKAGE.glob("*.py")
     )
