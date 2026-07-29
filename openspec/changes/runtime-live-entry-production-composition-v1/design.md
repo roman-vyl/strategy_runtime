@@ -20,9 +20,22 @@ FilesystemDeploymentCatalog
 
 `I4d` is a pure composition change: construct the existing semantic core and
 the existing outbound adapters once, attach the semantic core as the
-boundary's production sink, add the config inputs the adapters need, and give
-the resulting HTTP clients one explicit owner. No orchestration, reconciliation,
-or wire-contract decision made in `I3`/`I4a`/`I4b`/`I4c` is reopened here.
+boundary's one and only production sink, add the config inputs the adapters
+need, and give the resulting HTTP clients one explicit owner. No orchestration,
+reconciliation, or wire-contract decision made in `I3`/`I4a`/`I4b`/`I4c` is
+reopened here.
+
+`build_application` becomes the single production composition root with
+exactly one ready construction path. It no longer accepts a caller-supplied
+`strategy_cycle_handoff` override: a `ready=True` result always means the
+complete graph below was constructed. This is a deliberate closure of a
+structural ambiguity: an earlier draft of this design kept a "test override"
+construction mode that could return `ready=True` with only the utility contour
+and no semantic graph at all. That second, structurally different path is
+removed entirely — not replaced by another injection parameter, environment
+flag, or "utility mode" — because it re-opened exactly the kind of
+default-vs-override composition ambiguity this change exists to close (see
+"Rejected alternatives" below).
 
 ## Goals / Non-Goals
 
@@ -34,10 +47,13 @@ or wire-contract decision made in `I3`/`I4a`/`I4b`/`I4c` is reopened here.
   for them, reusing each adapter's own URL/timeout validation rather than
   duplicating it.
 - Give the four HTTP clients one explicit constructor/owner with a
-  deterministic shutdown and partial-construction-failure cleanup.
+  deterministic shutdown and startup-rollback cleanup.
 - Prove one real vertical background path (webhook → background handoff →
   Engine → ABI → save) with real HTTP-shaped transport on the Runtime side,
   and prove the no-op/cancel/failure branches individually.
+- Make `build_application` a single-path composition root: every `ready=True`
+  result has the complete graph, with no alternative utility-only ready
+  result and no caller-supplied composition override.
 
 **Non-Goals**
 
@@ -52,6 +68,8 @@ or wire-contract decision made in `I3`/`I4a`/`I4b`/`I4c` is reopened here.
 - The ABI fill webhook, `AbiExecutionEventOrchestrator`, or open-trade
   application (`I5`/`I6`/open-trade gate).
 - Engine, ABI, or MDS contract changes.
+- Preserving any caller-supplied composition override in
+  `build_application` — this is explicitly removed, not preserved (§2a).
 
 ## 1. Existing vs. target composition graph
 
@@ -86,32 +104,36 @@ POST /v1/webhooks/closed-bar                              [unchanged]
     -> FilesystemDeploymentCatalog.load_snapshot            [unchanged]
     -> CommittedBarDeploymentSelector.select                [unchanged]
     -> per selected deployment: StrategyCycleHandoffBoundary.dispatch(unit)
-        -> StrategyRuntimeOrchestrator.process(unit)        [NEW production sink]
-            -> keyed_mutex_registry.hold(strategy_instance_id)      [shared]
-            -> state_repository.get_or_create(...)                  [shared]
-            -> OpenPositionResolver.resolve(state)
-                -> HttpxAbiOpenPositionLookupAdapter.lookup(...)     [shared client]
-            -> StrategyUseCaseRouter.route(...)
-                -> position_open=False
-                   -> HttpxStrategyEngineLiveEntryAdapter.project_live_entry(...)  [shared client]
-                -> position_open=True
-                   -> HttpxStrategyEngineOpenTradeAdapter.project_open_trade(...)  [shared client]
-            -> LiveEntryProjectedStrategyInstance
-                -> EntryReconciliationOrchestrator.execute(projection)
-                    -> AbiEntryPackageExecutionBridge.execute(command, source_state)
-                        -> HttpxAbiEntryPackageAdapter.send(...)     [shared client]
-            -> state_repository.save(resulting_state)   [only if resulting_state != source_state]
+        -> process_strategy_cycle(unit)                     [NEW, unconditional, thin sink]
+            -> StrategyRuntimeOrchestrator.process(unit)
+                -> keyed_mutex_registry.hold(strategy_instance_id)      [shared]
+                -> state_repository.get_or_create(...)                  [shared]
+                -> OpenPositionResolver.resolve(state)
+                    -> HttpxAbiOpenPositionLookupAdapter.lookup(...)     [shared client]
+                -> StrategyUseCaseRouter.route(...)
+                    -> position_open=False
+                       -> HttpxStrategyEngineLiveEntryAdapter.project_live_entry(...)  [shared client]
+                    -> position_open=True
+                       -> HttpxStrategyEngineOpenTradeAdapter.project_open_trade(...)  [shared client]
+                -> LiveEntryProjectedStrategyInstance
+                    -> EntryReconciliationOrchestrator.execute(projection)
+                        -> AbiEntryPackageExecutionBridge.execute(command, source_state)
+                            -> HttpxAbiEntryPackageAdapter.send(...)     [shared client]
+                -> state_repository.save(resulting_state)   [only if resulting_state != source_state]
     -> JsonlProcessingJournal                                [unchanged]
 ```
 
-Only the sink attached to `StrategyCycleHandoffBoundary` changes; every stage
-above it (HTTP boundary, `CommittedBarOrchestrator`, deployment catalog/
-selector, processing journal) is byte-for-byte the existing implementation.
+Only the sink attached to `StrategyCycleHandoffBoundary` changes, and it
+changes unconditionally — there is no branch of `build_application` that skips
+this graph. Every stage above it (HTTP boundary, `CommittedBarOrchestrator`,
+deployment catalog/selector, processing journal) is byte-for-byte the existing
+implementation.
 
 ## 2. Construction ownership
 
 `build_application` becomes the single composition root for the entire graph
-above. It constructs, in dependency order:
+above, with exactly one ready construction path (no parameter selects a
+different one). It constructs, in dependency order:
 
 1. The existing utility contour (unchanged construction).
 2. Four outbound HTTP clients (one per adapter instance; see §6 for the exact
@@ -123,9 +145,9 @@ above. It constructs, in dependency order:
 7. One `StrategyInstanceKeyedMutexRegistry()`.
 8. `EntryReconciliationOrchestrator(trade_cycle_id_factory=new_trade_cycle_id, execution_port=<bridge>)`.
 9. `StrategyRuntimeOrchestrator(state_repository=<6>, open_position_resolver=<3>, use_case_router=<4>, keyed_mutex_registry=<7>, entry_reconciliation_orchestrator=<8>)`.
-10. A thin, `None`-returning sink function wrapping `<9>.process(unit)` (see
+10. The thin, `None`-returning sink function wrapping `<9>.process(unit)` (see
     the closed "Sink signature" decision below), passed as
-    `StrategyCycleHandoffBoundary(sink=<that function>)`.
+    `StrategyCycleHandoffBoundary(sink=process_strategy_cycle)`.
 
 No step above introduces a new class; every constructor signature already
 exists on `main`. `I4d` only adds the call sites and the config plumbing that
@@ -156,41 +178,48 @@ signature. `.dispatch` remains available for any caller that wants a
 `StrategyCycleDispatchOutcome` directly (none does, in this graph);
 `StrategyCycleHandoffBoundary` is that caller for `CommittedBarOrchestrator`,
 and it calls the thin sink, not `.dispatch`, to avoid the redundant nested
-outcome above.
+outcome above. This sink is the *only* sink `build_application` ever attaches
+— unconditionally, for every call, since no override parameter exists (§2a).
 
-## 2a. Default production path vs. test override path
+## 2a. Single ready construction path (no caller override)
 
-`build_application` has exactly two construction modes, and this change keeps
-them structurally distinct — one never partially resembles the other:
+`build_application`'s public signature no longer declares a
+`strategy_cycle_handoff` parameter. There is exactly one construction path:
 
-**Default production composition** (`strategy_cycle_handoff` is `None`):
+```text
+build_application(...)
+-> load complete production config (five outbound fields + existing fields)
+-> construct the complete Runtime graph (§2 steps 1-9)
+-> attach the thin process_strategy_cycle sink (§2 step 10)
+-> return ready=True
+```
 
-- all five outbound config fields (§7) are mandatory for `ready=True`;
-- the complete semantic graph (§2 steps 3–9) and all four outbound HTTP
-  clients (§2 step 2, §6) are constructed;
-- the thin sink (§2 step 10) invokes `StrategyRuntimeOrchestrator.process`.
+or, on any config or construction failure, the not-ready application (§6, §7).
+There is no second path, mode, flag, or parameter that returns `ready=True`
+with only the utility contour and no semantic graph. Concretely:
 
-**Explicit test override** (`strategy_cycle_handoff` is supplied):
+- the five outbound config fields are required for every `ready=True` result,
+  with no exception;
+- the complete semantic graph and all four outbound HTTP clients are
+  constructed for every `ready=True` result, with no exception;
+- `build_application` accepts no parameter that lets a caller replace
+  `process_strategy_cycle` with a different sink, skip constructing the
+  semantic graph, or skip constructing the four outbound HTTP clients.
 
-- the existing utility-only test seam is preserved exactly as implemented
-  today;
-- the caller-supplied sink is attached to `StrategyCycleHandoffBoundary`
-  instead of the thin production sink;
-- the semantic Runtime graph and the four outbound HTTP clients are **not**
-  constructed;
-- the five outbound config fields are **not** required for the application to
-  report `ready=True`.
-
-This distinction is required to preserve the existing
-`tests/integration/committed_bar/test_production_composition.py` contract: it
-calls `build_application(..., strategy_cycle_handoff=received.append)`
-supplying only the existing utility-only configuration
-(`RUNTIME_SPECS_PATH`, `RUNTIME_JOURNAL_PATH`) and asserts a ready
-application. If the five outbound fields were unconditionally mandatory
-regardless of the override, that existing test would start reporting
-`ready=False` — a regression this change must not cause. The override remains
-a Python test seam, never a documented production/environment configuration
-path.
+**Consequence for utility-contour testing.** The existing
+`tests/integration/committed_bar/test_production_composition.py` test
+previously exercised the utility contour in isolation by calling
+`build_application(..., strategy_cycle_handoff=received.append)` with only
+utility-only configuration. That call shape no longer compiles/type-checks
+against the new signature and would no longer return `ready=True` if it did
+(the five outbound fields would be missing). This is an intended, accepted
+consequence, not an oversight: `build_application` is a production composition
+root, not a utility-contour test harness. The utility contour's own isolated
+testability does not depend on `build_application` at all — it is fully
+exercised by constructing `FilesystemDeploymentCatalog`,
+`CommittedBarDeploymentSelector`, `JsonlProcessingJournal`, and
+`StrategyCycleHandoffBoundary` directly (tasks.md §6 requires this rewrite as
+part of implementation, not as a follow-up).
 
 ## 3. Background webhook lifecycle
 
@@ -200,11 +229,12 @@ request, checks `app.state.ready`, registers
 `200 {"status":"accepted"}` before that task runs. `I4d` changes only what
 `process_committed_bar` is bound to at construction time — today a closure
 over `CommittedBarOrchestrator.process` with an unattached handoff sink;
-after `I4d`, the same closure, but the handoff sink is now the composed
-`StrategyRuntimeOrchestrator`. The background task's exception-swallowing
-behavior (`test_background_failure_does_not_change_acknowledgement`) is
-unchanged: `CommittedBarOrchestrator.process` already isolates and journals a
-per-unit dispatch failure without raising past its own boundary, and
+after `I4d`, the same closure, but the handoff sink is now, unconditionally,
+the thin wrapper over the composed `StrategyRuntimeOrchestrator`. The
+background task's exception-swallowing behavior
+(`test_background_failure_does_not_change_acknowledgement`) is unchanged:
+`CommittedBarOrchestrator.process` already isolates and journals a per-unit
+dispatch failure without raising past its own boundary, and
 `process_committed_bar` still runs as a fire-and-forget `BackgroundTasks`
 callback.
 
@@ -238,10 +268,12 @@ same two objects into the single `StrategyRuntimeOrchestrator`. No other
 constructor in the graph receives its own instance of either. This change does
 not yet expose either instance for `I5` to reuse (no fill webhook exists yet),
 but composition must not make sharing structurally impossible: both instances
-should be reachable from the composition root (e.g., held as local variables
-returned alongside the app, or attached to application state) so a future `I5`
-change can pass the same instances into `AbiExecutionEventOrchestrator` without
-restructuring `build_application`. Guardrail tests assert `is`-identity, not a
+should be reachable from the composition-owned application bundle/state that
+`build_application` returns (e.g., held as local variables returned alongside
+the app, or attached to application state) so a future `I5` change can pass the
+same instances into `AbiExecutionEventOrchestrator` without restructuring
+`build_application` and without introducing an alternative build mode or
+parameter to expose them. Guardrail tests assert `is`-identity, not a
 construction call count, since a call-count assertion cannot detect two
 separately constructed-but-equal instances.
 
@@ -261,33 +293,53 @@ convenience, not a new architectural layer. The exact FastAPI wiring mechanism
 (a `lifespan` context manager vs. an equivalent) is left to `tasks.md`, not
 pinned by this design.
 
-Contracted lifecycle:
+One composition lifecycle owner performs exactly two allowed close
+operations across the application's life — **startup rollback** and
+**application shutdown** — and no other code path ever calls `close()` on any
+of the four clients: not an HTTP request handler, not a background
+committed-bar cycle, not `StrategyRuntimeOrchestrator`, `OpenPositionResolver`,
+`StrategyUseCaseRouter`, `EntryReconciliationOrchestrator`, an outbound adapter
+after an individual call, or any other caller.
 
-- Each of the four clients is constructed exactly once, during
-  `build_application`, for the default production construction mode only
-  (§2a); no client is constructed under the test-override mode.
-- The same four instances are reused for every background committed-bar cycle
-  and every strategy instance for the lifetime of the application; no adapter
-  is constructed per request or per cycle.
-- On application shutdown, each of the four owned clients is closed exactly
-  once. Closing is idempotent per client (`close()` may safely be the only
-  call), and the composition root is the only code path that calls it — no
-  adapter closes itself, and no per-request code path closes a shared client.
-- Construction happens in a deterministic order (§2 steps). A later client's
-  constructor may reject invalid configuration (missing variable, malformed
-  URL, non-finite/non-positive timeout) after one or more earlier clients
-  already constructed successfully — that is allowed as a transient
-  construction-time state. What is never allowed is returning a *ready*
-  application with that partially constructed set of clients: the moment a
-  constructor rejects its configuration, every client already constructed
-  before it is closed, and `build_application` returns the not-ready
-  application instead.
-- Config is loaded and parsed before any HTTP client construction begins
-  (mirroring journal/specs-path preparation already preceding catalog
-  construction today), but loading/parsing success does not by itself
-  guarantee every adapter constructor will accept its fields — the adapters'
-  own URL/timeout validation (§7) is the final gate, and it can still reject a
-  field after earlier clients were built.
+### Successful ready construction
+
+```text
+four clients constructed once
+-> reused for every background committed-bar cycle, for the application's life
+-> each closed exactly once, by the lifecycle owner, on application shutdown
+```
+
+### Failed partial construction (startup rollback)
+
+```text
+some clients constructed
+-> a later client's constructor rejects its configuration
+-> every already-constructed client is closed exactly once, by the lifecycle
+   owner, during startup rollback -- not shutdown, since no ready application
+   exists yet
+-> those clients are never exposed in a returned application
+-> they are not closed again later (rollback already closed them)
+-> build_application returns the not-ready application
+```
+
+Construction happens in the deterministic order fixed by §2. Two distinct
+config-failure stages exist and must not be conflated (§7 has the exact field
+-by-field boundary):
+
+- **Before any client is constructed** (config loading/parsing): a missing
+  required variable, or a timeout string that cannot parse to `float`, is
+  discovered here — before any HTTP client exists. Zero clients are
+  constructed; there is nothing for startup rollback to close.
+- **During client construction** (adapter constructor validation): a value
+  that parsed successfully but is semantically invalid — a
+  malformed/non-absolute/non-HTTP(S) URL, a `NaN`/infinite timeout, or a
+  zero/negative timeout — is discovered only when an adapter constructor
+  runs. One or more earlier clients in the deterministic order may already
+  exist at that point; startup rollback closes each of them exactly once.
+
+Either stage ends the same way: `build_application` returns the not-ready
+application, and no partially usable production graph is ever returned as
+`ready=True`.
 
 ## 7. Config and readiness
 
@@ -298,6 +350,9 @@ Contracted lifecycle:
 | `RUNTIME_ABI_BASE_URL` | str | absolute `http`/`https` URL | ABI open-position adapter and ABI entry-package client |
 | `RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS` | float | finite, `> 0` | ABI open-position adapter only |
 | `RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS` | float | finite, `> 0` | ABI entry-package client only |
+
+These five fields are unconditionally required for any `ready=True` result of
+`build_application` — there is no construction path that omits them (§2a).
 
 One `RUNTIME_ABI_BASE_URL` is shared by two independently timed-out ABI
 adapters; there is no separate base URL per ABI endpoint. URL scheme/host and
@@ -314,14 +369,17 @@ mirroring how `RUNTIME_PORT` parsing already delegates its range check to
 Readiness stays exactly the existing fail-closed pattern in
 `build_application`: config loading, journal/specs preparation, and now the
 five new fields plus adapter construction all happen inside the same
-`try/except Exception` block that already exists; any failure — a missing
-variable, an unparsable timeout, an invalid URL, or an adapter constructor
-`ValueError` — produces `ready=False` via the existing
-`create_http_app(ready=False, ...)` branch, after closing any client already
-constructed before that failure (§6). No new retry, circuit breaker, or
-speculative-policy field is introduced. These five fields, and the adapter
-construction they gate, apply only to the default production construction
-mode (§2a); the test-override mode requires none of them.
+`try/except Exception` block that already exists. Two distinct failure stages
+exist (§6) and must be kept distinct in implementation and tests: a missing
+variable or an unparsable timeout string is discovered during config
+loading/parsing, before any HTTP client is constructed — this can never be
+discovered for the first time by a late adapter constructor, since parsing
+happens first. A malformed URL, a non-finite/non-positive timeout, or another
+adapter-constructor rejection is discovered only during client construction,
+after zero or more earlier clients already exist. Either stage produces
+`ready=False` via the existing `create_http_app(ready=False, ...)` branch,
+closing any client already constructed via startup rollback (§6). No new
+retry, circuit breaker, or speculative-policy field is introduced.
 
 ## 8. Background success sequence (happy path)
 
@@ -411,6 +469,19 @@ worker framework, retry, replay, or deduplication mechanism.
 
 ## 12. Rejected alternatives
 
+**A caller-supplied composition override (`strategy_cycle_handoff` parameter)
+carried forward from the pre-`I4d` bootstrap.** Rejected, after being tried in
+an earlier draft of this design. Keeping a parameter that lets a caller
+replace the production sink — and thereby skip constructing the semantic graph
+and the four outbound HTTP clients — creates a second, structurally different
+`ready=True` result alongside the production graph. That is exactly the
+composition ambiguity this change exists to close: "is `ready=True` always the
+complete graph?" must have one unconditional answer. The override is removed
+outright, not replaced by another injection parameter, environment flag, or
+"utility mode" — the utility contour's isolated testability is preserved by
+testing its components directly (§2a), which needs no override in
+`build_application` at all.
+
 **Synchronous HTTP processing.** Replacing `BackgroundTasks` with an in-request
 synchronous call to the full composed graph was considered so the HTTP
 response could reflect a confirmed outcome. Rejected: it would change the
@@ -455,8 +526,10 @@ the application lifetime.
 
 - `I5` (ABI fill webhook, `AbiExecutionEventOrchestrator`) starts only after
   this change is verified and archived, and must reuse the exact repository
-  and keyed-mutex-registry instances this change constructs — it must not
-  construct a second instance of either.
+  and keyed-mutex-registry instances this change constructs, reached through
+  the composition-owned application bundle/state that `build_application`
+  returns — it must not construct a second instance of either, and must not
+  reintroduce an alternative build mode or override parameter to obtain them.
 - `I6` (entry/fill cross-flow guardrails) and the open-trade
   requirements/implementation gate remain fully out of scope; this change
   keeps `OpenTradeProjectionUnsupportedError` as the only observable behavior
@@ -475,19 +548,29 @@ the application lifetime.
 - A process restart between HTTP acknowledgement and background-task
   completion silently drops that cycle (see §11). This is accepted for Live V1
   and not remediated by this change.
+- Removing `build_application`'s `strategy_cycle_handoff` parameter is a
+  breaking change to that function's call sites, including the existing
+  utility-contour test. This is an intended, one-time migration cost (tasks.md
+  §6), not an ongoing risk.
 
 ## Migration Plan
 
-No data migration. This is an additive composition and config change;
-existing deployments without the five new environment variables move from
-`ready=True` (utility-only) to `ready=False` (composition requires them) upon
-upgrade, which is the intended fail-closed behavior — operators must supply
-the five variables before the upgraded Runtime becomes ready.
+No data migration. This is an additive composition/config change plus one
+breaking signature change:
+
+- Existing deployments without the five new environment variables move from
+  `ready=True` to `ready=False` upon upgrade, which is the intended
+  fail-closed behavior — operators must supply the five variables before the
+  upgraded Runtime becomes ready.
+- Any call site (test or otherwise) passing `strategy_cycle_handoff=...` to
+  `build_application` must be updated: production code has none today; the
+  only known call site is the utility-contour test, which is rewritten to
+  construct utility components directly instead (tasks.md §6).
 
 ## Open Questions
 
-None outstanding. The acknowledgement-semantics, durability, capability-split,
-and composition-ownership decisions in this document were fixed by the
-architectural pre-pass review before this change was written; no unresolved
-discrepancy between the authoritative system plans and the current code
-remains after those decisions.
+None outstanding. The single-construction-path decision, the acknowledgement
+-semantics, durability, capability-split, and composition-ownership decisions
+in this document were fixed by the architectural pre-pass review before this
+change was written; no unresolved discrepancy between the authoritative
+system plans and the current code remains after those decisions.

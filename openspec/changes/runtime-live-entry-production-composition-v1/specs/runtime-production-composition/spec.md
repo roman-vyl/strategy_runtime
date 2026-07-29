@@ -1,11 +1,13 @@
 ## ADDED Requirements
 
 ### Requirement: Runtime composes exactly one production live-entry graph
-`strategy_runtime.bootstrap.application.build_application` SHALL construct, for
-a ready application, the complete production graph from the existing utility
-contour through the existing semantic core and existing outbound adapters to
-the existing `AbiEntryPackagePort` HTTP client, using only components already
-implemented and tested in isolation by prior changes.
+`strategy_runtime.bootstrap.application.build_application` SHALL construct,
+for every `ready=True` result, the complete production graph from the
+existing utility contour through the existing semantic core and existing
+outbound adapters to the existing `AbiEntryPackagePort` HTTP client, using
+only components already implemented and tested in isolation by prior
+changes. There is no caller-supplied override that replaces any part of this
+graph, and no construction path returns `ready=True` with only part of it.
 
 #### Scenario: Compose the existing components, not new ones
 - **WHEN** `build_application` constructs a ready application
@@ -19,23 +21,23 @@ implemented and tested in isolation by prior changes.
 - **AND** it introduces no new top-level orchestrator, reconciliation
   component, or outbound adapter class
 
-#### Scenario: Attach the semantic core through a thin production sink
-- **WHEN** `build_application` is called without a caller-supplied
-  `strategy_cycle_handoff` override
+#### Scenario: Attach the semantic core through a thin production sink, unconditionally
+- **WHEN** `build_application` constructs a ready application
 - **THEN** `StrategyCycleHandoffBoundary` is constructed with a thin,
   `None`-returning sink function that calls
   `StrategyRuntimeOrchestrator.process(unit)` and discards its result
-- **AND** no unattached (no-op) sink is used in that default production path
+- **AND** no unattached (no-op) sink is used, and no other sink is ever
+  attached in a `ready=True` application
 - **AND** `.dispatch` is not used as the sink (it would construct a second,
   discarded `StrategyCycleDispatchOutcome`)
 
-#### Scenario: Preserve the existing test override seam
-- **WHEN** a caller supplies an explicit `strategy_cycle_handoff` argument to
-  `build_application`
-- **THEN** that caller-supplied sink is used instead of the production
-  `StrategyRuntimeOrchestrator` sink
-- **AND** this override seam remains available for tests only, never as a
-  documented production configuration path
+#### Scenario: No caller-supplied composition override exists
+- **WHEN** `build_application`'s public signature is inspected
+- **THEN** it accepts no `strategy_cycle_handoff` or equivalent parameter that
+  could replace the production sink, skip constructing the semantic graph, or
+  skip constructing any of the four outbound HTTP clients
+- **AND** every `ready=True` application it returns has the complete graph
+  constructed — there is no alternative utility-only `ready=True` result
 
 ### Requirement: Exactly one shared state repository and keyed-mutex registry
 `build_application` SHALL construct exactly one
@@ -56,21 +58,26 @@ the same two instances into the one constructed `StrategyRuntimeOrchestrator`.
 - **AND** that exact object is the one `StrategyRuntimeOrchestrator` uses to
   serialize every strategy instance's critical section
 
-#### Scenario: Reusable by a future second writer
+#### Scenario: Reusable by a future second writer, with no alternative build mode
 - **WHEN** the composition root finishes construction
 - **THEN** the constructed repository and keyed-mutex-registry instances
-  remain reachable from the composition root (not only closed over privately
-  and unreachably)
+  remain reachable from the composition-owned application bundle/state that
+  `build_application` returns (not only closed over privately and
+  unreachably)
 - **AND** a future change may pass the same two instances into a second
-  writer without reconstructing either
+  writer without reconstructing either and without introducing an
+  alternative build mode, parameter, or flag to obtain them
 
-### Requirement: Outbound HTTP clients are constructed once and closed once
+### Requirement: Outbound HTTP clients are constructed once and closed exactly once by one lifecycle owner
 The composition root SHALL be the single owner of the four production HTTP
 clients (`HttpxStrategyEngineLiveEntryAdapter`,
 `HttpxStrategyEngineOpenTradeAdapter`, `HttpxAbiOpenPositionLookupAdapter`,
-`HttpxAbiEntryPackageAdapter`): each SHALL be constructed exactly once at
-application construction, reused across every background committed-bar cycle,
-and closed exactly once at application shutdown.
+`HttpxAbiEntryPackageAdapter`): each SHALL be constructed exactly once during
+`build_application`, reused across every background committed-bar cycle for
+the application's life, and closed exactly once by that same lifecycle owner
+— either during startup rollback (if construction fails partway) or during
+application shutdown (if construction succeeded) — and never by any other
+caller.
 
 #### Scenario: Construct once, reuse across cycles
 - **WHEN** the composed application processes multiple committed-bar cycles,
@@ -78,36 +85,48 @@ and closed exactly once at application shutdown.
 - **THEN** the same four HTTP client instances handle every outbound call
 - **AND** no HTTP client is constructed per request or per background cycle
 
-#### Scenario: Close every owned client on shutdown
+#### Scenario: Close every owned client exactly once on shutdown
 - **WHEN** the application shuts down after a successful ready construction
-- **THEN** each of the four owned HTTP clients is closed exactly once
+- **THEN** each of the four owned HTTP clients is closed exactly once, by the
+  composition lifecycle owner
 - **AND** no owned client is left open
 
-#### Scenario: Partial construction failure closes what was built
-- **WHEN** constructing the four HTTP clients fails partway (e.g., a later
-  client's configuration is invalid after earlier clients already constructed)
-- **THEN** every client already constructed before the failure is closed
+#### Scenario: Startup rollback closes what was built, not shutdown
+- **WHEN** constructing the four HTTP clients fails partway (a later client's
+  configuration is rejected after one or more earlier clients already
+  constructed successfully)
+- **THEN** the composition lifecycle owner closes every client already
+  constructed, exactly once each, as part of startup rollback — before
+  `build_application` returns the not-ready application
 - **AND** `build_application` returns a not-ready application instead of a
   partially constructed production graph
+- **AND** those rolled-back clients are not exposed in any returned
+  application and are not closed again later
 
-#### Scenario: No caller closes a shared client directly
-- **WHEN** a background cycle or an outbound adapter call completes, whether
-  successfully or with a failure
-- **THEN** no code path other than application shutdown calls `close()` on any
-  of the four owned clients
+#### Scenario: Only the composition lifecycle owner ever closes a client
+- **WHEN** a background cycle, an HTTP request, or an individual outbound
+  adapter call completes, whether successfully or with a failure
+- **THEN** none of an HTTP request handler, a background committed-bar cycle,
+  `StrategyRuntimeOrchestrator`, `OpenPositionResolver`,
+  `StrategyUseCaseRouter`, `EntryReconciliationOrchestrator`, an outbound
+  adapter itself, or any other caller calls `close()` on any of the four
+  owned clients
+- **AND** only the composition lifecycle owner calls `close()`, and only
+  during startup rollback or application shutdown
 
 ### Requirement: Production configuration gates ready composition fail-closed
 Strategy Runtime SHALL require `RUNTIME_STRATEGY_ENGINE_BASE_URL`,
 `RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS`, `RUNTIME_ABI_BASE_URL`,
 `RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS`, and
-`RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS` for the default production
-construction path (`strategy_cycle_handoff` not supplied), and SHALL never
-return a partially constructed *ready* production graph. Outbound HTTP
-clients are constructed in a deterministic order; a later constructor may
-reject invalid configuration after one or more earlier clients already
-constructed successfully — that is allowed as a transient construction-time
-state, but it always closes every client already constructed and yields
-`ready=False` rather than a ready application missing some outbound client.
+`RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS` unconditionally for any
+`ready=True` result of `build_application`, and SHALL never return a
+partially constructed *ready* production graph. Two distinct failure stages
+exist: config loading/parsing (a missing required variable, or a timeout
+string that cannot parse to `float`) happens before any outbound HTTP client
+is constructed; adapter-constructor validation (a malformed/non-absolute/
+non-HTTP(S) URL, a non-finite timeout, or a zero/negative timeout) happens
+only during client construction, after zero or more earlier clients already
+exist. Either stage yields `ready=False`.
 
 #### Scenario: Valid configuration constructs a ready graph
 - **WHEN** all five variables are present, each base URL is an absolute
@@ -115,20 +134,21 @@ state, but it always closes every client already constructed and yields
 - **THEN** `build_application` constructs the complete production graph
 - **AND** the resulting application reports `ready=True`
 
-#### Scenario: Missing or invalid configuration fails closed before any client is built
-- **WHEN** any of the five variables is missing, or the first client's
-  configuration in the construction order is invalid
-- **THEN** `build_application` constructs no outbound HTTP client
+#### Scenario: A missing or unparsable field fails closed before any client exists
+- **WHEN** any of the five variables is missing, or a timeout variable cannot
+  be parsed as a number
+- **THEN** `build_application` constructs zero outbound HTTP clients
 - **AND** the resulting application reports `ready=False`, matching the
   existing not-ready pattern already used for invalid `RuntimeConfig`
 
 #### Scenario: A later construction-time rejection still fails closed
 - **WHEN** one or more earlier outbound HTTP clients in the deterministic
   construction order already constructed successfully, and a later client's
-  configuration is invalid (missing variable, non-`http`/`https` URL, or
-  non-finite/non-positive timeout)
+  adapter constructor rejects a successfully parsed but semantically invalid
+  field (non-`http`/`https` URL, `NaN`/infinite timeout, or zero/negative
+  timeout)
 - **THEN** `build_application` closes every client already constructed before
-  that rejection
+  that rejection, via startup rollback
 - **AND** the resulting application reports `ready=False`
 - **AND** no partially usable production graph — with some outbound clients
   constructed and others missing — is ever returned as `ready=True`
@@ -146,33 +166,6 @@ state, but it always closes every client already constructed and yields
 - **WHEN** the five configuration fields are validated
 - **THEN** no retry-count, circuit-breaker, or other speculative reliability
   policy field is introduced
-
-### Requirement: Default production composition and test override are distinct construction modes
-`build_application` SHALL treat `strategy_cycle_handoff is None` (default
-production composition) and `strategy_cycle_handoff` supplied (explicit test
-override) as two distinct construction modes that never blend: the five
-outbound configuration fields and the four outbound HTTP clients belong only
-to the default production mode.
-
-#### Scenario: Five outbound fields are mandatory only for the default path
-- **WHEN** `build_application` is called without a `strategy_cycle_handoff`
-  override
-- **THEN** all five outbound configuration fields are required for the
-  application to report `ready=True`
-
-#### Scenario: Explicit override preserves the existing utility-only path
-- **WHEN** `build_application` is called with an explicit
-  `strategy_cycle_handoff` override and only the existing utility-only
-  configuration (`RUNTIME_SPECS_PATH`, `RUNTIME_JOURNAL_PATH`)
-- **THEN** the application reports `ready=True` without any of the five
-  outbound configuration fields present
-- **AND** none of the four outbound HTTP clients, the shared repository, the
-  shared keyed-mutex registry, or the semantic Runtime graph is constructed
-
-#### Scenario: No unused outbound resource is constructed under override
-- **WHEN** an explicit `strategy_cycle_handoff` override is supplied
-- **THEN** `build_application` does not construct any outbound HTTP client,
-  since the override path never uses one
 
 ### Requirement: Two acknowledgement boundaries remain distinct
 Strategy Runtime SHALL treat the MDS webhook acknowledgement and the ABI

@@ -15,7 +15,10 @@
   (`HttpxStrategyEngineLiveEntryAdapter`/`...OpenTradeAdapter`'s
   `_build_client`, `HttpxAbiOpenPositionLookupAdapter.__init__`,
   `HttpxAbiEntryPackageAdapter.__init__`) to reject an invalid URL or a
-  non-finite/non-positive timeout at construction time.
+  non-finite/non-positive timeout at construction time. Keep the two failure
+  stages distinct (design.md §6-§7): missing/unparsable fields fail during
+  config loading/parsing, before any client exists; malformed/non-finite
+  fields fail only during adapter construction.
 - [ ] 1.4 Confirm the existing `build_application` `try/except Exception`
   block already covers every new failure mode (missing env var, unparsable
   timeout, invalid URL, adapter constructor rejection) and yields
@@ -25,11 +28,10 @@
   each of missing/non-numeric/non-finite/non-positive timeout, and
   missing/malformed (non-`http`/`https`, no host) base URL, individually
   yields `ready=False` without raising past `build_application`.
-- [ ] 1.6 Confirm the five fields are required only for the default
-  production construction path (`strategy_cycle_handoff is None`, design.md
-  §2a); when an explicit `strategy_cycle_handoff` override is supplied,
-  `build_application` does not require or validate any of the five fields,
-  matching the existing utility-only test seam.
+- [ ] 1.6 Confirm the five fields are unconditionally required for
+  `build_application` to report `ready=True` — there is no construction path,
+  parameter, mode, or flag that returns `ready=True` without them (design.md
+  §2a).
 
 ## 2. Production Application Bundle / Composition Root
 
@@ -38,27 +40,28 @@
   HTTP clients (§4), `OpenPositionResolver`, `StrategyUseCaseRouter`,
   `AbiEntryPackageExecutionBridge`, the shared repository and mutex registry
   (§3), `EntryReconciliationOrchestrator`, and `StrategyRuntimeOrchestrator`,
-  using only their existing constructors.
+  using only their existing constructors, on the single ready construction
+  path (there is no other path).
 - [ ] 2.2 Implement the closed production sink decision (design.md §2
   "Sink signature (closed)"): a thin, `None`-returning function that calls
   `StrategyRuntimeOrchestrator.process(unit)` and discards its return value,
   passed as `StrategyCycleHandoffBoundary(sink=<that function>)`. Do not use
   `.dispatch` as the sink (it would construct a second, discarded
   `StrategyCycleDispatchOutcome`).
-- [ ] 2.3 Preserve the existing `strategy_cycle_handoff` override parameter on
-  `build_application` exactly as today: when supplied, it replaces the
-  production sink; when omitted, the thin sink calling
-  `StrategyRuntimeOrchestrator.process` is used.
+- [ ] 2.3 Remove the
+  `strategy_cycle_handoff: StrategyCycleHandoffSink[...] | None = None`
+  parameter from `build_application`'s public signature. `build_application`
+  always constructs
+  `StrategyCycleHandoffBoundary(sink=process_strategy_cycle)` using the thin
+  sink from §2.2, unconditionally; no caller can substitute a different sink.
 - [ ] 2.4 Do not introduce a new top-level orchestrator, reconciliation
   component, or outbound adapter class; every new call in `build_application`
   must reference an existing, already-tested class or function.
-- [ ] 2.5 Confirm the two construction modes stay distinct (design.md §2a):
-  when `strategy_cycle_handoff` is `None`, the five outbound config fields are
-  mandatory and the full semantic graph plus the four HTTP clients are
-  constructed; when `strategy_cycle_handoff` is supplied, the existing
-  utility-only test seam is preserved unchanged — the semantic graph and the
-  four HTTP clients are not constructed, and the five outbound fields are not
-  required for the application to become ready.
+- [ ] 2.5 Confirm there is exactly one ready construction path: any successful
+  `build_application(...)` call that returns `ready=True` has constructed the
+  full semantic graph, the shared repository/mutex, and all four outbound
+  HTTP clients — there is no utility-only `ready=True` result and no
+  parameter that produces one.
 
 ## 3. Shared Repository and Mutex Wiring
 
@@ -66,11 +69,12 @@
   and exactly one `StrategyInstanceKeyedMutexRegistry` per `build_application`
   call, and pass the same two objects into the one constructed
   `StrategyRuntimeOrchestrator`.
-- [ ] 3.2 Keep both instances reachable from the composition root (e.g., as
-  local variables the function can expose or attach to returned application
-  state) so a future `I5` change can reuse them without reconstructing either;
-  do not make them unreachably private to a closure that only
-  `StrategyRuntimeOrchestrator` can see.
+- [ ] 3.2 Keep both instances reachable from the composition-owned application
+  bundle/state that `build_application` returns (e.g., as local variables the
+  function can expose or attach to returned application state) so a future
+  `I5` change can reuse them without reconstructing either and without a new
+  build mode or parameter; do not make them unreachably private to a closure
+  that only `StrategyRuntimeOrchestrator` can see.
 - [ ] 3.3 Add a guardrail test asserting `is`-identity: the exact repository
   object passed to `StrategyRuntimeOrchestrator`'s constructor is the same
   object reachable from the composition root, and likewise for the mutex
@@ -101,45 +105,77 @@
 
 ## 5. HTTP Client Lifecycle and Shutdown
 
-- [ ] 5.1 Introduce a single explicit owner (e.g., a small composition-root
-  object or closure) that holds references to all four constructed HTTP
-  clients and exposes one operation that closes all of them.
-- [ ] 5.2 Wire that owner's close operation into the application's shutdown
-  path (FastAPI `lifespan` or an equivalent mechanism); do not pin the
-  specific FastAPI shutdown API in this task beyond "closes deterministically
-  on application shutdown."
+- [ ] 5.1 Introduce a single explicit composition lifecycle owner (e.g., a
+  small composition-root object or closure) that holds references to all four
+  constructed HTTP clients and exposes one operation that closes all of them.
+- [ ] 5.2 Wire that owner's close-all operation into exactly two paths: (a)
+  startup rollback — invoked synchronously during `build_application`
+  construction the moment a later client's constructor rejects its
+  configuration, closing every client already constructed before returning
+  the not-ready application; and (b) application shutdown (FastAPI `lifespan`
+  or an equivalent mechanism) — invoked once construction succeeded and the
+  application later shuts down. Do not pin a specific FastAPI shutdown API
+  beyond "closes deterministically."
 - [ ] 5.3 On partial construction failure (a client fails to construct after
   earlier clients already succeeded), close every already-constructed client
-  before `build_application` returns the not-ready application.
-- [ ] 5.4 Ensure no per-request or per-background-cycle code path calls
-  `close()` on any of the four clients; only the shutdown owner does.
-- [ ] 5.5 Add tests: shutdown closes all four clients exactly once each;
-  simulated partial-construction failure (e.g., a valid Engine config paired
-  with an invalid ABI config) results in the Engine clients being closed and
-  `ready=False`, with no leaked open client.
+  exactly once via startup rollback before `build_application` returns the
+  not-ready application; those clients are not exposed in any returned
+  application and are not closed again later.
+- [ ] 5.4 Ensure no code path other than the composition lifecycle owner ever
+  calls `close()` on any of the four clients: not an HTTP request handler, not
+  a background committed-bar cycle, not `StrategyRuntimeOrchestrator`,
+  `OpenPositionResolver`, `StrategyUseCaseRouter`,
+  `EntryReconciliationOrchestrator`, an outbound adapter after an individual
+  call, or any other caller — only the composition lifecycle owner does,
+  during startup rollback or application shutdown.
+- [ ] 5.5 Add tests: shutdown closes all four clients exactly once each after
+  a successful ready construction; simulated partial-construction failure
+  (e.g., a valid Engine config paired with an invalid ABI config) results in
+  the Engine clients being closed exactly once via startup rollback and
+  `ready=False`, with no leaked open client and no double-close.
 
-## 6. Production `StrategyCycleHandoff` Sink
+## 6. Production `StrategyCycleHandoff` Sink and Utility-Contour Test Migration
 
 - [ ] 6.1 Confirm `StrategyCycleHandoffBoundary` requires no code change —
-  only its production construction argument changes (§2.2); its dispatch
-  mechanics (attached/unattached sink, exception propagation) stay exactly as
-  implemented.
-- [ ] 6.2 Add a test proving the default `build_application()` call (no
-  `strategy_cycle_handoff` override) results in a `StrategyCycleHandoffBoundary`
-  whose dispatch reaches the real `StrategyRuntimeOrchestrator` (e.g., via an
-  observable side effect such as a repository state change or a recorded
-  outbound-adapter call), not an unattached no-op sink.
-- [ ] 6.3 Confirm the existing `strategy_cycle_handoff` override parameter
-  still fully replaces the production sink when supplied, matching the
-  existing `test_production_composition_runs_the_complete_utility_contour`
-  usage pattern.
-- [ ] 6.4 Confirm the existing
-  `tests/integration/committed_bar/test_production_composition.py` test
-  continues to pass unmodified: `build_application` called with
-  `strategy_cycle_handoff=received.append` and only the existing utility-only
-  config (`RUNTIME_SPECS_PATH`, `RUNTIME_JOURNAL_PATH`) still returns a ready
-  application, without requiring any of the five outbound config fields and
-  without constructing any of the four outbound HTTP clients.
+  only its production construction argument changes (§2.2/§2.3); its dispatch
+  mechanics (attached/unattached sink, exception propagation) and its general
+  capability to be constructed directly with an arbitrary sink (used by
+  utility-level tests) stay exactly as implemented.
+- [ ] 6.2 Add a test proving every `build_application()` call that returns
+  `ready=True` results in a `StrategyCycleHandoffBoundary` whose dispatch
+  reaches the real `StrategyRuntimeOrchestrator` (e.g., via an observable side
+  effect such as a repository state change or a recorded outbound-adapter
+  call) — unconditionally, since no override parameter exists to bypass it.
+- [ ] 6.3 Add a guardrail test/static check confirming `build_application`'s
+  public signature no longer declares a `strategy_cycle_handoff` (or
+  equivalent) parameter; update every internal call site accordingly.
+- [ ] 6.4 Rewrite/rename
+  `tests/integration/committed_bar/test_production_composition.py` — it must
+  no longer call `build_application` to exercise the utility contour in
+  isolation, since `build_application` now always constructs the complete
+  production graph and requires full Engine/ABI configuration. Introduce a
+  new utility-contour integration test file (e.g.
+  `tests/integration/committed_bar/test_utility_contour.py`, or an equivalent
+  name consistent with repository convention) and remove the old
+  `test_production_composition...` name from any test that constructs utility
+  components directly.
+- [ ] 6.5 In the new test, construct the utility contour directly from its
+  own components — `FilesystemDeploymentCatalog`,
+  `CommittedBarDeploymentSelector`, `JsonlProcessingJournal`,
+  `StrategyCycleHandoffBoundary(sink=received.append)`, and
+  `CommittedBarOrchestrator` — without calling `build_application`.
+- [ ] 6.6 Preserve every existing utility-level assertion from the old test in
+  the new one: deployment selection (enabled/disabled/other-market
+  filtering), exactly one dispatched `StrategyBarProcessingUnit`, its
+  `source_path` and `strategy_instance_id` identity, and the existing journal
+  event sequence
+  (`committed_bar_orchestration_started`/`strategy_cycle_dispatch_succeeded`/
+  `committed_bar_orchestration_completed`).
+- [ ] 6.7 Add or confirm a separate test that exercises `build_application`
+  itself only with complete Engine/ABI production configuration (this may be
+  the same test as §7's vertical E2E, or a dedicated composition-root test);
+  `build_application` is never exercised with utility-only configuration
+  again.
 
 ## 7. Background Vertical Live-Entry E2E
 
@@ -206,10 +242,11 @@
 
 ## 9. Architecture and Scope Guardrails
 
-- [ ] 9.1 Add a guardrail test proving `build_application`'s production path
-  (no `strategy_cycle_handoff` override) constructs and wires
-  `StrategyRuntimeOrchestrator` as `StrategyCycleHandoffBoundary`'s sink, and
-  that no other class satisfies that role.
+- [ ] 9.1 Add a guardrail test proving `build_application` constructs and
+  wires `StrategyRuntimeOrchestrator` (via the thin sink) as
+  `StrategyCycleHandoffBoundary`'s sink unconditionally — there is no code
+  path that returns `ready=True` without it, and no other class satisfies
+  that role.
 - [ ] 9.2 Add a guardrail test proving exactly one repository instance and one
   keyed-mutex-registry instance are shared across the entire constructed
   graph (§3.3, restated here as a scope guardrail alongside the existing
@@ -233,11 +270,23 @@
   added anywhere in the diff.
 - [ ] 9.7 Confirm no canonical system-plan file or archived OpenSpec change is
   edited by this change.
+- [ ] 9.8 Add a guardrail test/static check proving `build_application`'s
+  signature declares no `strategy_cycle_handoff` (or equivalent) parameter
+  (e.g., via `inspect.signature` in a test).
+- [ ] 9.9 Add a guardrail test proving there is no hidden utility-only ready
+  bootstrap path: every `ready=True` application constructed by
+  `build_application` has the four outbound HTTP clients and the shared
+  repository/mutex reachable and constructed.
+- [ ] 9.10 Add a guardrail test/assertion proving the shared repository and
+  keyed-mutex-registry instances are reachable from the composition-owned
+  application bundle/state (for a future `I5` to reuse), not via any
+  alternative build mode, parameter, or flag.
 
 ## 10. Full Verification
 
 - [ ] 10.1 Run the new config, composition-root, lifecycle, vertical E2E,
-  failure-path, and architecture-guardrail tests added by this change.
+  failure-path, utility-contour-migration, and architecture-guardrail tests
+  added by this change.
 - [ ] 10.2 Run the complete Runtime pytest suite, Ruff lint and format checks,
   mypy, and Python compilation checks using the repository's established
   verification commands.
@@ -248,9 +297,9 @@
 - [ ] 10.5 Run `git diff --check`.
 - [ ] 10.6 Audit the final implementation diff to confirm it is limited to
   config, the composition root, HTTP client lifecycle ownership, the
-  production handoff sink, and their tests, with every deferred component
-  (`I5`, `I6`, open-trade gate, durable persistence, `http-closed-bar`
-  contract) unchanged.
+  production handoff sink, the utility-contour test migration, and their
+  tests, with every deferred component (`I5`, `I6`, open-trade gate, durable
+  persistence, `http-closed-bar` contract) unchanged.
 
 ## 11. Documentation Sync and Archive
 
