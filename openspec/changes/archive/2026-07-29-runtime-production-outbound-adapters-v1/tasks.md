@@ -24,13 +24,10 @@
   re-raised); a raised ABI exception (`AbiEntryPackageTimeout`,
   `AbiEntryPackageNetworkFailure`, `AbiEntryPackageProtocolError`) is
   preserved as `__cause__`.
-- [ ] 1.4 (Optional) A small internal shared HTTP codec helper (closed-object
-  validation, exact field-set enforcement, JSON content-type enforcement,
-  duplicate-field rejection, opaque-path-segment encoding) usable only by the
-  three new HTTP adapters is permitted if it genuinely reduces duplication
-  among them; it is not a required deliverable. Do not refactor the existing
-  `entry_package_codec.py` and do not import any such helper into, or
-  otherwise touch, the existing ABI entry-package client.
+- [x] 1.4 Decide whether to introduce one shared codec helper across all three
+  new HTTP adapters. Decision: do not introduce it. The two Strategy Engine
+  adapters share their Engine-local wire codec; ABI open-position retains its
+  separate codec; the existing ABI entry-package client remains untouched.
 
 ## 2. Strategy Engine Live-Entry Client
 

@@ -29,8 +29,8 @@ flowchart TD
     I3["Pure entry reconciliation · DONE"]
     I4A["EntryReconciliationOrchestrator · DONE"]
     I4B["Closed-bar Runtime orchestration · DONE"]
-    I4C["I4c · Production outbound adapters · NEXT"]
-    I4D["I4d · Production composition + live-entry E2E · AFTER I4c"]
+    I4C["I4c · Production outbound adapters · DONE"]
+    I4D["I4d · Production composition + live-entry E2E · NEXT"]
     I5["ABI fill webhook · AFTER I4d"]
     I6["Entry/fill cross-flow · LATER"]
     OPEN_GATE["Open-trade requirements gate · DEFERRED"]
@@ -164,42 +164,46 @@ carried, not a newly discovered stage. See
 [`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md)
 for the full contract detail behind both.
 
-### I4c · Production outbound adapters — NEXT
+### I4c · Production outbound adapters — DONE
 
 Change name: `runtime-production-outbound-adapters-v1`.
 
-- [ ] Create and approve the OpenSpec change.
-- [ ] Implement the Strategy Engine `StrategyEngineLiveEntryPort` HTTP adapter
+- [x] Create and approve the OpenSpec change.
+- [x] Implement the Strategy Engine `StrategyEngineLiveEntryPort` HTTP adapter
   against `POST /v1/strategy-evaluations/live-entry`.
-- [ ] Implement the Strategy Engine `StrategyEngineOpenTradePort` HTTP adapter
+- [x] Implement the Strategy Engine `StrategyEngineOpenTradePort` HTTP adapter
   against `POST /v1/strategy-evaluations/open-trade` (required by
   `StrategyUseCaseRouter` even though the first E2E only exercises live-entry).
-- [ ] Implement the `AbiOpenPositionLookupPort` HTTP adapter against the
+- [x] Implement the `AbiOpenPositionLookupPort` HTTP adapter against the
   ABI open-position contract fixed in the focused plan.
-- [ ] Implement the `EntryReconciliationExecutionPort` → `AbiEntryPackagePort`
+- [x] Implement the `EntryReconciliationExecutionPort` → `AbiEntryPackagePort`
   bridge (`EntryReconciliationCommand` + `source_state` →
   `EntryPackageRequest` → ABI client → `EntryAppliedConfirmation` /
   `EntryAbsentConfirmation`). This is the fourth new piece (three HTTP
   adapters above + this one application-level bridge); the existing
   `AbiEntryPackagePort` HTTP client itself is not rewritten.
-- [ ] Remove only the obsolete `EntryPackageApplied.accepted_risk_multiplier`
+- [x] Remove only the obsolete `EntryPackageApplied.accepted_risk_multiplier`
   response echo from the existing ABI entry-package client DTO; `risk_multiplier`
   travels to ABI one-way and is never returned or reconfirmed. No other change
   to that already-implemented, already-tested client.
-- [ ] For each of the three HTTP adapters: enforce strict request/response
+- [x] For each of the three HTTP adapters: enforce strict request/response
   DTOs, URL/path encoding where applicable, bounded timeouts, no retry, no
   redirect-following, and typed public/transport/timeout/protocol-error
   decoding; add fake-HTTP contract tests for each.
-- [ ] For the bridge: exact command + `source_state` translation,
+- [x] For the bridge: exact command + `source_state` translation,
   `risk_multiplier` from `source_state`, `DesiredEntry` →
   `EntryPackageWireDesiredEntry` mapping, exactly one call to
   `AbiEntryPackagePort`, typed-failure mapping — no HTTP ownership, URL
   encoding, timeout/redirect configuration, mutex, repository load/save,
   retry, or state mutation; cover it with ordinary typed unit/translation
   tests, not fake-HTTP tests.
+- [x] Change verified and archived as
+  `openspec/changes/archive/2026-07-29-runtime-production-outbound-adapters-v1`.
 
-Exit condition: all production outbound dependencies can be created and tested
-in isolation, but are not yet connected to the application or bootstrap.
+Exit condition: all production outbound dependencies are implemented and
+tested in isolation, verified against all contract requirements, and archived.
+All are ready for composition in `I4d`; none are yet connected to the
+application or bootstrap.
 
 ### I4d · Production composition and live-entry vertical slice — AFTER I4c
 

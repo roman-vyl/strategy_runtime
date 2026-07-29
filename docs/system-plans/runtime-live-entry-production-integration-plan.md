@@ -1,7 +1,8 @@
 # Runtime live-entry production integration plan
 
-Status: architectural source of truth for `I4c` and `I4d`. Both are the same
-production adapter and composition integration seam that
+Status: `I4c` is **implemented and verified**; see final section for
+deliverables. `I4d` is next. Both are the same production adapter and
+composition integration seam that
 [`runtime-master-plan.md`](runtime-master-plan.md) and
 [`runtime-abi-entry-reconciliation-master-plan.md`](runtime-abi-entry-reconciliation-master-plan.md)
 already required between closed-bar orchestration and the ABI fill webhook.

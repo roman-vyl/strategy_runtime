@@ -86,10 +86,12 @@ handoff by default. That wiring decision does not change the implemented
 semantic boundary: the core is independently callable and the handoff accepts a
 downstream sink. The exact outbound-adapter state:
 
-- Strategy Engine live-entry/open-trade HTTP adapters — absent, `I4c`;
-- ABI open-position HTTP adapter — absent, `I4c`;
-- `EntryReconciliationExecutionPort` → `AbiEntryPackagePort` bridge — absent,
-  `I4c`;
+- Strategy Engine live-entry/open-trade HTTP adapters — implemented and
+  contract-tested (`I4c`), not yet composed into production;
+- ABI open-position HTTP adapter — implemented and contract-tested (`I4c`),
+  not yet composed into production;
+- `EntryReconciliationExecutionPort` → `AbiEntryPackagePort` bridge —
+  implemented and unit-tested (`I4c`), not yet composed into production;
 - `AbiEntryPackagePort` HTTP client — already implemented and
   contract-tested;
 - its production composition into the application — absent until `I4d`.
@@ -358,9 +360,10 @@ The implemented contour deliberately does not yet:
 - send Strategy Engine or ABI open-position requests through a production
   HTTP transport, and does not yet compose the `EntryReconciliationExecutionPort`
   → `AbiEntryPackagePort` bridge into the application — these three
-  components are absent until `I4c`/`I4d`. `AbiEntryPackagePort` itself
-  already has a real, contract-tested HTTP client; only its composition into
-  the application is missing (`I4d`). See
+  components are implemented and independently tested in isolation (`I4c`),
+  but none is connected to production composition until `I4d`.
+  `AbiEntryPackagePort` itself already has a real, contract-tested HTTP
+  client; only its composition into the application is missing (`I4d`). See
   [`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md);
 - interpret or persist position-management recipes;
 - create, replace, freeze, close, or archive a trade cycle across the
@@ -403,8 +406,9 @@ acquire keyed mutex(strategy_instance_id)
 `EntryReconciliationOrchestrator` runs inside it. It does not reacquire the
 mutex, reload the aggregate, or save repository state. Note that the ABI
 open-position lookup and Strategy Engine projection steps above call through
-application ports whose production HTTP transport is not yet wired; that
-remains I4c/I4d (see
+application ports whose production HTTP transport is now implemented and
+contract-tested in isolation (I4c); composing it behind these ports remains
+I4d (see
 [`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md)).
 
 The later ABI webhook change implements this separate critical section:
@@ -491,14 +495,13 @@ optimization, but it cannot replace durable coordination and recovery.
 2. `StrategyRuntimeOrchestrator` closed-bar critical section, calling the
    existing nested operation for `LiveEntryProjectedStrategyInstance` —
    implemented, verified, and archived (`closed-bar-runtime-orchestration-v1`).
-3. Next, implement the production outbound adapters (Strategy Engine
-   live-entry/open-trade, ABI open-position lookup, ABI entry-package
-   execution bridge) as an isolated, independently testable seam, then wire
-   them and the semantic core into the production composition root behind the
-   closed-bar HTTP webhook. See
+3. `I4c` (production outbound adapters) — implemented, verified, and
+   archived (`runtime-production-outbound-adapters-v1`). Next, wire them and
+   the semantic core into the production composition root behind the
+   closed-bar HTTP webhook as `I4d` (production composition and live-entry
+   vertical slice). See
    [`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md)
-   for the exact contracts and split into `I4c` (production outbound adapters)
-   and `I4d` (production composition and live-entry vertical slice).
+   for the full detail.
 4. In a later change, design and implement the independent ABI fill-webhook
    workflow and `AbiExecutionEventOrchestrator`; do not combine it with the
    production composition change.
