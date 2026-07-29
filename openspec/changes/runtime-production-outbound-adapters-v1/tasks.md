@@ -1,24 +1,29 @@
 ## 1. Shared Failure Taxonomies and Codec Helpers
 
 - [ ] 1.1 Add the Strategy Engine projection failure taxonomy under
-  `runtime/engine/errors.py`: `StrategyEngineProjectionError` (base),
-  `StrategyEngineProjectionUnavailable` (superclass for transport/timeout/protocol),
-  `StrategyEngineProjectionTimeout`,
-  `StrategyEngineProjectionNetworkFailure`,
-  `StrategyEngineProjectionProtocolError`,
-  `StrategyEngineProjectionPublicError` (preserving `status_code`, `code`,
-  `message`, `details`, `request_id`), and
-  `StrategyEngineMarketStreamNotFound` (`StrategyEngineProjectionPublicError`
-  subtype for HTTP `404` + code `market_stream_not_found`).
+  `runtime/engine/errors.py`: `StrategyEngineProjectionError` (base) and
+  `StrategyEngineProjectionUnavailable`, which is the superclass of
+  `StrategyEngineProjectionPublicError`, `StrategyEngineProjectionTimeout`,
+  `StrategyEngineProjectionNetworkFailure`, and
+  `StrategyEngineProjectionProtocolError` — matching the canonical
+  `use-case-router` contract that treats every Engine HTTP failure branch as
+  `StrategyEngineProjectionUnavailable`. `StrategyEngineProjectionPublicError`
+  preserves `status_code`, `code`, `message`, `details`, and `request_id`;
+  `StrategyEngineMarketStreamNotFound` is its subtype for HTTP `404` + code
+  `market_stream_not_found`.
 - [ ] 1.2 Extend the existing `runtime/open_position/errors.py` hierarchy with
   `OpenPositionLookupTimeout` and `OpenPositionLookupNetworkFailure` as subclasses
   of the existing `OpenPositionLookupUnavailable`, and add
   `OpenPositionLookupPublicError` as a new subclass of
   `OpenPositionResolutionError`; keep the existing
   `OpenPositionLookupProtocolError` for malformed/undocumented responses.
-- [ ] 1.3 Add `EntryReconciliationExecutionError` as the typed bridge failure
-  that preserves the original ABI exception as `__cause__`; place it under the
-  entry-reconciliation-orchestrator boundary without coupling it to HTTP types.
+- [ ] 1.3 Add `EntryReconciliationExecutionError` as the typed bridge failure;
+  place it under the entry-reconciliation-orchestrator boundary without
+  coupling it to HTTP types. A returned `EntryPackagePublicError` result
+  becomes `error.public_error`, with no `__cause__` (nothing was caught or
+  re-raised); a raised ABI exception (`AbiEntryPackageTimeout`,
+  `AbiEntryPackageNetworkFailure`, `AbiEntryPackageProtocolError`) is
+  preserved as `__cause__`.
 - [ ] 1.4 (Optional) A small internal shared HTTP codec helper (closed-object
   validation, exact field-set enforcement, JSON content-type enforcement,
   duplicate-field rejection, opaque-path-segment encoding) usable only by the
@@ -104,12 +109,14 @@
   never coerce an unexpected `404` or any other non-`2xx` into
   `position_open=false`.
 - [ ] 4.5 Map a documented ABI `400`/`422` public error (valid parse of the
-  nested `{error: {code, message, details}}` envelope) to
-  `OpenPositionLookupPublicError`; map a documented `5xx` status with a valid
-  parse of that envelope to `OpenPositionLookupUnavailable`; map timeout to
-  `OpenPositionLookupTimeout`, non-timeout network failure to
+  nested `{error: {code, message}}` envelope, with a required non-empty
+  `code`/`message` and an optional `details` — a missing `details` is not a
+  protocol error) to `OpenPositionLookupPublicError`; map a documented `5xx`
+  status with a valid parse of that envelope to `OpenPositionLookupUnavailable`;
+  map timeout to `OpenPositionLookupTimeout`, non-timeout network failure to
   `OpenPositionLookupNetworkFailure`, and undocumented status, unexpected `404`,
-  incompatible content type, malformed JSON, or body-outside-DTO (including an
+  incompatible content type, malformed JSON, an unknown envelope field, a
+  missing/invalid `code` or `message`, or body-outside-DTO (including an
   unparseable envelope) to `OpenPositionLookupProtocolError`.
 - [ ] 4.6 Map the decoded success body into the existing
   `OpenPositionLookupResponse` domain model (invariants applied, including
@@ -156,6 +163,11 @@
 - [ ] 6.3 Update every fake-ABI fixture and contract test in
   `tests/contract/abi/test_entry_package_client.py` to no longer emit or assert
   `accepted_risk_multiplier`.
+- [ ] 6.3a Gate (external prerequisite, unchecked until confirmed): confirm
+  the sibling ABI OpenAPI document has removed `accepted_risk_multiplier`
+  before running or updating the Runtime conformance assertion in task 6.4 and
+  before final `I4c` verification/sign-off. `I4c` does not modify or own the
+  ABI repository; this task only confirms the external cleanup has landed.
 - [ ] 6.4 Update the ABI OpenAPI conformance test in
   `tests/contract/abi/test_entry_package_openapi.py` to assert the applied
   success DTO no longer contains `accepted_risk_multiplier`.

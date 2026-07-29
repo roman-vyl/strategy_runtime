@@ -37,15 +37,29 @@ vertical E2E wiring — that is `I4d`.
   application bridge: translate one `EntryReconciliationCommand` plus its
   `source_state` into one `EntryPackageRequest`, call the existing ABI
   entry-package client exactly once, map a successful acknowledgement to the
-  matching `SuccessfulEntryConfirmation` variant, and raise a typed
-  `EntryReconciliationExecutionError` preserving the original ABI cause for any
-  unconfirmed outcome. The bridge owns no HTTP transport, URL encoding, timeout
-  configuration, mutex, repository access, retry, or state mutation.
-- Introduce a granular typed failure taxonomy for the three HTTP adapters:
-  documented non-`2xx` responses become typed public exceptions that preserve
-  status, code, message, details, and `request_id`; timeout, network transport,
-  and protocol/decoding failures become distinct typed exceptions; no
-  unconfirmed outcome is ever collapsed into a success result.
+  matching `SuccessfulEntryConfirmation` variant, and construct a typed
+  `EntryReconciliationExecutionError` for any unconfirmed outcome.
+  `EntryPackagePublicError` is a returned result value, not a raised
+  exception, so the bridge builds
+  `EntryReconciliationExecutionError(public_error=result)` directly with no
+  `__cause__`; the raised `AbiEntryPackageTimeout`,
+  `AbiEntryPackageNetworkFailure`, and `AbiEntryPackageProtocolError`
+  exceptions are instead re-raised as `EntryReconciliationExecutionError(...)
+  from <original exception>`, preserving `__cause__`. The bridge owns no HTTP
+  transport, URL encoding, timeout configuration, mutex, repository access,
+  retry, or state mutation.
+- Introduce a granular typed failure taxonomy for the three HTTP adapters.
+  Documented Strategy Engine non-`2xx` responses become
+  `StrategyEngineProjectionPublicError` (or its `StrategyEngineMarketStreamNotFound`
+  subtype), preserving status, code, message, details, and `request_id` — all
+  as subtypes of `StrategyEngineProjectionUnavailable`, matching the canonical
+  `use-case-router` contract. Documented ABI open-position `400`/`422`
+  responses become `OpenPositionLookupPublicError` preserving status, code,
+  message, and details, with no `request_id` (ABI's nested error envelope
+  carries none); a documented ABI `5xx` becomes `OpenPositionLookupUnavailable`,
+  not a public error. Timeout, network transport, and protocol/decoding
+  failures become distinct typed exceptions for every adapter; no unconfirmed
+  outcome is ever collapsed into a success result.
 - Remove the obsolete `EntryPackageApplied.accepted_risk_multiplier` echo from
   the already-implemented ABI entry-package client DTO, codec, fake-ABI
   fixtures, and OpenAPI-conformance test. `risk_multiplier` travels to ABI
@@ -105,7 +119,11 @@ vertical E2E wiring — that is `I4d`.
 - The bridge calls the existing `AbiEntryPackagePort` and introduces no second
   HTTP transport for the entry-package endpoint.
 - The `accepted_risk_multiplier` removal is a breaking change to the ABI
-  entry-package client DTO; ABI deployment alignment (no longer returning that
-  field) remains an external prerequisite before `I4d` composes the client into
-  production.
+  entry-package client DTO. The ABI-side contract/OpenAPI cleanup removing the
+  field — including the sibling ABI OpenAPI document the Runtime conformance
+  test reads — is an external baseline prerequisite before task 6.4 and final
+  `I4c` verification/sign-off; `I4c` does not modify or own the ABI
+  repository. ABI's runtime deployment alignment (no longer actually
+  returning the field) is a separate external prerequisite before `I4d`
+  composes the client into production.
 - No canonical spec or system-plan file is edited by this change.

@@ -96,18 +96,27 @@ response text.
 
 ### Requirement: Documented ABI non-2xx responses become typed public errors
 The Runtime adapter SHALL strictly decode a documented ABI `400`/`422` public
-error envelope and raise `OpenPositionLookupPublicError` preserving status,
-code, message, and details.
+error envelope — a closed top-level object containing only an `error` key,
+whose value requires a non-empty `code` and a non-empty `message`, with an
+optional `details` — and raise `OpenPositionLookupPublicError` preserving
+status, code, message, and details (when present).
 
 #### Scenario: Preserve a documented business rejection
 - **WHEN** ABI returns a documented `400` or `422` public error with a closed
   envelope
 - **THEN** the adapter raises `OpenPositionLookupPublicError`
-- **AND** the exception preserves `status_code`, `code`, `message`, and `details`
+- **AND** the exception preserves `status_code`, `code`, `message`, and
+  `details` when present
+
+#### Scenario: Accept a public error envelope without details
+- **WHEN** ABI returns a documented `400` or `422` public error whose `error`
+  object contains only `code` and `message`, omitting `details`
+- **THEN** the adapter raises `OpenPositionLookupPublicError`
+- **AND** the missing `details` is not treated as a protocol error
 
 #### Scenario: Reject an invalid public error envelope
-- **WHEN** a documented non-`2xx` body is not a closed error envelope or has a
-  missing, empty, or mistyped required field
+- **WHEN** a documented non-`2xx` body is not a closed error envelope, has an
+  unknown field, or has a missing, empty, or mistyped `code` or `message`
 - **THEN** the adapter raises `OpenPositionLookupProtocolError`
 - **AND** does not suppress or relabel the response as a valid public error
 
@@ -119,7 +128,7 @@ and network-failure subtypes), not as `OpenPositionLookupPublicError`.
 
 #### Scenario: Classify a documented 5xx as unavailable
 - **WHEN** ABI returns a documented `5xx` status with a valid parse of the
-  closed `{error: {code, message, details}}` envelope
+  closed `{error: {code, message}}` envelope, with or without `details`
 - **THEN** the adapter raises `OpenPositionLookupUnavailable`
 - **AND** does not raise `OpenPositionLookupPublicError`
 - **AND** returns no position fact

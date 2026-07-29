@@ -178,6 +178,23 @@ same failure taxonomy as the live-entry client.
 - **THEN** the adapter does not relabel it as timeout, network failure, public
   error, or protocol error
 
+### Requirement: Every open-trade failure branch is a StrategyEngineProjectionUnavailable subtype
+`StrategyEngineProjectionPublicError` (and its `StrategyEngineMarketStreamNotFound`
+subtype), `StrategyEngineProjectionTimeout`, `StrategyEngineProjectionNetworkFailure`,
+and `StrategyEngineProjectionProtocolError` SHALL each be a subtype of
+`StrategyEngineProjectionUnavailable`, so that every open-trade HTTP failure
+branch remains compatible with the canonical `use-case-router` contract, which
+treats every Engine HTTP failure as `StrategyEngineProjectionUnavailable`.
+
+#### Scenario: Every failure branch satisfies the router contract
+- **WHEN** the open-trade adapter raises `StrategyEngineProjectionPublicError`,
+  `StrategyEngineMarketStreamNotFound`, `StrategyEngineProjectionTimeout`,
+  `StrategyEngineProjectionNetworkFailure`, or `StrategyEngineProjectionProtocolError`
+- **THEN** the raised exception is also an instance of
+  `StrategyEngineProjectionUnavailable`
+- **AND** the existing `use-case-router` contract observes it as an
+  `Unavailable` outcome without modification
+
 ### Requirement: The open-trade HTTP attempt is bounded and non-retried
 The Runtime HTTP adapter SHALL perform exactly one HTTP request with a required
 finite positive timeout, automatic retries disabled, and redirect following

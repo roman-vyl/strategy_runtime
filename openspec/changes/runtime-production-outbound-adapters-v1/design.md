@@ -266,8 +266,9 @@ OpenPositionResolutionError                          (existing base)
 
 ABI errors use the ABI-style nested envelope, not the Engine-style flat
 envelope: a closed top-level object containing only an `error` key, whose
-value carries `code`, `message`, and `details`. ABI entry-package responses do
-not carry `request_id`, and this envelope model does not assert one either:
+value carries a required non-empty `code`, a required non-empty `message`,
+and an optional `details`. ABI entry-package responses do not carry
+`request_id`, and this envelope model does not assert one either:
 
 ```json
 {
@@ -279,8 +280,12 @@ not carry `request_id`, and this envelope model does not assert one either:
 }
 ```
 
-`details` remains opaque/untyped JSON until the ABI-side OpenAPI is published;
-this design does not over-specify its shape.
+`code` and `message` are required non-empty strings. `details` is optional
+and, when present, remains opaque/untyped JSON until the ABI-side OpenAPI is
+published; this design does not over-specify its shape. A missing `details`
+key is not a protocol error. An unknown field anywhere in the envelope, a
+missing/empty/mistyped `code` or `message`, malformed JSON, or a wrong type
+for any present field remains a protocol error.
 
 - `GET /v1/strategy-instances/{strategy_instance_id}/open-position` returning
   HTTP `200` with `position_open=false` is the only success outcome meaning "no

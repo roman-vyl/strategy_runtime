@@ -160,6 +160,23 @@ another network transport failure, and an invalid Engine response.
 - **THEN** the adapter does not relabel it as timeout, network failure, public
   error, or protocol error
 
+### Requirement: Every live-entry failure branch is a StrategyEngineProjectionUnavailable subtype
+`StrategyEngineProjectionPublicError` (and its `StrategyEngineMarketStreamNotFound`
+subtype), `StrategyEngineProjectionTimeout`, `StrategyEngineProjectionNetworkFailure`,
+and `StrategyEngineProjectionProtocolError` SHALL each be a subtype of
+`StrategyEngineProjectionUnavailable`, so that every live-entry HTTP failure
+branch remains compatible with the canonical `use-case-router` contract, which
+treats every Engine HTTP failure as `StrategyEngineProjectionUnavailable`.
+
+#### Scenario: Every failure branch satisfies the router contract
+- **WHEN** the live-entry adapter raises `StrategyEngineProjectionPublicError`,
+  `StrategyEngineMarketStreamNotFound`, `StrategyEngineProjectionTimeout`,
+  `StrategyEngineProjectionNetworkFailure`, or `StrategyEngineProjectionProtocolError`
+- **THEN** the raised exception is also an instance of
+  `StrategyEngineProjectionUnavailable`
+- **AND** the existing `use-case-router` contract observes it as an
+  `Unavailable` outcome without modification
+
 ### Requirement: The live-entry HTTP attempt is bounded and non-retried
 The Runtime HTTP adapter SHALL perform exactly one HTTP request with a required
 finite positive timeout, automatic retries disabled, and redirect following
