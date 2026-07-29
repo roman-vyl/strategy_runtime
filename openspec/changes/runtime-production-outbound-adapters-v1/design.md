@@ -63,9 +63,14 @@ in scope.
 - No general refactor of the existing ABI entry-package HTTP client; only the
   single `accepted_risk_multiplier` field is removed from its DTO, codec, and
   tests.
-- No ABI-side or Strategy-Engine-side implementation change; ABI deployment
-  alignment for the removed echo and for the open-position endpoint remains an
-  external prerequisite before `I4d`.
+- No ABI-side or Strategy-Engine-side implementation change; `I4c` does not
+  modify or own the ABI repository. The ABI-side contract-only cleanup
+  removing `accepted_risk_multiplier` from the entry-package "applied"
+  response — including the sibling ABI OpenAPI document the Runtime
+  conformance test reads — is an external baseline prerequisite before task
+  6.4 and final `I4c` verification. ABI's own production deployment alignment
+  for the open-position endpoint remains an external prerequisite before
+  `I4d`.
 - No operational journaling or metrics for adapter outcomes.
 - No repository CAS, command idempotency, restart recovery, or multi-worker
   deployment.
@@ -134,18 +139,35 @@ internal normalization and positivity rules are not the normative external
 schema, and a future Engine field addition would either break Runtime silently or
 be accepted without a deliberate contract decision.
 
-### Preserve exact-decimal lexemes as strings
+### Decimal fields decode as JSON strings without float conversion; byte-for-value preservation is scoped to wire-only DTO fields
 
 All prices, `risk_multiplier`, `calculated_quantity`, and ABI open-position
-`executed_entry_price` remain strings from wire construction through JSON
-encoding/decoding. Validation may inspect decimal text without binary
-floating-point conversion but must retain the accepted lexeme unchanged where
-the domain model permits (the existing `DesiredEntry` normalizes; the ABI
-entry-package wire DTO preserves lexemes byte-for-value).
+`executed_entry_price` arrive and are validated as JSON strings, never through
+a binary floating-point (`float`) conversion. That guarantee is universal
+across the three new HTTP clients and the existing ABI entry-package client.
 
-**Rationale:** Engine and ABI own numeric interpretation; Runtime must not
-introduce rounding or textual normalization at the transport seam beyond what
-the domain model already does.
+Byte-for-value / exact-lexeme preservation is a narrower, separate guarantee
+that applies only where a decimal value stays a wire DTO field that is never
+converted into a domain type for computation — this is the case for the
+existing ABI entry-package client's `EntryPackageApplied`/`EntryPackageRequest`
+fields (`applied_desired_entry`, `calculated_quantity`, `risk_multiplier`),
+which remain untouched wire DTOs.
+
+For the three new HTTP clients (Strategy Engine live-entry, Strategy Engine
+open-trade, ABI open-position lookup), decimal fields that map into an
+existing Runtime domain model (`DesiredEntry`, `DesiredProtection`,
+`OpenPositionLookupResponse`) go through that domain model's existing
+`normalize_decimal_text` and invariant rules. The decoded value is therefore
+domain-normalized, not guaranteed byte-identical to the original wire lexeme.
+Tests for these three clients assert string-JSON parsing without float
+conversion and the correct domain-normalized value, not byte-identical
+round-trip.
+
+**Rationale:** Engine and ABI own numeric interpretation at the wire boundary;
+Runtime must not introduce a `float` conversion. But once a decimal value
+crosses into an existing domain model that already normalizes decimal text
+(as `DesiredEntry` does), preserving the exact original lexeme would require
+bypassing that domain model's own normalization — which is out of scope here.
 
 ### Engine failure model: granular typed exceptions, not a single Unavailable bucket
 
@@ -164,12 +186,12 @@ The adapter introduces a granular typed failure taxonomy:
 
 ```text
 StrategyEngineProjectionError                       (base)
-├── StrategyEngineProjectionUnavailable             (transport/timeout/protocol)
-│   ├── StrategyEngineProjectionTimeout
-│   ├── StrategyEngineProjectionNetworkFailure
-│   └── StrategyEngineProjectionProtocolError
-└── StrategyEngineProjectionPublicError             (documented non-2xx business rejection)
-    └── StrategyEngineMarketStreamNotFound          (HTTP 404 + code market_stream_not_found)
+└── StrategyEngineProjectionUnavailable             (superclass of every HTTP-failure branch)
+    ├── StrategyEngineProjectionPublicError         (documented non-2xx business rejection)
+    │   └── StrategyEngineMarketStreamNotFound      (HTTP 404 + code market_stream_not_found)
+    ├── StrategyEngineProjectionTimeout
+    ├── StrategyEngineProjectionNetworkFailure
+    └── StrategyEngineProjectionProtocolError
 ```
 
 - Documented non-`2xx` responses (the closed `{error, message, details,
@@ -186,14 +208,20 @@ StrategyEngineProjectionError                       (base)
   UTF-8, or a body outside the exact DTO for its status becomes
   `StrategyEngineProjectionProtocolError`.
 
-`StrategyEngineProjectionUnavailable` is retained as the superclass of the
-timeout/network/protocol cluster so the existing `use-case-router` specification
-("classify network, timeout, HTTP, and transport failures as
-`StrategyEngineProjectionUnavailable`") remains satisfied: `Timeout`,
-`NetworkFailure`, and `ProtocolError` are subclasses of `Unavailable`, and the
-router propagates them unchanged. `StrategyEngineProjectionPublicError` is a
-separate branch: a documented business rejection is a valid decoded response,
-not an availability failure, so it is not an `Unavailable` subtype.
+`StrategyEngineProjectionUnavailable` is the single superclass of every
+HTTP-failure branch — `StrategyEngineProjectionPublicError` (and its
+`StrategyEngineMarketStreamNotFound` subtype), `StrategyEngineProjectionTimeout`,
+`StrategyEngineProjectionNetworkFailure`, and `StrategyEngineProjectionProtocolError`
+are all `StrategyEngineProjectionUnavailable` subclasses. This matches the
+canonical `use-case-router` capability spec, which already establishes that
+Strategy Engine HTTP failures — including documented non-`2xx` business
+rejections, not only transport/timeout/protocol failures — are represented as
+`StrategyEngineProjectionUnavailable`. `I4c` preserves that existing contract
+rather than modifying it: the router continues to see every branch as an
+`Unavailable` instance and propagates it unchanged, while the granular
+subtypes give Runtime and future callers the finer-grained diagnostics
+(`status_code`, `code`, `message`, `details`, `request_id` for public errors;
+a distinct type for timeout vs. network vs. protocol failures).
 
 `StrategyEngineMarketStreamNotFound` is the only business-specific subtype in
 `I4c`, because the focused plan explicitly requires it to be distinguishable.
@@ -205,16 +233,20 @@ Other documented codes (`unknown_resource`, `market_stream_not_ready`,
 an attribute. Adding more specific subtypes is a future decision, not an `I4c`
 goal.
 
-**Rationale:** Collapsing documented business rejections into a generic
-"unavailable" would discard actionable Engine diagnostics and make a `404
-market_stream_not_found` indistinguishable from a transport failure. Collapsing
-timeout/network/protocol into one type would prevent callers from
-distinguishing ambiguous outcomes from hard transport failures.
+**Rationale:** Collapsing documented business rejections into an
+undifferentiated "unavailable" would discard actionable Engine diagnostics and
+make a `404 market_stream_not_found` indistinguishable from a transport
+failure. Collapsing timeout/network/protocol into one type would prevent
+callers from distinguishing ambiguous outcomes from hard transport failures.
+Nesting all four branches under `StrategyEngineProjectionUnavailable` keeps
+every branch satisfying the existing `use-case-router` contract while adding
+the granularity the focused plan requires.
 
-**Alternative considered:** A single `StrategyEngineProjectionUnavailable` for
-all non-`2xx` and transport failures (the stub behavior referenced by the
-existing `use-case-router` spec). Rejected because it loses the Engine error
-taxonomy and the `request_id` needed for later operational journaling.
+**Alternative considered:** A single undifferentiated
+`StrategyEngineProjectionUnavailable` for all non-`2xx` and transport failures
+(the stub behavior referenced by the existing `use-case-router` spec).
+Rejected because it loses the Engine error taxonomy and the `request_id`
+needed for later operational journaling.
 
 ### ABI open-position failure model: symmetric granular taxonomy
 
@@ -232,15 +264,37 @@ OpenPositionResolutionError                          (existing base)
 └── OpenPositionLookupPublicError                   (new — documented non-2xx)
 ```
 
+ABI errors use the ABI-style nested envelope, not the Engine-style flat
+envelope: a closed top-level object containing only an `error` key, whose
+value carries `code`, `message`, and `details`. ABI entry-package responses do
+not carry `request_id`, and this envelope model does not assert one either:
+
+```json
+{
+  "error": {
+    "code": "...",
+    "message": "...",
+    "details": {}
+  }
+}
+```
+
+`details` remains opaque/untyped JSON until the ABI-side OpenAPI is published;
+this design does not over-specify its shape.
+
 - `GET /v1/strategy-instances/{strategy_instance_id}/open-position` returning
   HTTP `200` with `position_open=false` is the only success outcome meaning "no
   open position".
-- An unexpected `404` is **not** a closed position; it is decoded as
-  `OpenPositionLookupProtocolError` (or `OpenPositionLookupPublicError` if ABI
-  later publishes a `404` business error), never coerced into
-  `position_open=false`.
-- A documented ABI `400`/`422` public error (ABI's future path/encoding
-  validation contract) becomes `OpenPositionLookupPublicError`.
+- An unexpected `404`, any undocumented status, or a malformed/unparseable
+  envelope is **not** a closed position; it is decoded as
+  `OpenPositionLookupProtocolError`, never coerced into `position_open=false`.
+- HTTP `400`/`422` with a valid parse of the nested `{error: {code, message,
+  details}}` envelope (ABI's future path/encoding validation contract) becomes
+  `OpenPositionLookupPublicError`.
+- A documented `5xx` status with a valid parse of the envelope becomes
+  `OpenPositionLookupUnavailable` (its `ServiceUnavailable`-style transport
+  cluster, consistent with the timeout/network-failure subtypes below), not a
+  public error.
 - Timeout, network, and protocol/decoding failures map to their distinct
   subtypes of `OpenPositionLookupUnavailable` / `OpenPositionLookupProtocolError`.
 
@@ -332,9 +386,11 @@ EntryReconciliationCommand + source_state
 → AbiEntryPackagePort.send            (exactly one call)
 → EntryPackageApplied   → EntryAppliedConfirmation
    EntryPackageAbsent    → EntryAbsentConfirmation
-   EntryPackagePublicError / AbiEntryPackageTimeout /
-   AbiEntryPackageNetworkFailure / AbiEntryPackageProtocolError
-                          → EntryReconciliationExecutionError (cause preserved)
+   EntryPackagePublicError (returned result)
+                          → EntryReconciliationExecutionError(public_error=result)
+   AbiEntryPackageTimeout / AbiEntryPackageNetworkFailure /
+   AbiEntryPackageProtocolError (raised exceptions)
+                          → raise EntryReconciliationExecutionError(...) from <exc>
 ```
 
 The bridge:
@@ -345,9 +401,18 @@ The bridge:
 - maps `EntryPackageApplied.applied_desired_entry` (`EntryPackageWireDesiredEntry`)
   back into the domain `DesiredEntry` for the confirmation;
 - calls the existing `AbiEntryPackagePort.send` exactly once;
-- raises `EntryReconciliationExecutionError` for any public error, timeout,
-  network failure, or protocol error, preserving the original ABI exception as
-  `__cause__` so the caller can observe the underlying reason.
+- distinguishes two different unconfirmed-outcome shapes from the existing
+  `AbiEntryPackagePort.send` call:
+  - `EntryPackagePublicError` is a typed dataclass **result value** returned by
+    `send`, not a raised exception. The bridge constructs
+    `EntryReconciliationExecutionError(public_error=result)` from that value.
+    Nothing was caught or re-raised in this path, so there is no `__cause__`
+    chain and none is required.
+  - `AbiEntryPackageTimeout`, `AbiEntryPackageNetworkFailure`, and
+    `AbiEntryPackageProtocolError` are **raised exceptions** from `send`. The
+    bridge catches each and raises `EntryReconciliationExecutionError(...) from
+    <original exception>`, preserving the original exception as `__cause__` so
+    the caller can observe the underlying reason.
 
 It explicitly does **not** own an HTTP transport, URL encoding, timeout/redirect
 configuration, the keyed mutex, repository load/save, retry, reconciliation
@@ -380,10 +445,17 @@ removes the field from:
   `accepted_risk_multiplier`).
 
 After `I4c`, the strict decoder rejects an ABI response that still carries
-`accepted_risk_multiplier` as an unknown field. ABI deployment alignment (no
-longer returning that field) is an external prerequisite before `I4d` composes
-the client into production; `I4c` does not block on it because the client
-remains unconnected.
+`accepted_risk_multiplier` as an unknown field. `I4c` does not modify or own
+the ABI repository, but the ABI-side contract-only cleanup removing
+`accepted_risk_multiplier` from the entry-package "applied" response —
+including the sibling ABI OpenAPI document — is an external baseline
+prerequisite before task 6.4 (the OpenAPI-conformance test) and before final
+`I4c` verification/sign-off: task 6.4 reads that document and cannot pass
+against a stale one that still advertises the field. ABI's own production
+deployment alignment (no longer actually returning the field at runtime)
+remains a separate external prerequisite before `I4d` composes the client
+into production; `I4c` does not block on runtime deployment because the
+client remains unconnected.
 
 **Rationale:** Keeping the echo would propagate a known contract mismatch into
 production composition. Removing it now, while the client is still unconnected,
@@ -469,10 +541,13 @@ has the correlation value without re-decoding the response.
 
 ## Open Questions
 
-None that block `I4c`. The ABI open-position public-error envelope shape (the
-exact `details` structure ABI will publish for `400`/`422`) is not yet fixed by
-ABI; the Runtime decoder accepts the closed `{error, message, details,
-request_id}` envelope shape already used by the Strategy Engine and by the ABI
-entry-package endpoint, treating `details` as an opaque JSON value until ABI
-publishes a stricter schema. This does not block `I4c` because the decoder fails
-closed on any malformed envelope rather than inventing ABI's validation rules.
+None that block `I4c`. The ABI open-position public-error envelope's exact
+`details` structure (what ABI will publish for `400`/`422`) is not yet fixed by
+ABI; the Runtime decoder accepts the closed ABI-style nested `{error: {code,
+message, details}}` envelope shape already used by the ABI entry-package
+endpoint, treating `details` as an opaque JSON value until ABI publishes a
+stricter schema. Unlike the Strategy Engine's flat `{error, message, details,
+request_id}` envelope, this envelope is nested under a single top-level
+`error` key and carries no `request_id`. This does not block `I4c` because the
+decoder fails closed on any malformed envelope rather than inventing ABI's
+validation rules.

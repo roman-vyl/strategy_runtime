@@ -19,11 +19,13 @@
 - [ ] 1.3 Add `EntryReconciliationExecutionError` as the typed bridge failure
   that preserves the original ABI exception as `__cause__`; place it under the
   entry-reconciliation-orchestrator boundary without coupling it to HTTP types.
-- [ ] 1.4 Add local shared HTTP codec helpers (closed-object validation, exact
-  field-set enforcement, JSON content-type enforcement, duplicate-field
-  rejection, opaque-path-segment encoding) usable only by the three new HTTP
-  adapters; do not refactor the existing `entry_package_codec.py` or import these
-  helpers into the ABI entry-package client.
+- [ ] 1.4 (Optional) A small internal shared HTTP codec helper (closed-object
+  validation, exact field-set enforcement, JSON content-type enforcement,
+  duplicate-field rejection, opaque-path-segment encoding) usable only by the
+  three new HTTP adapters is permitted if it genuinely reduces duplication
+  among them; it is not a required deliverable. Do not refactor the existing
+  `entry_package_codec.py` and do not import any such helper into, or
+  otherwise touch, the existing ABI entry-package client.
 
 ## 2. Strategy Engine Live-Entry Client
 
@@ -101,12 +103,14 @@
 - [ ] 4.4 Treat only HTTP `200` with `position_open=false` as "no open position";
   never coerce an unexpected `404` or any other non-`2xx` into
   `position_open=false`.
-- [ ] 4.5 Map a documented ABI `400`/`422` public error to
-  `OpenPositionLookupPublicError`; map timeout to
+- [ ] 4.5 Map a documented ABI `400`/`422` public error (valid parse of the
+  nested `{error: {code, message, details}}` envelope) to
+  `OpenPositionLookupPublicError`; map a documented `5xx` status with a valid
+  parse of that envelope to `OpenPositionLookupUnavailable`; map timeout to
   `OpenPositionLookupTimeout`, non-timeout network failure to
   `OpenPositionLookupNetworkFailure`, and undocumented status, unexpected `404`,
-  incompatible content type, malformed JSON, or body-outside-DTO to
-  `OpenPositionLookupProtocolError`.
+  incompatible content type, malformed JSON, or body-outside-DTO (including an
+  unparseable envelope) to `OpenPositionLookupProtocolError`.
 - [ ] 4.6 Map the decoded success body into the existing
   `OpenPositionLookupResponse` domain model (invariants applied, including
   decimal normalization of `executed_entry_price` without binary-float
@@ -131,10 +135,12 @@
 - [ ] 5.4 Map `EntryPackageApplied` to `EntryAppliedConfirmation` (mapping
   `applied_desired_entry` wire DTO back into the domain `DesiredEntry`) and
   `EntryPackageAbsent` to `EntryAbsentConfirmation`.
-- [ ] 5.5 Map `EntryPackagePublicError`, `AbiEntryPackageTimeout`,
-  `AbiEntryPackageNetworkFailure`, and `AbiEntryPackageProtocolError` to
-  `EntryReconciliationExecutionError`, preserving the original ABI exception as
-  `__cause__`.
+- [ ] 5.5 Map `EntryPackagePublicError` (a returned result value, not a raised
+  exception) to `EntryReconciliationExecutionError(public_error=result)` with
+  no `__cause__` (nothing was caught or re-raised). Map each raised exception
+  (`AbiEntryPackageTimeout`, `AbiEntryPackageNetworkFailure`,
+  `AbiEntryPackageProtocolError`) to `EntryReconciliationExecutionError(...)
+  raised from <original exception>`, preserving it as `__cause__`.
 - [ ] 5.6 Keep the bridge unconnected to `EntryReconciliationOrchestrator`,
   `StrategyRuntimeOrchestrator`, `build_application`, repository, mutex, and
   production configuration.
@@ -177,9 +183,12 @@
 - [ ] 7.4 Add a controllable fake ABI HTTP server for the open-position endpoint
   and test path-segment encoding (slash, percent, Unicode, whitespace,
   dot-only), `position_open=false` success, `position_open=true` success with
-  decimal preservation, unexpected `404` rejection, documented public error,
-  timeout, network failure, protocol error, malformed body, redirect rejection,
-  and single-attempt cardinality.
+  string-JSON decimal decoding (no float conversion) and correct
+  domain-normalized `executed_entry_price` (not byte-identical round-trip),
+  unexpected `404` rejection, documented public error, a documented `5xx` with
+  a valid envelope mapping to `OpenPositionLookupUnavailable`, timeout,
+  network failure, protocol error, malformed body, redirect rejection, and
+  single-attempt cardinality.
 - [ ] 7.5 Assert that no unconfirmed outcome (timeout, network failure, public
   error, protocol error, redirect) can produce a success result for any of the
   three adapters.
@@ -192,9 +201,12 @@
 - [ ] 8.2 Test `EntryPackageApplied` → `EntryAppliedConfirmation` mapping
   (including wire `DesiredEntry` → domain `DesiredEntry`) and
   `EntryPackageAbsent` → `EntryAbsentConfirmation` mapping.
-- [ ] 8.3 Test that each ABI failure class (`EntryPackagePublicError` and each
-  typed exception) raises `EntryReconciliationExecutionError` with the original
-  exception preserved as `__cause__`.
+- [ ] 8.3 Test that the `EntryPackagePublicError` result value produces
+  `EntryReconciliationExecutionError` with no `__cause__` asserted (it is a
+  returned value, not a caught/re-raised exception), and that each raised
+  exception (`AbiEntryPackageTimeout`, `AbiEntryPackageNetworkFailure`,
+  `AbiEntryPackageProtocolError`) produces `EntryReconciliationExecutionError`
+  with the original exception preserved as `__cause__`.
 - [ ] 8.4 Test that the bridge calls `AbiEntryPackagePort.send` exactly once per
   `execute(...)` and performs no retry, mutex acquisition, repository access, or
   state mutation.

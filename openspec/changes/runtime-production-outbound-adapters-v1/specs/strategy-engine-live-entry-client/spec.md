@@ -77,16 +77,29 @@ model without bypassing its invariants.
   price-order, decimal regex, or decimal text-length restriction
 - **AND** the existing domain model invariants remain the only additional rules
 
-### Requirement: Exact-decimal text survives the live-entry client boundary
-The Runtime adapter SHALL encode and decode exact-decimal values as JSON strings
-without binary floating-point conversion.
+### Requirement: Decimal fields decode as JSON strings without float conversion; response values are domain-normalized, not byte-preserved
+The Runtime adapter SHALL encode outbound decimal request fields and decode
+inbound decimal response fields as JSON strings without binary
+floating-point conversion. A decoded response decimal maps into the existing
+`runtime.recipes.entry.DesiredEntry` domain model and is therefore
+domain-normalized by that model's existing `normalize_decimal_text` and
+invariant rules; the adapter does not guarantee byte-for-value /
+exact-lexeme preservation of the original Engine response text.
 
-#### Scenario: Preserve outbound decimal strings
-- **WHEN** a request or response contains accepted decimal strings with signs,
-  trailing zeros, leading zeros, or exponent notation
-- **THEN** the adapter preserves the same strings byte-for-value in the decoded
-  JSON
+#### Scenario: Encode outbound decimal strings without float conversion
+- **WHEN** the adapter sends a request containing decimal values
+- **THEN** it encodes them as JSON strings
 - **AND** does not convert them through `float`
+
+#### Scenario: Decode inbound decimal strings without float conversion
+- **WHEN** Engine returns decimal price strings with signs, trailing zeros,
+  leading zeros, or exponent notation
+- **THEN** the adapter parses them as JSON strings without converting through
+  `float`
+- **AND** maps the resulting value into the existing `DesiredEntry` domain
+  model, which applies its own `normalize_decimal_text` and invariants
+- **AND** the adapter does not assert byte-for-value / exact-lexeme
+  preservation of the original response text
 
 #### Scenario: Reject JSON numeric decimal fields
 - **WHEN** Engine returns any price as a JSON number

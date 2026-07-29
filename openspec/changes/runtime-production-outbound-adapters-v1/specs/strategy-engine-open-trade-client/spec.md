@@ -95,15 +95,30 @@ validating any fixed internal diagnostics field set.
 - **THEN** the adapter does not replace protection, issue a close command, apply
   a phase transition, or mutate state
 
-### Requirement: Exact-decimal text survives the open-trade client boundary
-The Runtime adapter SHALL encode and decode exact-decimal values as JSON strings
-without binary floating-point conversion.
+### Requirement: Decimal fields decode as JSON strings without float conversion; response values are domain-normalized, not byte-preserved
+The Runtime adapter SHALL encode outbound decimal request fields and decode
+inbound decimal response fields as JSON strings without binary
+floating-point conversion. Decoded response decimals (`stop_price`,
+`take_price`) map into the existing
+`runtime.recipes.position_management.DesiredProtection` domain model and are
+therefore domain-normalized by that model's existing invariants; the adapter
+does not guarantee byte-for-value / exact-lexeme preservation of the original
+Engine response text.
 
-#### Scenario: Preserve outbound decimal strings
-- **WHEN** a request or response contains accepted decimal strings
-- **THEN** the adapter preserves the same strings byte-for-value in the decoded
-  JSON
+#### Scenario: Encode outbound decimal strings without float conversion
+- **WHEN** the adapter sends a request containing decimal values
+- **THEN** it encodes them as JSON strings
 - **AND** does not convert them through `float`
+
+#### Scenario: Decode inbound decimal strings without float conversion
+- **WHEN** Engine returns `stop_price` or `take_price` decimal strings with
+  signs, trailing zeros, leading zeros, or exponent notation
+- **THEN** the adapter parses them as JSON strings without converting through
+  `float`
+- **AND** maps the resulting values into the existing `DesiredProtection`
+  domain model, which applies its own invariants
+- **AND** the adapter does not assert byte-for-value / exact-lexeme
+  preservation of the original response text
 
 #### Scenario: Reject JSON numeric decimal fields
 - **WHEN** Engine returns `stop_price` or `take_price` as a JSON number

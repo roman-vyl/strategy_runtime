@@ -84,21 +84,31 @@ additional rules.
 
 ### Requirement: Unconfirmed outcomes raise a typed execution failure
 The bridge SHALL raise `EntryReconciliationExecutionError` for any ABI public
-error, timeout, network failure, or protocol failure and SHALL preserve the
-original ABI exception as the cause. The bridge SHALL NOT retry, mutate state,
-or return a confirmation for an unconfirmed outcome.
+error, timeout, network failure, or protocol failure. The bridge SHALL NOT
+retry, mutate state, or return a confirmation for an unconfirmed outcome.
+`EntryPackagePublicError` is a typed dataclass result value returned by
+`AbiEntryPackagePort.send`, not a raised exception: the bridge constructs
+`EntryReconciliationExecutionError(public_error=result)` directly from that
+value, and no `__cause__` chain applies because nothing was caught or
+re-raised. `AbiEntryPackageTimeout`, `AbiEntryPackageNetworkFailure`, and
+`AbiEntryPackageProtocolError` are raised exceptions from `send`: the bridge
+catches each and raises `EntryReconciliationExecutionError(...) from <original
+exception>`, preserving the original exception as `__cause__`.
 
 #### Scenario: Propagate a public ABI error
 - **WHEN** `AbiEntryPackagePort.send` returns an `EntryPackagePublicError`
-- **THEN** the bridge raises `EntryReconciliationExecutionError`
-- **AND** the original ABI exception is preserved as `__cause__`
+  result value
+- **THEN** the bridge constructs `EntryReconciliationExecutionError` from that
+  result value
+- **AND** no exception was caught or re-raised, so no `__cause__` is required
 - **AND** the bridge returns no confirmation
 
 #### Scenario: Propagate a transport or protocol failure
 - **WHEN** `AbiEntryPackagePort.send` raises `AbiEntryPackageTimeout`,
   `AbiEntryPackageNetworkFailure`, or `AbiEntryPackageProtocolError`
-- **THEN** the bridge raises `EntryReconciliationExecutionError`
-- **AND** the original ABI exception is preserved as `__cause__`
+- **THEN** the bridge catches the raised exception and raises
+  `EntryReconciliationExecutionError`
+- **AND** the original raised exception is preserved as `__cause__`
 
 #### Scenario: Do not retry an unconfirmed outcome
 - **WHEN** an ABI call fails or is rejected
@@ -135,7 +145,12 @@ behavior.
 - **WHEN** the fake `AbiEntryPackagePort` returns each result or raises each
   typed exception
 - **THEN** tests assert the matching `SuccessfulEntryConfirmation` variant or
-  `EntryReconciliationExecutionError` with preserved cause
+  `EntryReconciliationExecutionError`
+- **AND** for the `EntryPackagePublicError` result value, the error is
+  constructed directly with no `__cause__` asserted
+- **AND** for each raised exception (`AbiEntryPackageTimeout`,
+  `AbiEntryPackageNetworkFailure`, `AbiEntryPackageProtocolError`), the
+  original exception is preserved as `__cause__`
 
 #### Scenario: Verify no HTTP ownership
 - **WHEN** the bridge is tested

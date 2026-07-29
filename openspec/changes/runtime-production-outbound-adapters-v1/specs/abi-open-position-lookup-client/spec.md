@@ -76,16 +76,23 @@ malformed body, timeout, or transport failure into `position_open=false`.
 - **THEN** the adapter raises `OpenPositionLookupProtocolError`
 - **AND** does not return a success response
 
-### Requirement: Exact-decimal text survives the open-position client boundary
-The Runtime adapter SHALL decode `executed_entry_price` as a JSON string without
-binary floating-point conversion.
+### Requirement: Executed entry price decodes as a JSON string without float conversion, then domain-normalizes
+The Runtime adapter SHALL decode `executed_entry_price` as a JSON string
+without binary floating-point conversion. The decoded value maps into the
+existing `OpenPositionLookupResponse` domain model and is therefore
+domain-normalized by that model's existing invariants; the adapter does not
+guarantee byte-for-value / exact-lexeme preservation of the original ABI
+response text.
 
-#### Scenario: Preserve executed entry price lexeme
+#### Scenario: Decode executed entry price without float conversion
 - **WHEN** ABI returns an accepted decimal string with signs, trailing zeros,
   leading zeros, or exponent notation
-- **THEN** the adapter preserves the value through the existing
-  `OpenPositionLookupResponse` invariants
-- **AND** does not convert it through `float`
+- **THEN** the adapter parses it as a JSON string without converting it
+  through `float`
+- **AND** maps the resulting value through the existing
+  `OpenPositionLookupResponse` invariants, which domain-normalize it
+- **AND** the adapter does not assert byte-for-value / exact-lexeme
+  preservation of the original response text
 
 ### Requirement: Documented ABI non-2xx responses become typed public errors
 The Runtime adapter SHALL strictly decode a documented ABI `400`/`422` public
@@ -103,6 +110,19 @@ code, message, and details.
   missing, empty, or mistyped required field
 - **THEN** the adapter raises `OpenPositionLookupProtocolError`
 - **AND** does not suppress or relabel the response as a valid public error
+
+### Requirement: A documented 5xx response with a valid envelope is an availability failure, not a public error
+The Runtime adapter SHALL treat a documented `5xx` status with a valid parse of
+the closed ABI error envelope as `OpenPositionLookupUnavailable` (its
+availability/`ServiceUnavailable`-style cluster, consistent with the timeout
+and network-failure subtypes), not as `OpenPositionLookupPublicError`.
+
+#### Scenario: Classify a documented 5xx as unavailable
+- **WHEN** ABI returns a documented `5xx` status with a valid parse of the
+  closed `{error: {code, message, details}}` envelope
+- **THEN** the adapter raises `OpenPositionLookupUnavailable`
+- **AND** does not raise `OpenPositionLookupPublicError`
+- **AND** returns no position fact
 
 ### Requirement: Transport and protocol failures are distinct for open-position lookup
 The Runtime adapter SHALL expose separate typed failures for a request timeout,
@@ -162,8 +182,12 @@ malformed response, redirect rejection, and single-attempt cardinality.
 
 #### Scenario: Verify the raw outbound request
 - **WHEN** fake-HTTP contract tests exercise open-position lookups
-- **THEN** they assert the exact method, encoded route, content type, absence of
-  a request body, opaque path-segment encoding, and dot-only segment handling
+- **THEN** they assert the exact GET method, encoded route, absence of a
+  request body (and therefore no request `Content-Type` header, which does
+  not apply to a bodyless GET), opaque path-segment encoding, and dot-only
+  segment handling
+- **AND** they assert the response `Content-Type: application/json` is
+  checked on the response side
 
 #### Scenario: Verify all response classes
 - **WHEN** the fake ABI emits a closed position, an open position, an unexpected
