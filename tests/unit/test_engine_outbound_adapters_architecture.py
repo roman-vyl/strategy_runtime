@@ -27,26 +27,31 @@ def _imported_modules(paths: tuple[Path, ...]) -> set[str]:
     return imported
 
 
-def test_new_engine_adapters_are_not_referenced_by_production_composition() -> None:
+def test_engine_adapters_are_wired_into_production_composition_by_i4d() -> None:
+    """I4d composes both adapters into `build_application`, inverting the
+    I4c-era guardrail that proved them implemented in isolation with zero
+    production wiring. `runtime.engine.errors` remains unimported by these
+    wired components: only the adapter classes themselves are constructed
+    here, not the typed failure taxonomy, which callers catch through the
+    existing `StrategyEngineProjectionUnavailable` supertype instead."""
     imported = _imported_modules(WIRED_COMPONENT_PATHS)
 
-    forbidden_prefixes = (
-        "strategy_runtime.infrastructure.strategy_engine",
-        "strategy_runtime.runtime.engine.errors",
+    assert any(
+        name == "strategy_runtime.infrastructure.strategy_engine"
+        or name.startswith("strategy_runtime.infrastructure.strategy_engine.")
+        for name in imported
     )
     assert not any(
-        name == prefix or name.startswith(f"{prefix}.")
+        name == "strategy_runtime.runtime.engine.errors"
+        or name.startswith("strategy_runtime.runtime.engine.errors.")
         for name in imported
-        for prefix in forbidden_prefixes
     )
 
-    forbidden_tokens = (
-        "HttpxStrategyEngineLiveEntryAdapter",
-        "HttpxStrategyEngineOpenTradeAdapter",
+    application_source = Path("src/strategy_runtime/bootstrap/application.py").read_text(
+        encoding="utf-8"
     )
-    source = "\n".join(path.read_text(encoding="utf-8") for path in WIRED_COMPONENT_PATHS)
-    for token in forbidden_tokens:
-        assert token not in source, f"forbidden token '{token}' found in production composition"
+    for token in ("HttpxStrategyEngineLiveEntryAdapter", "HttpxStrategyEngineOpenTradeAdapter"):
+        assert token in application_source, f"expected '{token}' in production composition"
 
 
 def test_new_engine_adapters_module_has_no_forbidden_dependencies() -> None:

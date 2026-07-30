@@ -6,6 +6,7 @@ from collections.abc import Callable
 from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.types import Lifespan
 
 from strategy_runtime.adapters.http.models import (
     AcceptedResponse,
@@ -27,8 +28,9 @@ def create_http_app(
     trace_id_factory: IdentifierFactory,
     process_committed_bar: BackgroundUseCase | None,
     logger: logging.Logger | None = None,
+    lifespan: Lifespan[FastAPI] | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="Strategy Runtime", version="0.1.0")
+    app = FastAPI(title="Strategy Runtime", version="0.1.0", lifespan=lifespan)
     app.state.ready = ready
     app.state.process_committed_bar = process_committed_bar
     app.state.trace_id_factory = trace_id_factory

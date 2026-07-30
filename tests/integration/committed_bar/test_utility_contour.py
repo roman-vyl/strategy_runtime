@@ -1,11 +1,19 @@
 import json
 from pathlib import Path
 
-from fastapi.testclient import TestClient
-
-from strategy_runtime.bootstrap.application import build_application
-from strategy_runtime.utility.committed_bar import StrategyBarProcessingUnit
-from strategy_runtime.utility.deployment_catalog import DeploymentSpecification
+from strategy_runtime.shared.identifiers import new_identifier, utc_timestamp
+from strategy_runtime.utility.committed_bar import (
+    CommittedBarEvent,
+    CommittedBarOrchestrator,
+    StrategyBarProcessingUnit,
+)
+from strategy_runtime.utility.deployment_catalog import (
+    DeploymentSpecification,
+    FilesystemDeploymentCatalog,
+)
+from strategy_runtime.utility.deployment_selection import CommittedBarDeploymentSelector
+from strategy_runtime.utility.handoff import StrategyCycleHandoffBoundary
+from strategy_runtime.utility.processing_journal import JsonlProcessingJournal
 
 
 def _write_deployment(
@@ -34,7 +42,15 @@ def _write_deployment(
     )
 
 
-def test_production_composition_runs_the_complete_utility_contour(tmp_path: Path) -> None:
+def test_utility_contour_selects_and_dispatches_matching_deployment(tmp_path: Path) -> None:
+    """Exercise the utility contour in isolation, without `build_application`.
+
+    `build_application` no longer has a utility-only ready result (it always
+    requires and constructs the complete semantic/outbound production graph),
+    so the utility contour's own isolated testability is proven by
+    constructing its components directly, exactly as production composition
+    does internally.
+    """
     specs_path = tmp_path / "specs"
     specs_path.mkdir()
     _write_deployment(
@@ -56,27 +72,28 @@ def test_production_composition_runs_the_complete_utility_contour(tmp_path: Path
         fast_ema=22,
     )
     journal_path = tmp_path / "journal" / "runtime.jsonl"
+    journal_path.parent.mkdir(parents=True)
     received: list[StrategyBarProcessingUnit[DeploymentSpecification]] = []
 
-    app = build_application(
-        {
-            "RUNTIME_SPECS_PATH": str(specs_path),
-            "RUNTIME_JOURNAL_PATH": str(journal_path),
-        },
-        strategy_cycle_handoff=received.append,
+    catalog = FilesystemDeploymentCatalog(specs_path)
+    selector = CommittedBarDeploymentSelector()
+    journal = JsonlProcessingJournal(
+        journal_path,
+        event_id_factory=new_identifier,
+        timestamp_factory=utc_timestamp,
+    )
+    handoff_boundary = StrategyCycleHandoffBoundary(received.append)
+    orchestrator = CommittedBarOrchestrator(
+        deployment_catalog=catalog,
+        deployment_selector=selector,
+        strategy_cycle_dispatcher=handoff_boundary,
+        processing_journal=journal,
     )
 
-    response = TestClient(app).post(
-        "/v1/webhooks/closed-bar",
-        json={
-            "instrument": "BTCUSDT.P",
-            "timeframe": "5m",
-            "open_time_ms": 12345,
-        },
+    orchestrator.process(
+        CommittedBarEvent(instrument="BTCUSDT.P", timeframe="5m", open_time_ms=12345)
     )
 
-    assert response.status_code == 200
-    assert response.json() == {"status": "accepted"}
     assert len(received) == 1
     assert received[0].deployment.source_path == "selected.json"
     assert received[0].strategy_instance_id == received[0].deployment.strategy_instance_id

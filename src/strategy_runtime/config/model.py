@@ -11,6 +11,17 @@ class RuntimeConfig:
     journal_path: Path = Path("var/journal/runtime.jsonl")
     specs_path: Path = Path("var/specs")
     service_instance: str = "local"
+    # The five fields below have no meaningful default: `load_runtime_config`
+    # always requires their environment variables and never falls back to
+    # the placeholder values here. The placeholders exist only so this
+    # frozen dataclass remains constructible with keyword defaults; URL
+    # shape and timeout sign/finiteness are validated by the outbound HTTP
+    # adapter constructors, not here (see runtime-production-composition).
+    strategy_engine_base_url: str = ""
+    strategy_engine_timeout_seconds: float = 0.0
+    abi_base_url: str = ""
+    abi_open_position_timeout_seconds: float = 0.0
+    abi_entry_package_timeout_seconds: float = 0.0
 
     def __post_init__(self) -> None:
         if not self.host.strip():

@@ -21,10 +21,44 @@ def load_runtime_config(environ: Mapping[str, str] | None = None) -> RuntimeConf
     except ValueError as exc:
         raise ValueError("RUNTIME_PORT must be an integer") from exc
 
+    strategy_engine_base_url = _require_text(values, "RUNTIME_STRATEGY_ENGINE_BASE_URL")
+    strategy_engine_timeout_seconds = _require_float(
+        values, "RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS"
+    )
+    abi_base_url = _require_text(values, "RUNTIME_ABI_BASE_URL")
+    abi_open_position_timeout_seconds = _require_float(
+        values, "RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS"
+    )
+    abi_entry_package_timeout_seconds = _require_float(
+        values, "RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS"
+    )
+
     return RuntimeConfig(
         host=values.get("RUNTIME_HOST", "127.0.0.1"),
         port=port,
         journal_path=Path(journal_text),
         specs_path=Path(specs_text),
         service_instance=values.get("RUNTIME_SERVICE_INSTANCE", "local"),
+        strategy_engine_base_url=strategy_engine_base_url,
+        strategy_engine_timeout_seconds=strategy_engine_timeout_seconds,
+        abi_base_url=abi_base_url,
+        abi_open_position_timeout_seconds=abi_open_position_timeout_seconds,
+        abi_entry_package_timeout_seconds=abi_entry_package_timeout_seconds,
     )
+
+
+def _require_text(values: Mapping[str, str], name: str) -> str:
+    text = values.get(name)
+    if text is None or not text.strip():
+        raise ValueError(f"{name} must be set")
+    return text
+
+
+def _require_float(values: Mapping[str, str], name: str) -> float:
+    text = values.get(name)
+    if text is None or not text.strip():
+        raise ValueError(f"{name} must be set")
+    try:
+        return float(text)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number") from exc

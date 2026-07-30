@@ -27,19 +27,22 @@ def _imported_modules(paths: tuple[Path, ...]) -> set[str]:
     return imported
 
 
-def test_new_open_position_adapter_is_not_referenced_by_production_composition() -> None:
+def test_open_position_adapter_is_wired_into_production_composition_by_i4d() -> None:
+    """I4d composes the adapter into `build_application`, inverting the I4c
+    -era guardrail that proved it was implemented in isolation with zero
+    production wiring."""
     imported = _imported_modules(WIRED_COMPONENT_PATHS)
 
-    assert not any(
+    assert any(
         name == "strategy_runtime.infrastructure.abi"
         or name.startswith("strategy_runtime.infrastructure.abi.")
         for name in imported
     )
 
-    forbidden_tokens = ("HttpxAbiOpenPositionLookupAdapter",)
-    source = "\n".join(path.read_text(encoding="utf-8") for path in WIRED_COMPONENT_PATHS)
-    for token in forbidden_tokens:
-        assert token not in source, f"forbidden token '{token}' found in production composition"
+    application_source = Path("src/strategy_runtime/bootstrap/application.py").read_text(
+        encoding="utf-8"
+    )
+    assert "HttpxAbiOpenPositionLookupAdapter" in application_source
 
 
 def test_new_open_position_adapter_module_has_no_forbidden_dependencies() -> None:

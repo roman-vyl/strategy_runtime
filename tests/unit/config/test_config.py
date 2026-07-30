@@ -5,9 +5,17 @@ import pytest
 from strategy_runtime.config.loader import load_runtime_config
 from strategy_runtime.config.startup import prepare_journal_path, prepare_specs_path
 
+_REQUIRED_OUTBOUND_ENV = {
+    "RUNTIME_STRATEGY_ENGINE_BASE_URL": "http://engine.internal",
+    "RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS": "5",
+    "RUNTIME_ABI_BASE_URL": "http://abi.internal",
+    "RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS": "5",
+    "RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS": "5",
+}
+
 
 def test_loads_defaults() -> None:
-    config = load_runtime_config({})
+    config = load_runtime_config(dict(_REQUIRED_OUTBOUND_ENV))
     assert config.host == "127.0.0.1"
     assert config.port == 8093
     assert config.journal_path == Path("var/journal/runtime.jsonl")
@@ -18,6 +26,7 @@ def test_loads_defaults() -> None:
 def test_environment_overrides() -> None:
     config = load_runtime_config(
         {
+            **_REQUIRED_OUTBOUND_ENV,
             "RUNTIME_HOST": "0.0.0.0",
             "RUNTIME_PORT": "9000",
             "RUNTIME_JOURNAL_PATH": "tmp/events.jsonl",
@@ -28,6 +37,56 @@ def test_environment_overrides() -> None:
     assert config.port == 9000
     assert config.service_instance == "node-a"
     assert config.specs_path == Path("tmp/specs")
+
+
+def test_loads_required_outbound_fields() -> None:
+    config = load_runtime_config(dict(_REQUIRED_OUTBOUND_ENV))
+    assert config.strategy_engine_base_url == "http://engine.internal"
+    assert config.strategy_engine_timeout_seconds == 5.0
+    assert config.abi_base_url == "http://abi.internal"
+    assert config.abi_open_position_timeout_seconds == 5.0
+    assert config.abi_entry_package_timeout_seconds == 5.0
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "RUNTIME_STRATEGY_ENGINE_BASE_URL",
+        "RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS",
+        "RUNTIME_ABI_BASE_URL",
+        "RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS",
+        "RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS",
+    ],
+)
+def test_rejects_missing_required_outbound_field(missing: str) -> None:
+    env = dict(_REQUIRED_OUTBOUND_ENV)
+    del env[missing]
+    with pytest.raises(ValueError):
+        load_runtime_config(env)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS",
+        "RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS",
+        "RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS",
+    ],
+)
+def test_rejects_unparsable_outbound_timeout(name: str) -> None:
+    env = {**_REQUIRED_OUTBOUND_ENV, name: "not-a-number"}
+    with pytest.raises(ValueError):
+        load_runtime_config(env)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["RUNTIME_STRATEGY_ENGINE_BASE_URL", "RUNTIME_ABI_BASE_URL"],
+)
+def test_rejects_empty_outbound_base_url(name: str) -> None:
+    env = {**_REQUIRED_OUTBOUND_ENV, name: "  "}
+    with pytest.raises(ValueError):
+        load_runtime_config(env)
 
 
 @pytest.mark.parametrize("port", ["abc", "0", "65536"])
