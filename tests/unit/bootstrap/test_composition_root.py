@@ -215,6 +215,89 @@ def test_shutdown_closes_all_four_clients_exactly_once(
 
     assert all(count == 1 for count in close_call_counts.values())
 
+    # Repeated close requests are idempotent: calling close_all_once() again,
+    # directly or via a second lifespan shutdown, must not double-close.
+    app.state.outbound_http_client_lifecycle.close_all_once()
+    app.state.outbound_http_client_lifecycle.close_all_once()
+    assert all(count == 1 for count in close_call_counts.values())
+
+
+def test_lifecycle_owner_close_all_once_is_idempotent_when_called_directly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    close_call_counts: dict[int, int] = {}
+
+    for name in (
+        "HttpxStrategyEngineLiveEntryAdapter",
+        "HttpxStrategyEngineOpenTradeAdapter",
+        "HttpxAbiOpenPositionLookupAdapter",
+        "HttpxAbiEntryPackageAdapter",
+    ):
+        real = getattr(application_module, name)
+
+        def _make_wrapper(real_cls: Callable[..., Any]) -> Callable[..., Any]:
+            def wrapper(*args: object, **kwargs: object) -> Any:
+                instance = real_cls(*args, **kwargs)
+                close_call_counts[id(instance)] = 0
+                real_close = instance.close
+
+                def counting_close() -> None:
+                    close_call_counts[id(instance)] += 1
+                    real_close()
+
+                instance.close = counting_close
+                return instance
+
+            return wrapper
+
+        monkeypatch.setattr(application_module, name, _make_wrapper(real))
+
+    app = build_application(_valid_environ(tmp_path))
+    assert app.state.ready is True
+    lifecycle = app.state.outbound_http_client_lifecycle
+
+    lifecycle.close_all_once()
+    lifecycle.close_all_once()
+    lifecycle.close_all_once()
+
+    assert len(close_call_counts) == 4
+    assert all(count == 1 for count in close_call_counts.values())
+
+
+def test_startup_rollback_covers_construction_after_all_four_clients_exist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rollback boundary extends past the four HTTP clients: a failure
+    inside `create_http_app(ready=True, ...)` itself -- after all four
+    clients, the semantic graph, and the thin sink already exist -- still
+    triggers rollback and returns `ready=False`, never a partially assembled
+    `ready=True` application."""
+    live_entry_instances = _count_constructions(monkeypatch, "HttpxStrategyEngineLiveEntryAdapter")
+    open_trade_instances = _count_constructions(monkeypatch, "HttpxStrategyEngineOpenTradeAdapter")
+    open_position_instances = _count_constructions(monkeypatch, "HttpxAbiOpenPositionLookupAdapter")
+    entry_package_instances = _count_constructions(monkeypatch, "HttpxAbiEntryPackageAdapter")
+
+    real_create_http_app = application_module.create_http_app
+
+    def _create_http_app_wrapper(*, ready: bool, **kwargs: object) -> Any:
+        if ready:
+            raise RuntimeError("simulated failure while assembling the ready FastAPI application")
+        return real_create_http_app(ready=ready, **kwargs)
+
+    monkeypatch.setattr(application_module, "create_http_app", _create_http_app_wrapper)
+
+    app = build_application(_valid_environ(tmp_path))
+
+    assert app.state.ready is False
+    for instances in (
+        live_entry_instances,
+        open_trade_instances,
+        open_position_instances,
+        entry_package_instances,
+    ):
+        assert len(instances) == 1
+        assert instances[0]._client.is_closed
+
 
 def test_default_sink_dispatches_into_the_real_strategy_runtime_orchestrator(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

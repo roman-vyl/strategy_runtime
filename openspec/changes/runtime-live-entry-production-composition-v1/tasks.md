@@ -105,22 +105,25 @@
 
 ## 5. HTTP Client Lifecycle and Shutdown
 
-- [x] 5.1 Introduce a single explicit composition lifecycle owner (e.g., a
-  small composition-root object or closure) that holds references to all four
-  constructed HTTP clients and exposes one operation that closes all of them.
-- [x] 5.2 Wire that owner's close-all operation into exactly two paths: (a)
-  startup rollback — invoked synchronously during `build_application`
-  construction the moment a later client's constructor rejects its
-  configuration, closing every client already constructed before returning
-  the not-ready application; and (b) application shutdown (FastAPI `lifespan`
-  or an equivalent mechanism) — invoked once construction succeeded and the
-  application later shuts down. Do not pin a specific FastAPI shutdown API
-  beyond "closes deterministically."
+- [x] 5.1 Introduce a single explicit, stateful composition lifecycle owner
+  (`_OutboundHttpClientLifecycle`: one ordered client collection, one
+  `_closed` flag) that holds references to all four constructed HTTP clients
+  and exposes one idempotent `close_all_once()` operation; a second or later
+  call is a no-op, and one client's `close()` failure does not prevent
+  closing the rest.
+- [x] 5.2 Wire that owner's `close_all_once()` into exactly two paths: (a)
+  startup rollback — invoked synchronously inside `build_application`'s
+  `except Exception` clause, which now wraps the entire construction boundary
+  through `create_http_app(ready=True, ...)` and `app.state` attachment (§5.6);
+  and (b) application shutdown (FastAPI `lifespan`) — invoked once
+  construction succeeded and the application later shuts down. Do not pin a
+  specific FastAPI shutdown API beyond "closes deterministically."
 - [x] 5.3 On partial construction failure (a client fails to construct after
-  earlier clients already succeeded), close every already-constructed client
-  exactly once via startup rollback before `build_application` returns the
-  not-ready application; those clients are not exposed in any returned
-  application and are not closed again later.
+  earlier clients already succeeded, or any later construction step fails —
+  §5.6), close every already-constructed client exactly once via
+  `close_all_once()` before `build_application` returns the not-ready
+  application; those clients are not exposed in any returned application and
+  are not closed again later.
 - [x] 5.4 Ensure no code path other than the composition lifecycle owner ever
   calls `close()` on any of the four clients: not an HTTP request handler, not
   a background committed-bar cycle, not `StrategyRuntimeOrchestrator`,
@@ -129,10 +132,23 @@
   call, or any other caller — only the composition lifecycle owner does,
   during startup rollback or application shutdown.
 - [x] 5.5 Add tests: shutdown closes all four clients exactly once each after
-  a successful ready construction; simulated partial-construction failure
-  (e.g., a valid Engine config paired with an invalid ABI config) results in
-  the Engine clients being closed exactly once via startup rollback and
-  `ready=False`, with no leaked open client and no double-close.
+  a successful ready construction, and a further direct
+  `close_all_once()` call afterward does not double-close; simulated
+  partial-construction failure (e.g., a valid Engine config paired with an
+  invalid ABI config) results in the Engine clients being closed exactly once
+  via startup rollback and `ready=False`, with no leaked open client; calling
+  `close_all_once()` directly and repeatedly also leaves each client closed
+  exactly once.
+- [x] 5.6 Widen the protected construction boundary to cover every step from
+  the first outbound HTTP client constructed through returning the ready
+  FastAPI application: all four client constructors, the semantic-graph
+  construction, the thin sink/utility-graph construction, lifespan
+  construction, `create_http_app(...)`, and `app.state` attachment are all
+  inside the one `try` block. Add a test proving a failure inside
+  `create_http_app(ready=True, ...)` itself — after all four clients already
+  exist — still triggers rollback and yields `ready=False`, never a partially
+  assembled `ready=True` application. `KeyboardInterrupt`/`SystemExit` remain
+  unmasked (`except Exception`, not bare `except`).
 
 ## 6. Production `StrategyCycleHandoff` Sink and Utility-Contour Test Migration
 
@@ -218,26 +234,34 @@
 - [x] 8.4 Strategy Engine projection failure (timeout, network failure,
   protocol error, public error — each individually): assert the ABI
   entry-package endpoint is never called and no repository save occurs.
-- [x] 8.5 ABI entry-package failure (timeout, network failure, protocol error,
-  public error — each individually): at the component level, assert
-  `EntryReconciliationExecutionError` propagates uncaught out of
+- [x] 8.5 ABI entry-package failure — all four kinds individually, none
+  skipped: timeout, protocol error, public error, and network failure. The
+  network-failure kind is modeled with a real, path-specific mid-flight
+  transport failure: the fake ABI server (`DisconnectResponse`) accepts the
+  TCP connection on the entry-package route, records the request, then
+  disconnects before writing any HTTP status line, headers, or body, while
+  the open-position route on the exact same server/`RUNTIME_ABI_BASE_URL`
+  keeps responding normally — proving the shared base URL does not prevent
+  isolating a failure to entry-package alone. httpx surfaces this as
+  `httpx.RemoteProtocolError` (a `TransportError` subclass), which the
+  existing `HttpxAbiEntryPackageAdapter` maps to `AbiEntryPackageNetworkFailure`,
+  exactly like every other transport failure. At the component level, a
+  patched `AbiEntryPackageExecutionBridge.execute` (delegating to the real
+  implementation) captures and asserts, for each of the four kinds, that
+  `EntryReconciliationExecutionError` propagates with the expected `__cause__`
+  (`AbiEntryPackageTimeout`/`NetworkFailure`/`ProtocolError`, or `None` with
+  `public_error` set for the public-error kind) uncaught out of
   `EntryReconciliationOrchestrator.execute(...)` and
   `StrategyRuntimeOrchestrator.process(...)`. At the full
-  `TestClient`/background-contour level, assert the observable result is a
-  failed `StrategyCycleDispatchOutcome` journaled by
+  `TestClient`/background-contour level (with the FastAPI lifespan actually
+  running via `with TestClient(app) as client:`), assert: ABI open-position
+  lookup and Strategy Engine live-entry each succeeded exactly once; the
+  entry-package endpoint was attempted exactly once with no retry; the
+  observable result is a failed `StrategyCycleDispatchOutcome` journaled by
   `CommittedBarOrchestrator` (design.md §9 propagation rule) — not an
-  exception escaping the HTTP/background boundary — that the repository holds
-  no new save for that cycle, and that no call depending on the failed one is
-  invoked. Timeout/protocol-error/public-error sub-cases are exercised
-  end-to-end; the network-failure sub-case is skipped with an explicit reason
-  (ABI open-position and entry-package share one `RUNTIME_ABI_BASE_URL`, so an
-  unreachable ABI host is already exercised by the open-position lookup
-  parametrization in §8.3 — there is no per-adapter base-URL override to
-  isolate it to entry-package alone). The component-level uncaught
-  -propagation identity is additionally pinned by a direct assertion; the full
-  propagation mechanics were already proven by the archived
-  `entry-reconciliation-orchestrator-v1`/`closed-bar-runtime-orchestration-v1`
-  fake-based suites and are not re-derived here.
+  exception escaping the HTTP/background boundary; the repository holds no
+  new save for that cycle; and the HTTP response remains the already-sent
+  `200 accepted`.
 - [x] 8.6 `position_open=true`: assert the open-trade Engine adapter may be
   called by `StrategyUseCaseRouter`, but `StrategyRuntimeOrchestrator` still
   raises `OpenTradeProjectionUnsupportedError`, which propagates the same way
@@ -307,7 +331,7 @@
 - [x] 10.2 Run the complete Runtime pytest suite, Ruff lint and format checks,
   mypy, and Python compilation checks using the repository's established
   verification commands. `make lint`, `make typecheck`, `make test`
-  (638 passed, 1 documented skip), and `python -m compileall` all pass.
+  (640 passed, 0 skipped), and `python -m compileall` all pass.
   `make format-check` reports four files
   (`src/strategy_runtime/runtime/abi/entry_package_codec.py`,
   `entry_package_http.py`, `tests/contract/abi/test_entry_package_client.py`,

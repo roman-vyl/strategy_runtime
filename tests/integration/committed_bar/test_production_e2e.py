@@ -1,12 +1,17 @@
 """Vertical live-entry E2E and per-boundary failure tests for I4d.
 
 These tests drive the complete production composition (`build_application`
-with full Engine/ABI configuration) through a real `TestClient` webhook
-request and real local HTTP servers standing in for Strategy Engine and ABI.
-Downstream outcomes are verified through repository state, recorded
-fake-server calls, and processing-journal records -- never through HTTP
-status or body, which stays the already-sent `200 accepted` regardless of
-background outcome (design.md secs. 4 and 9).
+with full Engine/ABI configuration) through a real, lifespan-aware
+`TestClient` webhook request and real local HTTP servers standing in for
+Strategy Engine and ABI. Downstream outcomes are verified through repository
+state, recorded fake-server calls, and processing-journal records -- never
+through HTTP status or body, which stays the already-sent `200 accepted`
+regardless of background outcome (design.md secs. 4 and 9).
+
+Each `app` is driven through `with TestClient(app) as client:` so the FastAPI
+lifespan actually starts and stops (outbound HTTP clients are constructed on
+`build_application` and closed on lifespan shutdown, exercised here rather
+than left dormant).
 """
 
 import json
@@ -19,12 +24,19 @@ import pytest
 from fastapi.testclient import TestClient
 
 from strategy_runtime.bootstrap.application import build_application
+from strategy_runtime.runtime.abi.entry_package_errors import (
+    AbiEntryPackageNetworkFailure,
+    AbiEntryPackageProtocolError,
+    AbiEntryPackageTimeout,
+)
 from strategy_runtime.runtime.entry_reconciliation_bridge import (
+    AbiEntryPackageExecutionBridge,
     EntryReconciliationExecutionError,
 )
 from strategy_runtime.utility.deployment_catalog import derive_strategy_instance_id
 
 from ._fake_http_server import (
+    DisconnectResponse,
     FakeHttpServer,
     FakeResponse,
     RecordedRequest,
@@ -86,8 +98,8 @@ def _build_app(
     return build_application(env)
 
 
-def _post_closed_bar(app: object, open_time_ms: int) -> object:
-    return TestClient(app).post(
+def _post_closed_bar(client: TestClient, open_time_ms: int) -> object:
+    return client.post(
         "/v1/webhooks/closed-bar",
         json={"instrument": _TICKER, "timeframe": _TIMEFRAME, "open_time_ms": open_time_ms},
     )
@@ -287,19 +299,20 @@ def test_happy_path_applies_desired_entry_and_saves_current_trade_cycle(
         tmp_path, engine_base_url=engine_server.base_url, abi_base_url=abi_server.base_url
     )
 
-    response = _post_closed_bar(app, 1)
+    with TestClient(app) as client:
+        response = _post_closed_bar(client, 1)
 
-    assert response.status_code == 200
-    assert response.json() == {"status": "accepted"}
+        assert response.status_code == 200
+        assert response.json() == {"status": "accepted"}
 
-    state = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
-    assert state is not None
-    assert state.current_trade_cycle is not None
-    assert state.current_trade_cycle.applied_entry_package.calculated_quantity == "1.5"
+        state = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
+        assert state is not None
+        assert state.current_trade_cycle is not None
+        assert state.current_trade_cycle.applied_entry_package.calculated_quantity == "1.5"
 
-    entry_package_requests = [r for r in abi_server.requests if "/entry-package" in r.path]
-    assert len(entry_package_requests) == 1
-    assert entry_package_requests[0].json()["risk_multiplier"] == state.risk_multiplier == "1"
+        entry_package_requests = [r for r in abi_server.requests if "/entry-package" in r.path]
+        assert len(entry_package_requests) == 1
+        assert entry_package_requests[0].json()["risk_multiplier"] == state.risk_multiplier == "1"
 
 
 def test_no_op_when_desired_entry_is_null_and_no_current_cycle(
@@ -311,15 +324,17 @@ def test_no_op_when_desired_entry_is_null_and_no_current_cycle(
     app = _build_app(
         tmp_path, engine_base_url=engine_server.base_url, abi_base_url=abi_server.base_url
     )
-    response = _post_closed_bar(app, 1)
 
-    assert response.status_code == 200
-    entry_package_requests = [r for r in abi_server.requests if "/entry-package" in r.path]
-    assert len(entry_package_requests) == 0
+    with TestClient(app) as client:
+        response = _post_closed_bar(client, 1)
 
-    state = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
-    assert state is not None
-    assert state.current_trade_cycle is None
+        assert response.status_code == 200
+        entry_package_requests = [r for r in abi_server.requests if "/entry-package" in r.path]
+        assert len(entry_package_requests) == 0
+
+        state = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
+        assert state is not None
+        assert state.current_trade_cycle is None
 
 
 def test_cancel_clears_cycle_only_after_entry_package_absent_confirmation(
@@ -337,20 +352,21 @@ def test_cancel_clears_cycle_only_after_entry_package_absent_confirmation(
         tmp_path, engine_base_url=engine_server.base_url, abi_base_url=abi_server.base_url
     )
 
-    first = _post_closed_bar(app, 1)
-    assert first.status_code == 200
-    state_after_apply = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
-    assert state_after_apply is not None
-    assert state_after_apply.current_trade_cycle is not None
+    with TestClient(app) as client:
+        first = _post_closed_bar(client, 1)
+        assert first.status_code == 200
+        state_after_apply = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
+        assert state_after_apply is not None
+        assert state_after_apply.current_trade_cycle is not None
 
-    second = _post_closed_bar(app, 2)
-    assert second.status_code == 200
-    state_after_cancel = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
-    assert state_after_cancel is not None
-    assert state_after_cancel.current_trade_cycle is None
+        second = _post_closed_bar(client, 2)
+        assert second.status_code == 200
+        state_after_cancel = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
+        assert state_after_cancel is not None
+        assert state_after_cancel.current_trade_cycle is None
 
-    entry_package_requests = [r for r in abi_server.requests if "/entry-package" in r.path]
-    assert len(entry_package_requests) == 2
+        entry_package_requests = [r for r in abi_server.requests if "/entry-package" in r.path]
+        assert len(entry_package_requests) == 2
 
 
 def test_open_trade_projection_remains_explicitly_unsupported(
@@ -370,27 +386,28 @@ def test_open_trade_projection_remains_explicitly_unsupported(
         tmp_path, engine_base_url=engine_server.base_url, abi_base_url=abi_server.base_url
     )
 
-    first = _post_closed_bar(app, 1)
-    assert first.status_code == 200
-    state_after_apply = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
-    assert state_after_apply is not None
-    assert state_after_apply.current_trade_cycle is not None
+    with TestClient(app) as client:
+        first = _post_closed_bar(client, 1)
+        assert first.status_code == 200
+        state_after_apply = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
+        assert state_after_apply is not None
+        assert state_after_apply.current_trade_cycle is not None
 
-    second = _post_closed_bar(app, 2)
-    assert second.status_code == 200
+        second = _post_closed_bar(client, 2)
+        assert second.status_code == 200
 
-    state_after_open_trade = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
-    assert state_after_open_trade == state_after_apply
+        state_after_open_trade = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
+        assert state_after_open_trade == state_after_apply
 
-    entry_package_requests = [r for r in abi_server.requests if "/entry-package" in r.path]
-    assert len(entry_package_requests) == 1
+        entry_package_requests = [r for r in abi_server.requests if "/entry-package" in r.path]
+        assert len(entry_package_requests) == 1
 
-    open_trade_requests = [r for r in engine_server.requests if r.path == _OPEN_TRADE_PATH]
-    assert len(open_trade_requests) == 1
+        open_trade_requests = [r for r in engine_server.requests if r.path == _OPEN_TRADE_PATH]
+        assert len(open_trade_requests) == 1
 
-    outcomes = _dispatch_outcomes(tmp_path / "journal" / "runtime.jsonl")
-    assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_failed"
-    assert outcomes[-1]["strategy_instance_id"] == _STRATEGY_INSTANCE_ID
+        outcomes = _dispatch_outcomes(tmp_path / "journal" / "runtime.jsonl")
+        assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_failed"
+        assert outcomes[-1]["strategy_instance_id"] == _STRATEGY_INSTANCE_ID
 
 
 # --- per-boundary failures ----------------------------------------------------
@@ -423,16 +440,17 @@ def test_abi_open_position_lookup_failure_stops_before_engine(
         abi_open_position_timeout=abi_timeout,
     )
 
-    response = _post_closed_bar(app, 1)
+    with TestClient(app) as client:
+        response = _post_closed_bar(client, 1)
 
-    assert response.status_code == 200
-    assert len(engine_server.requests) == 0
+        assert response.status_code == 200
+        assert len(engine_server.requests) == 0
 
-    state = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
-    assert state is None or state.current_trade_cycle is None
+        state = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
+        assert state is None or state.current_trade_cycle is None
 
-    outcomes = _dispatch_outcomes(tmp_path / "journal" / "runtime.jsonl")
-    assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_failed"
+        outcomes = _dispatch_outcomes(tmp_path / "journal" / "runtime.jsonl")
+        assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_failed"
 
 
 @pytest.mark.parametrize("kind", _FAILURE_KINDS)
@@ -460,31 +478,57 @@ def test_strategy_engine_projection_failure_stops_before_abi_entry_package(
         engine_timeout=engine_timeout,
     )
 
-    response = _post_closed_bar(app, 1)
+    with TestClient(app) as client:
+        response = _post_closed_bar(client, 1)
 
-    assert response.status_code == 200
-    entry_package_requests = [r for r in abi_server.requests if "/entry-package" in r.path]
-    assert len(entry_package_requests) == 0
+        assert response.status_code == 200
+        entry_package_requests = [r for r in abi_server.requests if "/entry-package" in r.path]
+        assert len(entry_package_requests) == 0
 
-    state = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
-    assert state is None or state.current_trade_cycle is None
+        state = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
+        assert state is None or state.current_trade_cycle is None
 
-    outcomes = _dispatch_outcomes(tmp_path / "journal" / "runtime.jsonl")
-    assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_failed"
+        outcomes = _dispatch_outcomes(tmp_path / "journal" / "runtime.jsonl")
+        assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_failed"
+
+
+_ENTRY_PACKAGE_EXPECTED_CAUSE: dict[str, type[Exception] | None] = {
+    "timeout": AbiEntryPackageTimeout,
+    "network_failure": AbiEntryPackageNetworkFailure,
+    "protocol_error": AbiEntryPackageProtocolError,
+    "public_error": None,
+}
 
 
 @pytest.mark.parametrize("kind", _FAILURE_KINDS)
 def test_abi_entry_package_failure_leaves_no_saved_cycle(
-    tmp_path: Path, engine_server: FakeHttpServer, abi_server: FakeHttpServer, kind: str
+    tmp_path: Path,
+    engine_server: FakeHttpServer,
+    abi_server: FakeHttpServer,
+    kind: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    if kind == "network_failure":
-        pytest.skip(
-            "ABI open-position and entry-package share one RUNTIME_ABI_BASE_URL "
-            "(design.md sec. 7): an unreachable ABI host fails the open-position "
-            "lookup first, identically to test_abi_open_position_lookup_failure_"
-            "stops_before_engine[network_failure]; there is no per-adapter base "
-            "URL override to isolate a network failure to entry-package alone."
-        )
+    """Every one of the four ABI entry-package failure kinds is exercised
+    end to end, including `network_failure`: the fake ABI server accepts the
+    TCP connection and records the request, then disconnects before writing
+    any HTTP response (`DisconnectResponse`), which httpx surfaces as
+    `httpx.RemoteProtocolError` (a `TransportError` subclass) -- the same
+    transport-failure family the existing `HttpxAbiEntryPackageAdapter`
+    already maps to `AbiEntryPackageNetworkFailure`. ABI open-position and
+    entry-package share one `RUNTIME_ABI_BASE_URL`, but the fake server
+    dispatches per-path, so open-position keeps succeeding normally on the
+    very same server/base URL while only the entry-package route fails."""
+    captured_errors: list[EntryReconciliationExecutionError] = []
+    real_execute = AbiEntryPackageExecutionBridge.execute
+
+    def _recording_execute(self: object, command: object, source_state: object) -> object:
+        try:
+            return real_execute(self, command, source_state)  # type: ignore[arg-type]
+        except EntryReconciliationExecutionError as exc:
+            captured_errors.append(exc)
+            raise
+
+    monkeypatch.setattr(AbiEntryPackageExecutionBridge, "execute", _recording_execute)
 
     _set_engine_routes(engine_server, live_entry=_live_entry_present())
     entry_package_timeout = 5.0
@@ -496,6 +540,12 @@ def test_abi_entry_package_failure_leaves_no_saved_cycle(
             entry_package=FakeResponse(200, {}, delay_seconds=1.0),
         )
         entry_package_timeout = 0.05
+    elif kind == "network_failure":
+        _set_abi_routes(
+            abi_server,
+            open_position=_open_position_closed(),
+            entry_package=DisconnectResponse(),
+        )
     elif kind == "protocol_error":
         _set_abi_routes(
             abi_server,
@@ -516,25 +566,41 @@ def test_abi_entry_package_failure_leaves_no_saved_cycle(
         abi_entry_package_timeout=entry_package_timeout,
     )
 
-    response = _post_closed_bar(app, 1)
+    with TestClient(app) as client:
+        response = _post_closed_bar(client, 1)
 
-    assert response.status_code == 200
-    state = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
-    assert state is None or state.current_trade_cycle is None
+        # HTTP acknowledgement is unaffected by the downstream outcome.
+        assert response.status_code == 200
+        assert response.json() == {"status": "accepted"}
 
-    outcomes = _dispatch_outcomes(tmp_path / "journal" / "runtime.jsonl")
-    assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_failed"
+        # Every upstream boundary succeeded exactly once; no retry anywhere.
+        open_position_requests = [r for r in abi_server.requests if "/open-position" in r.path]
+        assert len(open_position_requests) == 1
+        live_entry_requests = [r for r in engine_server.requests if r.path == _LIVE_ENTRY_PATH]
+        assert len(live_entry_requests) == 1
 
+        # The entry-package endpoint was attempted exactly once, with no
+        # automatic retry, regardless of how it failed.
+        entry_package_requests = [r for r in abi_server.requests if "/entry-package" in r.path]
+        assert len(entry_package_requests) == 1
 
-def test_abi_entry_package_execution_error_type_is_the_documented_bridge_failure() -> None:
-    """Component-level propagation identity check.
+        # The bridge classified the underlying failure and
+        # EntryReconciliationExecutionError propagated out of the semantic
+        # core uncaught.
+        assert len(captured_errors) == 1
+        error = captured_errors[0]
+        expected_cause = _ENTRY_PACKAGE_EXPECTED_CAUSE[kind]
+        if expected_cause is None:
+            assert error.__cause__ is None
+            assert error.public_error is not None
+        else:
+            assert isinstance(error.__cause__, expected_cause)
 
-    The full uncaught-propagation chain (`EntryReconciliationExecutionError`
-    raised out of `EntryReconciliationOrchestrator`/`StrategyRuntimeOrchestrator`,
-    caught only by `CommittedBarOrchestrator`) is already proven by the
-    archived `entry-reconciliation-orchestrator-v1` and
-    `closed-bar-runtime-orchestration-v1` unit/fake-based test suites; this
-    assertion only pins the exact exception type this I4d module re-exports
-    and that the E2E tests above rely on to reach the observable outcome.
-    """
-    assert issubclass(EntryReconciliationExecutionError, RuntimeError)
+        # CommittedBarOrchestrator caught the propagated failure and
+        # journaled it; no repository save occurred.
+        state = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
+        assert state is None or state.current_trade_cycle is None
+
+        outcomes = _dispatch_outcomes(tmp_path / "journal" / "runtime.jsonl")
+        assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_failed"
+        assert outcomes[-1]["strategy_instance_id"] == _STRATEGY_INSTANCE_ID

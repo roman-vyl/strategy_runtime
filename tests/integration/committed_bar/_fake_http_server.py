@@ -17,7 +17,7 @@ from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-Handler = Callable[["RecordedRequest"], "FakeResponse"]
+Handler = Callable[["RecordedRequest"], "FakeResponse | DisconnectResponse"]
 
 
 class RecordedRequest:
@@ -37,6 +37,17 @@ class FakeResponse:
         self.delay_seconds = delay_seconds
 
 
+class DisconnectResponse:
+    """Accept the TCP connection, read the request fully, then disconnect.
+
+    No HTTP status line, headers, or body is ever written. This models an
+    abrupt mid-flight transport failure (the peer accepted the connection and
+    read the request, then the connection ended without a response) as
+    distinct from a well-formed non-2xx response or a connection that is
+    never accepted at all.
+    """
+
+
 class FakeHttpServer:
     """One real `127.0.0.1` HTTP server dispatching every request to `handler`."""
 
@@ -54,6 +65,12 @@ class FakeHttpServer:
                 with outer._lock:
                     outer.requests.append(recorded)
                 response = outer._handler(recorded)
+                if isinstance(response, DisconnectResponse):
+                    # Force the connection closed without writing any status
+                    # line, headers, or body; the request was already fully
+                    # read and recorded above.
+                    self.close_connection = True
+                    return
                 if response.delay_seconds:
                     time.sleep(response.delay_seconds)
                 payload = (
@@ -100,48 +117,55 @@ class FakeHttpServer:
         self.close()
 
 
-def sequential(*responders: Handler | FakeResponse) -> Handler:
+def _resolve(
+    target: Handler | FakeResponse | DisconnectResponse, request: RecordedRequest
+) -> FakeResponse | DisconnectResponse:
+    if isinstance(target, FakeResponse | DisconnectResponse):
+        return target
+    return target(request)
+
+
+def sequential(*responders: Handler | FakeResponse | DisconnectResponse) -> Handler:
     """Dispatch to `responders` in order by call count, repeating the last one."""
     calls: list[int] = [0]
     lock = threading.Lock()
 
-    def handle(request: RecordedRequest) -> FakeResponse:
+    def handle(request: RecordedRequest) -> FakeResponse | DisconnectResponse:
         with lock:
             index = min(calls[0], len(responders) - 1)
             calls[0] += 1
-        target = responders[index]
-        if isinstance(target, FakeResponse):
-            return target
-        return target(request)
+        return _resolve(responders[index], request)
 
     return handle
 
 
-def route(routes: dict[str, Handler | FakeResponse], *, not_found: FakeResponse) -> Handler:
+def route(
+    routes: dict[str, Handler | FakeResponse | DisconnectResponse],
+    *,
+    not_found: FakeResponse,
+) -> Handler:
     """Dispatch by exact request path to a per-path handler or canned response."""
 
-    def handle(request: RecordedRequest) -> FakeResponse:
+    def handle(request: RecordedRequest) -> FakeResponse | DisconnectResponse:
         target = routes.get(request.path)
         if target is None:
             return not_found
-        if isinstance(target, FakeResponse):
-            return target
-        return target(request)
+        return _resolve(target, request)
 
     return handle
 
 
 def path_prefix_route(
-    routes: dict[str, Handler | FakeResponse], *, not_found: FakeResponse
+    routes: dict[str, Handler | FakeResponse | DisconnectResponse],
+    *,
+    not_found: FakeResponse,
 ) -> Handler:
     """Dispatch by request-path substring containment, first match wins."""
 
-    def handle(request: RecordedRequest) -> FakeResponse:
+    def handle(request: RecordedRequest) -> FakeResponse | DisconnectResponse:
         for key, target in routes.items():
             if key in request.path:
-                if isinstance(target, FakeResponse):
-                    return target
-                return target(request)
+                return _resolve(target, request)
         return not_found
 
     return handle
