@@ -60,17 +60,23 @@ def test_bridge_execute_signature_is_the_exact_transport_free_pair() -> None:
     assert hints["source_state"].__name__ == "StrategyInstanceRuntimeState"
 
 
-def test_new_bridge_is_not_referenced_by_production_composition() -> None:
+def test_bridge_is_wired_into_production_composition_by_i4d() -> None:
+    """I4d composes the bridge into `build_application`, inverting the I4c
+    -era guardrail that proved it was implemented in isolation with zero
+    production wiring. The bridge's own internal purity (no HTTP/mutex/
+    repository ownership, tested above) is unaffected by this wiring."""
     imported = _imported_modules(WIRED_COMPONENT_PATHS)
 
-    assert not any(
+    assert any(
         name == "strategy_runtime.runtime.entry_reconciliation_bridge"
         or name.startswith("strategy_runtime.runtime.entry_reconciliation_bridge.")
         for name in imported
     )
 
-    source = "\n".join(path.read_text(encoding="utf-8") for path in WIRED_COMPONENT_PATHS)
-    assert "AbiEntryPackageExecutionBridge" not in source
+    application_source = Path("src/strategy_runtime/bootstrap/application.py").read_text(
+        encoding="utf-8"
+    )
+    assert "AbiEntryPackageExecutionBridge" in application_source
 
 
 def test_bridge_package_has_no_forbidden_dependencies() -> None:
