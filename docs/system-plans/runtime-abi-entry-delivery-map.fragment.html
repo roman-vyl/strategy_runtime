@@ -370,9 +370,9 @@
           }
         ],
         gates: [
-          "<code>StrategyCycleHandoffBoundary.dispatch(unit)</code> должен вызвать sink <code>StrategyRuntimeOrchestrator.process(unit)</code> в production composition — это остаётся I4d, не I4b.",
-          "Closed-bar orchestration (I4b) реализована и архивирована; следующий change (I4c) реализует production HTTP adapters для ABI position lookup, ABI entry-package и Strategy Engine.",
-          "Production adapter и composition scope формализован как I4c/I4d в runtime-live-entry-production-integration-plan.md."
+          "<code>StrategyCycleHandoffBoundary.dispatch(unit)</code> вызывает sink <code>StrategyRuntimeOrchestrator.process(unit)</code> в production composition — реализовано в I4d (архивировано).",
+          "Closed-bar orchestration (I4b), production HTTP adapters (I4c) и production composition (I4d) реализованы и архивированы.",
+          "Production adapter и composition scope формализован как I4c/I4d в runtime-live-entry-production-integration-plan.md; ABI open-position нога впоследствии выровнена с финальным контрактом в runtime-abi-open-position-trade-cycle-alignment-v1."
         ]
       },
       closed: {
@@ -450,7 +450,7 @@
           "Mutex принадлежит <code>StrategyRuntimeOrchestrator</code>; реализованный <code>EntryReconciliationOrchestrator</code> не захватывает lock, не reload-ит и не сохраняет state.",
           "Nested operation принимает только <code>LiveEntryProjectedStrategyInstance</code>; source aggregate извлекается из embedded projection provenance.",
           "<code>OpenTradeProjectedStrategyInstance</code> не мутирует state и не может завершиться успешным dispatch до отдельного дизайна.",
-          "Production outbound adapters (I4c) и production composition (I4d) остаются следующими отдельными changes; см. runtime-live-entry-production-integration-plan.md."
+          "Production outbound adapters (I4c) и production composition (I4d) реализованы и архивированы; см. runtime-live-entry-production-integration-plan.md."
         ]
       },
       webhook: {
@@ -605,9 +605,9 @@
             lane: 0,
             span: 4,
             title: "I4c · Production outbound adapters",
-            detail: "NEXT: <code>runtime-production-outbound-adapters-v1</code> — 3 новых HTTP adapters (<code>StrategyEngineLiveEntryPort</code>, <code>StrategyEngineOpenTradePort</code>, <code>AbiOpenPositionLookupPort</code>) + 1 новый bridge (<code>EntryReconciliationExecutionPort</code>→<code>AbiEntryPackagePort</code>); существующий <code>AbiEntryPackagePort</code> HTTP client не переписывается, только убирается obsolete <code>accepted_risk_multiplier</code> echo.",
-            status: "gap",
-            note: "NEXT"
+            detail: "<code>runtime-production-outbound-adapters-v1</code> — 3 новых HTTP adapters (<code>StrategyEngineLiveEntryPort</code>, <code>StrategyEngineOpenTradePort</code>, <code>AbiOpenPositionLookupPort</code>) + 1 новый bridge (<code>EntryReconciliationExecutionPort</code>→<code>AbiEntryPackagePort</code>); существующий <code>AbiEntryPackagePort</code> HTTP client не переписывается, только убирается obsolete <code>accepted_risk_multiplier</code> echo.",
+            status: "current",
+            note: "DONE · archived"
           },
           {
             id: "i4d-production-composition",
@@ -616,9 +616,9 @@
             lane: 0,
             span: 4,
             title: "I4d · Production composition + live-entry E2E",
-            detail: "AFTER I4c: <code>runtime-live-entry-production-composition-v1</code> — config, один production graph, shared repository/mutex registry, readiness, vertical integration test MDS webhook → Engine → ABI client → acknowledged state.",
-            status: "planned",
-            note: "AFTER I4c"
+            detail: "<code>runtime-live-entry-production-composition-v1</code> — config, один production graph, shared repository/mutex registry, readiness, vertical integration test MDS webhook → Engine → ABI client → acknowledged state. Handoff override параметр удалён целиком (не сохранён как test seam) — единственный ready-путь. ABI open-position нога графа впоследствии выровнена с финальным ABI-контрактом в <code>runtime-abi-open-position-trade-cycle-alignment-v1</code>: lookup стал trade-cycle-conditional, а <code>position_open=true</code> временно fail-closed до Strategy Engine open-trade.",
+            status: "current",
+            note: "DONE · archived"
           },
           {
             id: "i5-fill-webhook",
@@ -627,8 +627,9 @@
             lane: 0,
             span: 4,
             title: "I5 · ABI fill webhook + execution state machine",
-            detail: "AFTER I4d: DTO/HTTP endpoint, <code>AbiExecutionEventOrchestrator</code>, shared mutex, freeze on first fill, cumulative fill storage и phase transitions.",
-            status: "gap"
+            detail: "DTO/HTTP endpoint, <code>AbiExecutionEventOrchestrator</code>, shared mutex, freeze on first fill, cumulative fill storage и phase transitions.",
+            status: "gap",
+            note: "NEXT"
           },
           {
             id: "i6-e2e-guardrails",
@@ -680,8 +681,8 @@
           }
         ],
         gates: [
-          "ABI client, state foundation, pure reconciliation, entry application operation и closed-bar Runtime orchestration реализованы и архивированы; следующий increment — production outbound adapters (I4c).",
-          "Production adapter/composition scope формализован как I4c/I4d в runtime-live-entry-production-integration-plan.md после проверки фактических интерфейсов.",
+          "ABI client, state foundation, pure reconciliation, entry application operation, closed-bar Runtime orchestration, production outbound adapters (I4c) и production composition (I4d) реализованы и архивированы; следующий increment — ABI fill webhook (I5).",
+          "Production adapter/composition scope формализован как I4c/I4d в runtime-live-entry-production-integration-plan.md после проверки фактических интерфейсов; ABI open-position нога впоследствии выровнена с финальным контрактом (runtime-abi-open-position-trade-cycle-alignment-v1).",
           "ABI fill webhook (I5) и entry/fill cross-flow остаются последующими отдельными changes после I4d.",
           "Финальный full Live V1 E2E возможен только после дизайна и реализации open-trade branch."
         ]

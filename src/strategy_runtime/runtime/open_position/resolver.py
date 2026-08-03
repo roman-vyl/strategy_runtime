@@ -15,10 +15,24 @@ class OpenPositionResolver:
     def resolve(
         self, state: StrategyInstanceRuntimeState
     ) -> PositionResolvedStrategyInstanceRuntimeState:
-        response = self._abi_lookup.lookup(OpenPositionLookupRequest(state.strategy_instance_id))
+        current_trade_cycle = state.current_trade_cycle
+        if current_trade_cycle is None:
+            return PositionResolvedStrategyInstanceRuntimeState(
+                runtime_state=state,
+                position_open=False,
+                first_fill_at_ms=None,
+                average_entry_price=None,
+            )
+
+        response = self._abi_lookup.lookup(
+            OpenPositionLookupRequest(
+                strategy_instance_id=state.strategy_instance_id,
+                trade_cycle_id=current_trade_cycle.trade_cycle_id,
+            )
+        )
         return PositionResolvedStrategyInstanceRuntimeState(
             runtime_state=state,
             position_open=response.position_open,
-            entry_bar_open_time_ms=response.entry_bar_open_time_ms,
-            executed_entry_price=response.executed_entry_price,
+            first_fill_at_ms=response.first_fill_at_ms,
+            average_entry_price=response.average_entry_price,
         )

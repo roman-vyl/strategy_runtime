@@ -81,20 +81,24 @@ It extracts `source_state` from
 `projection.source.resolved_state.runtime_state`; it does not accept a second
 aggregate argument, lock, reload, or save independently.
 
-The production bootstrap does not yet attach this semantic core to the utility
-handoff by default. That wiring decision does not change the implemented
-semantic boundary: the core is independently callable and the handoff accepts a
-downstream sink. The exact outbound-adapter state:
+The production bootstrap attaches this semantic core to the utility handoff by
+default (`I4d`, archived as
+`2026-07-30-runtime-live-entry-production-composition-v1`): `build_application`
+composes one production graph with no caller-supplied override, and every
+`ready=True` result reaches the semantic core. The outbound-adapter state:
 
-- Strategy Engine live-entry/open-trade HTTP adapters — implemented and
-  contract-tested (`I4c`), not yet composed into production;
-- ABI open-position HTTP adapter — implemented and contract-tested (`I4c`),
-  not yet composed into production;
+- Strategy Engine live-entry/open-trade HTTP adapters — implemented,
+  contract-tested (`I4c`), and composed into production (`I4d`);
+- ABI open-position HTTP adapter — implemented, contract-tested (`I4c`),
+  composed into production (`I4d`), and aligned with the authoritative
+  pair-addressed ABI contract (`runtime-abi-open-position-trade-cycle-alignment-v1`);
 - `EntryReconciliationExecutionPort` → `AbiEntryPackagePort` bridge —
-  implemented and unit-tested (`I4c`), not yet composed into production;
-- `AbiEntryPackagePort` HTTP client — already implemented and
-  contract-tested;
-- its production composition into the application — absent until `I4d`.
+  implemented, unit-tested (`I4c`), and composed into production (`I4d`);
+- `AbiEntryPackagePort` HTTP client — implemented, contract-tested, and
+  composed into production (`I4d`);
+- its production composition into the application — complete (`I4d`); a
+  future `I5` change reuses the same repository/keyed-mutex-registry
+  instances `I4d` constructs.
 
 See
 [`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md)
@@ -355,16 +359,13 @@ final `StrategyInstanceRuntimeState`, saving replacement state when the nested
 operation reports a logical transition. `OpenTradeProjectedStrategyInstance`
 still fails explicitly as unsupported.
 
+`I4d` (archived as `2026-07-30-runtime-live-entry-production-composition-v1`)
+composed the Strategy Engine and ABI open-position HTTP transports and the
+`EntryReconciliationExecutionPort` → `AbiEntryPackagePort` bridge into
+production; see
+[`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md).
 The implemented contour deliberately does not yet:
 
-- send Strategy Engine or ABI open-position requests through a production
-  HTTP transport, and does not yet compose the `EntryReconciliationExecutionPort`
-  → `AbiEntryPackagePort` bridge into the application — these three
-  components are implemented and independently tested in isolation (`I4c`),
-  but none is connected to production composition until `I4d`.
-  `AbiEntryPackagePort` itself already has a real, contract-tested HTTP
-  client; only its composition into the application is missing (`I4d`). See
-  [`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md);
 - interpret or persist position-management recipes;
 - create, replace, freeze, close, or archive a trade cycle across the
   open-trade branch;
@@ -395,7 +396,9 @@ I4b already implements this complete closed-bar critical section:
 ```text
 acquire keyed mutex(strategy_instance_id)
 → get_or_create/load current aggregate
-→ ABI open-position lookup
+→ ABI open-position lookup (only when a current_trade_cycle already exists;
+  otherwise skipped and treated as closed -- see
+  runtime-abi-open-position-trade-cycle-alignment-v1)
 → Strategy Engine projection
 → typed projection branch
 → live-entry reconciliation when applicable
@@ -404,11 +407,10 @@ acquire keyed mutex(strategy_instance_id)
 ```
 
 `EntryReconciliationOrchestrator` runs inside it. It does not reacquire the
-mutex, reload the aggregate, or save repository state. Note that the ABI
-open-position lookup and Strategy Engine projection steps above call through
-application ports whose production HTTP transport is now implemented and
-contract-tested in isolation (I4c); composing it behind these ports remains
-I4d (see
+mutex, reload the aggregate, or save repository state. The ABI open-position
+lookup and Strategy Engine projection steps above call through application
+ports whose production HTTP transport is implemented, contract-tested, and
+composed into production (`I4c`/`I4d`; see
 [`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md)).
 
 The later ABI webhook change implements this separate critical section:
@@ -474,9 +476,10 @@ optimization, but it cannot replace durable coordination and recovery.
    one Runtime-owned `command_id`; do not introduce one before that boundary
    proves it necessary.
 6. Engine cleanup plans 24–29 are treated as a satisfied prerequisite for
-   Runtime production HTTP integration (I4c/I4d).
+   Runtime production HTTP integration (`I4c`/`I4d`, both implemented and
+   archived).
 7. Production ABI and Strategy Engine HTTP adapters and the composition graph
-   that wires them remain open — this is `I4c`/`I4d`.
+   that wires them are implemented and archived (`I4c`/`I4d`).
 8. Top-level ownership of the shared per-instance keyed mutex, bounded
    outbound-call timeouts, and prohibition of nested mutex acquisition are
    implemented for the closed-bar writer (I4b). Shared ownership of the same
@@ -496,10 +499,16 @@ optimization, but it cannot replace durable coordination and recovery.
    existing nested operation for `LiveEntryProjectedStrategyInstance` —
    implemented, verified, and archived (`closed-bar-runtime-orchestration-v1`).
 3. `I4c` (production outbound adapters) — implemented, verified, and
-   archived (`runtime-production-outbound-adapters-v1`). Next, wire them and
-   the semantic core into the production composition root behind the
-   closed-bar HTTP webhook as `I4d` (production composition and live-entry
-   vertical slice). See
+   archived (`runtime-production-outbound-adapters-v1`). `I4d` (production
+   composition and live-entry vertical slice) — implemented, verified, and
+   archived (`runtime-live-entry-production-composition-v1`); `build_application`
+   now wires the semantic core and all four outbound HTTP clients into the
+   production graph behind the closed-bar HTTP webhook unconditionally. The
+   ABI open-position leg of that graph was subsequently aligned with the
+   authoritative pair-addressed ABI contract
+   (`runtime-abi-open-position-trade-cycle-alignment-v1`), including a
+   temporary router-level fail-closed boundary for `position_open=true`
+   pending a separate future decision on Engine field mapping. See
    [`runtime-live-entry-production-integration-plan.md`](runtime-live-entry-production-integration-plan.md)
    for the full detail.
 4. In a later change, design and implement the independent ABI fill-webhook

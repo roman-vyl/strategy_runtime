@@ -103,8 +103,8 @@ def projection(
         resolved_state=PositionResolvedStrategyInstanceRuntimeState(
             runtime_state=source_state,
             position_open=False,
-            entry_bar_open_time_ms=None,
-            executed_entry_price=None,
+            first_fill_at_ms=None,
+            average_entry_price=None,
         ),
     )
     return LiveEntryProjectedStrategyInstance(source, new_desired_entry)

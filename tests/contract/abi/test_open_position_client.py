@@ -35,13 +35,15 @@ class FakeAbi:
 def test_closed_position_request_is_a_bodyless_get() -> None:
     fake = FakeAbi(lambda _: json_response(200, closed_body()))
 
-    result = lookup(fake, make_request(strategy_instance_id="instance-1"))
+    result = lookup(fake, make_request(strategy_instance_id="instance-1", trade_cycle_id="cycle-1"))
 
     assert result == OpenPositionLookupResponse(position_open=False)
     assert len(fake.requests) == 1
     sent = fake.requests[0]
     assert sent.method == "GET"
-    assert sent.url.raw_path == b"/v1/strategy-instances/instance-1/open-position"
+    assert (
+        sent.url.raw_path == b"/v1/strategy-instances/instance-1/trade-cycles/cycle-1/open-position"
+    )
     assert sent.content == b""
     assert "content-type" not in sent.headers
     assert sent.headers["accept"] == "application/json"
@@ -50,20 +52,53 @@ def test_closed_position_request_is_a_bodyless_get() -> None:
 @pytest.mark.parametrize(
     ("strategy_instance_id", "expected_path"),
     [
-        ("instance/future %", b"/v1/strategy-instances/instance%2Ffuture%20%25/open-position"),
-        ("цикл id", b"/v1/strategy-instances/%D1%86%D0%B8%D0%BA%D0%BB%20id/open-position"),
-        (".", b"/v1/strategy-instances/%2E/open-position"),
-        ("..", b"/v1/strategy-instances/%2E%2E/open-position"),
-        ("%", b"/v1/strategy-instances/%25/open-position"),
-        ("/", b"/v1/strategy-instances/%2F/open-position"),
+        (
+            "instance/future %",
+            b"/v1/strategy-instances/instance%2Ffuture%20%25/trade-cycles/cycle/open-position",
+        ),
+        (
+            "цикл id",
+            b"/v1/strategy-instances/%D1%86%D0%B8%D0%BA%D0%BB%20id/trade-cycles/cycle/open-position",
+        ),
+        (".", b"/v1/strategy-instances/%2E/trade-cycles/cycle/open-position"),
+        ("..", b"/v1/strategy-instances/%2E%2E/trade-cycles/cycle/open-position"),
+        ("%", b"/v1/strategy-instances/%25/trade-cycles/cycle/open-position"),
+        ("/", b"/v1/strategy-instances/%2F/trade-cycles/cycle/open-position"),
     ],
 )
-def test_path_segment_is_encoded_as_one_opaque_utf8_segment(
+def test_strategy_instance_segment_is_encoded_as_one_opaque_utf8_segment(
     strategy_instance_id: str, expected_path: bytes
 ) -> None:
     fake = FakeAbi(lambda _: json_response(200, closed_body()))
 
-    lookup(fake, make_request(strategy_instance_id=strategy_instance_id))
+    lookup(fake, make_request(strategy_instance_id=strategy_instance_id, trade_cycle_id="cycle"))
+
+    assert fake.requests[0].url.raw_path == expected_path
+
+
+@pytest.mark.parametrize(
+    ("trade_cycle_id", "expected_path"),
+    [
+        (
+            "cycle/future %",
+            b"/v1/strategy-instances/instance/trade-cycles/cycle%2Ffuture%20%25/open-position",
+        ),
+        (
+            "цикл id",
+            b"/v1/strategy-instances/instance/trade-cycles/%D1%86%D0%B8%D0%BA%D0%BB%20id/open-position",
+        ),
+        (".", b"/v1/strategy-instances/instance/trade-cycles/%2E/open-position"),
+        ("..", b"/v1/strategy-instances/instance/trade-cycles/%2E%2E/open-position"),
+        ("%", b"/v1/strategy-instances/instance/trade-cycles/%25/open-position"),
+        ("/", b"/v1/strategy-instances/instance/trade-cycles/%2F/open-position"),
+    ],
+)
+def test_trade_cycle_segment_is_encoded_as_one_opaque_utf8_segment(
+    trade_cycle_id: str, expected_path: bytes
+) -> None:
+    fake = FakeAbi(lambda _: json_response(200, closed_body()))
+
+    lookup(fake, make_request(strategy_instance_id="instance", trade_cycle_id=trade_cycle_id))
 
     assert fake.requests[0].url.raw_path == expected_path
 
@@ -74,8 +109,8 @@ def test_decodes_open_position_with_domain_normalized_decimal() -> None:
             200,
             {
                 "position_open": True,
-                "entry_bar_open_time_ms": 1720000000000,
-                "executed_entry_price": "+061234.500e0",
+                "first_fill_at_ms": 1720000000000,
+                "average_entry_price": "+061234.500e0",
             },
         )
     )
@@ -84,9 +119,26 @@ def test_decodes_open_position_with_domain_normalized_decimal() -> None:
 
     assert result == OpenPositionLookupResponse(
         position_open=True,
-        entry_bar_open_time_ms=1720000000000,
-        executed_entry_price="61234.5",
+        first_fill_at_ms=1720000000000,
+        average_entry_price="61234.5",
     )
+
+
+@pytest.mark.parametrize("first_fill_at_ms", [0, -1])
+def test_non_positive_first_fill_at_ms_is_rejected(first_fill_at_ms: int) -> None:
+    fake = FakeAbi(
+        lambda _: json_response(
+            200,
+            {
+                "position_open": True,
+                "first_fill_at_ms": first_fill_at_ms,
+                "average_entry_price": "61234.5",
+            },
+        )
+    )
+
+    with pytest.raises(OpenPositionLookupProtocolError):
+        lookup(fake, make_request())
 
 
 def test_unexpected_404_never_becomes_closed_position() -> None:
@@ -102,11 +154,11 @@ def test_unexpected_404_never_becomes_closed_position() -> None:
     "mutate",
     [
         lambda body: body.update({"extra": True}),
-        lambda body: body.pop("executed_entry_price"),
+        lambda body: body.pop("average_entry_price"),
         lambda body: body.update({"position_open": "true"}),
-        lambda body: body.update({"entry_bar_open_time_ms": True}),
-        lambda body: body.update({"entry_bar_open_time_ms": 1.5}),
-        lambda body: body.update({"executed_entry_price": 61234.5}),
+        lambda body: body.update({"first_fill_at_ms": True}),
+        lambda body: body.update({"first_fill_at_ms": 1.5}),
+        lambda body: body.update({"average_entry_price": 61234.5}),
     ],
 )
 def test_malformed_open_success_body_fails_closed(
@@ -114,8 +166,8 @@ def test_malformed_open_success_body_fails_closed(
 ) -> None:
     body: dict[str, object] = {
         "position_open": True,
-        "entry_bar_open_time_ms": 1720000000000,
-        "executed_entry_price": "61234.5",
+        "first_fill_at_ms": 1720000000000,
+        "average_entry_price": "61234.5",
     }
     mutate(body)
     fake = FakeAbi(lambda _: json_response(200, body))
@@ -126,28 +178,44 @@ def test_malformed_open_success_body_fails_closed(
     assert len(fake.requests) == 1
 
 
+def test_legacy_pre_alignment_success_shape_is_rejected() -> None:
+    fake = FakeAbi(
+        lambda _: json_response(
+            200,
+            {
+                "position_open": False,
+                "entry_bar_open_time_ms": None,
+                "executed_entry_price": None,
+            },
+        )
+    )
+
+    with pytest.raises(OpenPositionLookupProtocolError):
+        lookup(fake, make_request())
+
+
 @pytest.mark.parametrize(
     "body",
     [
         {
             "position_open": False,
-            "entry_bar_open_time_ms": 1720000000000,
-            "executed_entry_price": None,
+            "first_fill_at_ms": 1720000000000,
+            "average_entry_price": None,
         },
         {
             "position_open": False,
-            "entry_bar_open_time_ms": None,
-            "executed_entry_price": "61234.5",
+            "first_fill_at_ms": None,
+            "average_entry_price": "61234.5",
         },
         {
             "position_open": True,
-            "entry_bar_open_time_ms": None,
-            "executed_entry_price": "61234.5",
+            "first_fill_at_ms": None,
+            "average_entry_price": "61234.5",
         },
         {
             "position_open": True,
-            "entry_bar_open_time_ms": 1720000000000,
-            "executed_entry_price": None,
+            "first_fill_at_ms": 1720000000000,
+            "average_entry_price": None,
         },
     ],
 )
@@ -158,69 +226,98 @@ def test_contradictory_facts_fail_closed(body: dict[str, object]) -> None:
         lookup(fake, make_request())
 
 
-@pytest.mark.parametrize(
-    ("status_code", "body", "expected_code", "expected_message", "expected_details"),
-    [
-        (
-            400,
-            {"error": {"code": "malformed_request", "message": "bad path"}},
-            "malformed_request",
-            "bad path",
-            None,
-        ),
-        (
-            422,
-            {
-                "error": {
-                    "code": "validation_failed",
-                    "message": "invalid identifier",
-                    "details": {"field": "strategy_instance_id"},
-                }
-            },
-            "validation_failed",
-            "invalid identifier",
-            {"field": "strategy_instance_id"},
-        ),
-    ],
-)
-def test_documented_public_errors_preserve_fields(
-    status_code: int,
-    body: dict[str, object],
-    expected_code: str,
-    expected_message: str,
-    expected_details: dict[str, object] | None,
-) -> None:
-    fake = FakeAbi(lambda _: json_response(status_code, body))
+def test_validation_failed_requires_and_preserves_details_array() -> None:
+    body = {
+        "error": {
+            "code": "validation_failed",
+            "message": "request validation failed",
+            "details": [{"path": "/path/trade_cycle_id", "message": "must be non-empty"}],
+        }
+    }
+    fake = FakeAbi(lambda _: json_response(422, body))
 
     with pytest.raises(OpenPositionLookupPublicError) as raised:
         lookup(fake, make_request())
 
     error = raised.value
-    assert error.status_code == status_code
-    assert error.code == expected_code
-    assert error.message == expected_message
-    if expected_details is None:
-        assert error.details is None
-    else:
-        assert dict(error.details) == expected_details
+    assert error.status_code == 422
+    assert error.code == "validation_failed"
+    assert error.message == "request validation failed"
+    details = error.details
+    assert isinstance(details, tuple)
+    assert list(details) == [{"path": "/path/trade_cycle_id", "message": "must be non-empty"}]
 
 
 @pytest.mark.parametrize(
-    ("status_code", "body"),
+    "details",
     [
-        (400, []),
-        (400, {"error": {"code": "malformed_request", "message": "bad", "extra": True}}),
-        (400, {"error": {"code": "malformed_request", "message": "bad"}, "extra": True}),
-        (422, {"error": {"code": "", "message": "bad"}}),
-        (422, {"error": {"code": "validation_failed", "message": ""}}),
-        (422, {"error": {"code": 1, "message": "bad"}}),
-        (422, {"error": {"message": "missing code"}}),
-        (422, {"error": {"code": "validation_failed"}}),
-        (422, {"error": "not an object"}),
+        None,
+        [],
+        [{"path": "/x"}],
+        [{"message": "x"}],
+        [{"path": "/x", "message": "x", "extra": True}],
+        "not-an-array",
     ],
 )
-def test_invalid_public_error_envelope_fails_closed(status_code: int, body: object) -> None:
-    fake = FakeAbi(lambda _: json_response(status_code, body))
+def test_validation_failed_with_invalid_details_fails_closed(details: object) -> None:
+    body: dict[str, object] = {
+        "error": {"code": "validation_failed", "message": "bad"},
+    }
+    if details is not None:
+        body["error"]["details"] = details  # type: ignore[index]
+    fake = FakeAbi(lambda _: json_response(422, body))
+
+    with pytest.raises(OpenPositionLookupProtocolError):
+        lookup(fake, make_request())
+
+
+@pytest.mark.parametrize("code", ["unknown_trade_cycle_binding", "unsupported_exchange_scope"])
+def test_no_details_error_codes_preserve_fields_without_details(code: str) -> None:
+    fake = FakeAbi(lambda _: json_response(422, {"error": {"code": code, "message": "rejected"}}))
+
+    with pytest.raises(OpenPositionLookupPublicError) as raised:
+        lookup(fake, make_request())
+
+    error = raised.value
+    assert error.status_code == 422
+    assert error.code == code
+    assert error.message == "rejected"
+    assert error.details is None
+
+
+@pytest.mark.parametrize("code", ["unknown_trade_cycle_binding", "unsupported_exchange_scope"])
+def test_no_details_error_codes_reject_a_details_field(code: str) -> None:
+    body = {"error": {"code": code, "message": "rejected", "details": {"x": 1}}}
+    fake = FakeAbi(lambda _: json_response(422, body))
+
+    with pytest.raises(OpenPositionLookupProtocolError):
+        lookup(fake, make_request())
+
+
+def test_undocumented_422_error_code_fails_closed() -> None:
+    fake = FakeAbi(
+        lambda _: json_response(422, {"error": {"code": "made_up_code", "message": "bad"}})
+    )
+
+    with pytest.raises(OpenPositionLookupProtocolError):
+        lookup(fake, make_request())
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        [],
+        {"error": {"code": "validation_failed", "message": "bad", "extra": True}},
+        {"error": {"code": "validation_failed", "message": "bad"}, "extra": True},
+        {"error": {"code": "", "message": "bad"}},
+        {"error": {"code": "unknown_trade_cycle_binding", "message": ""}},
+        {"error": {"code": 1, "message": "bad"}},
+        {"error": {"message": "missing code"}},
+        {"error": "not an object"},
+    ],
+)
+def test_invalid_public_error_envelope_fails_closed(body: object) -> None:
+    fake = FakeAbi(lambda _: json_response(422, body))
 
     with pytest.raises(OpenPositionLookupProtocolError):
         lookup(fake, make_request())
@@ -228,14 +325,18 @@ def test_invalid_public_error_envelope_fails_closed(status_code: int, body: obje
     assert len(fake.requests) == 1
 
 
-@pytest.mark.parametrize("status_code", [500, 501, 502, 503])
-def test_documented_5xx_with_valid_envelope_is_unavailable_not_public_error(
-    status_code: int,
-) -> None:
+def test_400_is_not_a_documented_status_and_fails_closed() -> None:
     fake = FakeAbi(
-        lambda _: json_response(
-            status_code, {"error": {"code": "internal_error", "message": "unavailable"}}
-        )
+        lambda _: json_response(400, {"error": {"code": "validation_failed", "message": "bad"}})
+    )
+
+    with pytest.raises(OpenPositionLookupProtocolError):
+        lookup(fake, make_request())
+
+
+def test_documented_500_internal_error_is_unavailable_not_public_error() -> None:
+    fake = FakeAbi(
+        lambda _: json_response(500, {"error": {"code": "internal_error", "message": "boom"}})
     )
 
     with pytest.raises(OpenPositionLookupUnavailable) as raised:
@@ -244,8 +345,30 @@ def test_documented_5xx_with_valid_envelope_is_unavailable_not_public_error(
     assert not isinstance(raised.value, OpenPositionLookupPublicError)
 
 
-def test_documented_5xx_with_malformed_envelope_fails_closed_as_protocol_error() -> None:
-    fake = FakeAbi(lambda _: json_response(503, {"error": {"message": "missing code"}}))
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"error": {"code": "not_internal_error", "message": "boom"}},
+        {"error": {"code": "internal_error", "message": "boom", "details": {}}},
+        {"error": {"message": "missing code"}},
+        {"error": "not an object"},
+        [],
+    ],
+)
+def test_500_outside_documented_internal_error_shape_fails_closed(body: object) -> None:
+    fake = FakeAbi(lambda _: json_response(500, body))
+
+    with pytest.raises(OpenPositionLookupProtocolError):
+        lookup(fake, make_request())
+
+
+@pytest.mark.parametrize("status_code", [501, 502, 503])
+def test_undocumented_5xx_status_fails_closed_not_unavailable(status_code: int) -> None:
+    fake = FakeAbi(
+        lambda _: json_response(
+            status_code, {"error": {"code": "internal_error", "message": "boom"}}
+        )
+    )
 
     with pytest.raises(OpenPositionLookupProtocolError):
         lookup(fake, make_request())
@@ -281,7 +404,7 @@ def test_undocumented_status_fails_closed() -> None:
         httpx.Response(
             200,
             content=b'{"position_open":false,"position_open":false,'
-            b'"entry_bar_open_time_ms":null,"executed_entry_price":null}',
+            b'"first_fill_at_ms":null,"average_entry_price":null}',
             headers={"content-type": "application/json"},
         ),
     ],
@@ -373,15 +496,19 @@ def lookup(fake: FakeAbi, request: OpenPositionLookupRequest) -> OpenPositionLoo
         return adapter.lookup(request)
 
 
-def make_request(*, strategy_instance_id: str = "instance") -> OpenPositionLookupRequest:
-    return OpenPositionLookupRequest(strategy_instance_id=strategy_instance_id)
+def make_request(
+    *, strategy_instance_id: str = "instance", trade_cycle_id: str = "cycle"
+) -> OpenPositionLookupRequest:
+    return OpenPositionLookupRequest(
+        strategy_instance_id=strategy_instance_id, trade_cycle_id=trade_cycle_id
+    )
 
 
 def closed_body() -> dict[str, object]:
     return {
         "position_open": False,
-        "entry_bar_open_time_ms": None,
-        "executed_entry_price": None,
+        "first_fill_at_ms": None,
+        "average_entry_price": None,
     }
 
 

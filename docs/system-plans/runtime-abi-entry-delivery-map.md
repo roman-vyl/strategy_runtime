@@ -30,8 +30,8 @@ flowchart TD
     I4A["EntryReconciliationOrchestrator · DONE"]
     I4B["Closed-bar Runtime orchestration · DONE"]
     I4C["I4c · Production outbound adapters · DONE"]
-    I4D["I4d · Production composition + live-entry E2E · NEXT"]
-    I5["ABI fill webhook · AFTER I4d"]
+    I4D["I4d · Production composition + live-entry E2E · DONE"]
+    I5["ABI fill webhook · NEXT"]
     I6["Entry/fill cross-flow · LATER"]
     OPEN_GATE["Open-trade requirements gate · DEFERRED"]
     OPEN_IMPL["Open-trade branch implementation · DEFERRED"]
@@ -202,19 +202,18 @@ Change name: `runtime-production-outbound-adapters-v1`.
 
 Exit condition: all production outbound dependencies are implemented and
 tested in isolation, verified against all contract requirements, and archived.
-All are ready for composition in `I4d`; none are yet connected to the
-application or bootstrap.
+All are composed into production by `I4d`.
 
-### I4d · Production composition and live-entry vertical slice — AFTER I4c
+### I4d · Production composition and live-entry vertical slice — DONE
 
 Change name: `runtime-live-entry-production-composition-v1`.
 
-- [ ] Create and approve the OpenSpec change.
-- [ ] Add `RUNTIME_STRATEGY_ENGINE_BASE_URL`,
+- [x] Create and approve the OpenSpec change.
+- [x] Add `RUNTIME_STRATEGY_ENGINE_BASE_URL`,
   `RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS`, `RUNTIME_ABI_BASE_URL`,
   `RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS`, and
   `RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS` to Runtime configuration.
-- [ ] Compose one production graph: MDS closed-bar HTTP webhook →
+- [x] Compose one production graph: MDS closed-bar HTTP webhook →
   `FilesystemDeploymentCatalog` → `CommittedBarDeploymentSelector` →
   `CommittedBarOrchestrator` → `StrategyCycleHandoffBoundary` →
   `StrategyRuntimeOrchestrator` (shared repository, shared keyed-mutex
@@ -222,19 +221,21 @@ Change name: `runtime-live-entry-production-composition-v1`.
   (Engine live-entry/open-trade adapters) →
   `EntryReconciliationOrchestrator` → execution adapter → ABI entry-package
   client.
-- [ ] Own exactly one repository instance and one keyed-mutex registry for the
+- [x] Own exactly one repository instance and one keyed-mutex registry for the
   application lifetime; I5 reuses both.
-- [ ] Bound HTTP client lifetimes and add clean shutdown.
-- [ ] Fail startup readiness when production configuration is invalid.
-- [ ] Default the handoff to the wired semantic Runtime; keep test overrides
-  available but not the production default.
-- [ ] Add a vertical integration test: `POST /v1/webhooks/closed-bar` →
-  selected deployment → ABI `position_open=false` → Engine `desired_entry` →
+- [x] Bound HTTP client lifetimes and add clean shutdown.
+- [x] Fail startup readiness when production configuration is invalid.
+- [x] Default the handoff to the wired semantic Runtime unconditionally.
+  Per the accepted `I4d` design, this is stronger than originally scoped
+  here: `build_application` accepts no caller-supplied override at all (the
+  test-only utility-contour override was removed, not kept, to close a
+  two-ready-paths ambiguity) — the utility contour's own isolated
+  testability is exercised by constructing its components directly instead.
+- [x] Add a vertical integration test: `POST /v1/webhooks/closed-bar` →
+  selected deployment → ABI open-position lookup → Engine `desired_entry` →
   reconciliation `APPLY` → ABI entry-package acknowledgement → state save →
   `CurrentTradeCycle`.
-- [ ] Add failure-path and no-op tests. Every closed-bar cycle always performs
-  the ABI open-position lookup before Engine projection; the cardinality
-  below is specifically about the ABI entry-package call:
+- [x] Add failure-path and no-op tests:
   - `desired_entry=null` + initially empty aggregate → `NO_OP` → zero ABI
     entry-package calls → zero repository saves;
   - `desired_entry=null` + existing acknowledged cycle → `CANCEL` →
@@ -242,16 +243,24 @@ Change name: `runtime-live-entry-production-composition-v1`.
     `EntryPackageAbsent`;
   - Engine error; ABI position-lookup error; ABI entry-package rejection;
     failed dispatch journal outcome.
-- [ ] For each of the three outbound boundaries individually (ABI
+- [x] For each of the three outbound boundaries individually (ABI
   open-position lookup, Strategy Engine projection, ABI entry-package call):
   bounded timeout, zero automatic retry, no repository save after failure, and
   no downstream call triggered by a failed one.
 
 Exit condition: Runtime is fully wired end to end for the live-entry branch —
-MDS webhook → Engine → ABI client → acknowledged Runtime state — with a real
-executor bot optionally still replaced by a fake ABI.
+MDS webhook → Engine → ABI client → acknowledged Runtime state — met.
 
-### I5 · ABI fill webhook and execution state machine — AFTER I4d
+`runtime-abi-open-position-trade-cycle-alignment-v1` subsequently aligned the
+ABI open-position leg with the authoritative ABI contract: the lookup is now
+trade-cycle-conditional (skipped with no `current_trade_cycle`, called with
+the existing `trade_cycle_id` otherwise, never identity-only), and
+`position_open=true` routing fails closed before any Strategy Engine
+open-trade call, pending a separate future decision on Engine field mapping.
+This did not reopen or change `I4d`'s composition graph, repository/mutex
+ownership, or HTTP client lifecycle.
+
+### I5 · ABI fill webhook and execution state machine — NEXT
 
 - [ ] Confirm the ABI/Bybit cumulative quantity and average-price source.
 - [ ] Create and approve a dedicated OpenSpec change.

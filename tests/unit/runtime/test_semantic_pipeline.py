@@ -17,6 +17,7 @@ from strategy_runtime.runtime.entry_reconciliation_orchestrator.orchestrator imp
 )
 from strategy_runtime.runtime.open_position.errors import (
     OpenPositionLookupProtocolError,
+    OpenPositionLookupPublicError,
     OpenPositionLookupUnavailable,
 )
 from strategy_runtime.runtime.open_position.models import (
@@ -34,7 +35,6 @@ from strategy_runtime.runtime.routing.errors import (
 )
 from strategy_runtime.runtime.routing.models import (
     LiveEntryProjectedStrategyInstance,
-    OpenTradeProjectedStrategyInstance,
     PositionResolvedStrategyInstance,
 )
 from strategy_runtime.runtime.routing.router import StrategyUseCaseRouter
@@ -164,7 +164,7 @@ def resolved_state(
     position_open: bool,
     state: StrategyInstanceRuntimeState | None = None,
 ) -> PositionResolvedStrategyInstanceRuntimeState:
-    target_state = state or runtime_state()
+    target_state = state or frozen_trade_state() if position_open else (state or runtime_state())
     response = (
         OpenPositionLookupResponse(True, 950, "100.5")
         if position_open
@@ -210,6 +210,7 @@ def test_open_position_response_requires_an_exact_boolean(invalid) -> None:
         (True, None, None),
         (True, 950, None),
         (True, None, "100.5"),
+        (True, 0, "100.5"),
         (True, -1, "100.5"),
         (False, 950, None),
         (False, None, "100.5"),
@@ -223,16 +224,31 @@ def test_open_position_response_rejects_invalid_fact_combinations(
         OpenPositionLookupResponse(position_open, entry_time, entry_price)
 
 
-def test_position_resolver_is_scalar_and_sends_identity_only() -> None:
+def test_position_resolver_skips_abi_with_no_current_trade_cycle() -> None:
     state = runtime_state()
+    assert state.current_trade_cycle is None
+    abi = Abi(OpenPositionLookupResponse(True, 950, "100.5"))
+
+    resolved = OpenPositionResolver(abi).resolve(state)
+
+    assert abi.requests == []
+    assert resolved.runtime_state is state
+    assert resolved.position_open is False
+    assert resolved.first_fill_at_ms is None
+    assert resolved.average_entry_price is None
+
+
+def test_position_resolver_calls_abi_with_existing_trade_cycle_id() -> None:
+    state = frozen_trade_state()
     abi = Abi(OpenPositionLookupResponse(True, 950, "100.5000"))
 
     resolved = OpenPositionResolver(abi).resolve(state)
 
     assert len(abi.requests) == 1
     assert abi.requests[0].strategy_instance_id == state.strategy_instance_id
+    assert abi.requests[0].trade_cycle_id == state.current_trade_cycle.trade_cycle_id
     assert resolved.runtime_state is state
-    assert resolved.executed_entry_price == "100.5"
+    assert resolved.average_entry_price == "100.5"
 
 
 @pytest.mark.parametrize(
@@ -240,11 +256,14 @@ def test_position_resolver_is_scalar_and_sends_identity_only() -> None:
     [
         OpenPositionLookupUnavailable("timeout"),
         OpenPositionLookupProtocolError("malformed response"),
+        OpenPositionLookupPublicError(
+            status_code=422, code="unknown_trade_cycle_binding", message="no correlation record"
+        ),
     ],
 )
 def test_position_resolver_propagates_typed_adapter_failures(error) -> None:
     with pytest.raises(type(error)) as raised:
-        OpenPositionResolver(Abi(error=error)).resolve(runtime_state())
+        OpenPositionResolver(Abi(error=error)).resolve(frozen_trade_state())
 
     assert raised.value is error
 
@@ -252,7 +271,7 @@ def test_position_resolver_propagates_typed_adapter_failures(error) -> None:
 def test_position_resolver_does_not_mask_programming_errors() -> None:
     error = AssertionError("adapter bug")
     with pytest.raises(AssertionError) as raised:
-        OpenPositionResolver(Abi(error=error)).resolve(runtime_state())
+        OpenPositionResolver(Abi(error=error)).resolve(frozen_trade_state())
 
     assert raised.value is error
 
@@ -291,27 +310,26 @@ def test_router_preserves_no_desired_entry_without_side_arbitration() -> None:
     assert result.desired_entry is None
 
 
-def test_router_projects_one_open_trade_from_frozen_entry_context() -> None:
+def test_router_fails_closed_for_open_position_even_with_complete_context() -> None:
+    """position_open=true never reaches Engine in this change (temporary boundary).
+
+    first_fill_at_ms/average_entry_price stay ABI/Runtime execution facts and
+    are never mapped into a Strategy Engine request field; see design.md
+    "position_open=true fails closed before Engine, with no field mapping".
+    """
+    live_engine = LiveEngine()
+    open_engine = OpenEngine()
     state = frozen_trade_state()
     item = PositionResolvedStrategyInstance(
         processing_unit(),
         resolved_state(position_open=True, state=state),
     )
-    open_engine = OpenEngine()
 
-    result = router(open_engine=open_engine).route(item)
+    with pytest.raises(OpenTradeContextUnavailable):
+        router(live_engine=live_engine, open_engine=open_engine).route(item)
 
-    assert isinstance(result, OpenTradeProjectedStrategyInstance)
-    assert result.source is item
-    assert len(open_engine.requests) == 1
-    assert not hasattr(open_engine.requests[0], "instance_id")
-    assert open_engine.requests[0].strategy_id == "ema_pullback"
-    assert open_engine.requests[0].target_bar_open_time_ms == 1000
-    assert (
-        open_engine.requests[0].desired_entry
-        == state.current_trade_cycle.applied_entry_package.applied_desired_entry
-    )
-    assert not hasattr(open_engine.requests[0], "executed_entry_price")
+    assert live_engine.requests == []
+    assert open_engine.requests == []
 
 
 def test_open_trade_request_contract_rejects_executed_entry_price() -> None:
@@ -328,21 +346,6 @@ def test_open_trade_request_contract_rejects_executed_entry_price() -> None:
 
     with pytest.raises(TypeError, match="unexpected keyword argument"):
         OpenTradeProjectionRequest(**payload)
-
-
-def test_router_does_not_call_engine_when_open_trade_context_is_missing() -> None:
-    live_engine = LiveEngine()
-    open_engine = OpenEngine()
-    item = PositionResolvedStrategyInstance(
-        processing_unit(),
-        resolved_state(position_open=True),
-    )
-
-    with pytest.raises(OpenTradeContextUnavailable):
-        router(live_engine=live_engine, open_engine=open_engine).route(item)
-
-    assert live_engine.requests == []
-    assert open_engine.requests == []
 
 
 @pytest.mark.parametrize(
@@ -371,21 +374,13 @@ def test_router_rejects_each_broken_strategy_instance_binding_link(
     assert live_engine.requests == []
 
 
-@pytest.mark.parametrize("branch", ["live", "open"])
-def test_router_propagates_typed_engine_transport_failures(branch) -> None:
+def test_router_propagates_typed_engine_transport_failures() -> None:
     error = StrategyEngineProjectionUnavailable("timeout")
-    if branch == "live":
-        item = PositionResolvedStrategyInstance(
-            processing_unit(),
-            resolved_state(position_open=False),
-        )
-        target_router = router(live_engine=LiveEngine(error=error))
-    else:
-        item = PositionResolvedStrategyInstance(
-            processing_unit(),
-            resolved_state(position_open=True, state=frozen_trade_state()),
-        )
-        target_router = router(open_engine=OpenEngine(error=error))
+    item = PositionResolvedStrategyInstance(
+        processing_unit(),
+        resolved_state(position_open=False),
+    )
+    target_router = router(live_engine=LiveEngine(error=error))
 
     with pytest.raises(StrategyEngineProjectionUnavailable) as raised:
         target_router.route(item)
@@ -436,27 +431,6 @@ def test_live_entry_response_rejects_old_side_wise_contract() -> None:
         LiveEntryProjectionResponse(  # type: ignore[call-arg]
             plans_by_side={"long": desired_entry(), "short": None}
         )
-
-
-def test_open_trade_diagnostics_are_opaque_and_recursively_immutable() -> None:
-    diagnostics = {
-        "arbitrary": {"nested": [1, {"flag": True}]},
-        "vendor_extension": None,
-    }
-    item = PositionResolvedStrategyInstance(
-        processing_unit(),
-        resolved_state(position_open=True, state=frozen_trade_state()),
-    )
-
-    result = router(open_engine=OpenEngine(diagnostics=diagnostics)).route(item)
-
-    assert isinstance(result, OpenTradeProjectedStrategyInstance)
-    frozen = result.position_management_recipe.diagnostics
-    assert frozen["arbitrary"]["nested"][1]["flag"] is True
-    diagnostics["arbitrary"]["nested"][1]["flag"] = False
-    assert frozen["arbitrary"]["nested"][1]["flag"] is True
-    with pytest.raises(TypeError):
-        frozen["another"] = "value"
 
 
 class CountingRepository:

@@ -125,23 +125,32 @@ def _dispatch_outcomes(journal_path: Path) -> list[dict[str, object]]:
 
 def _open_position_closed() -> FakeResponse:
     return FakeResponse(
-        200, {"position_open": False, "entry_bar_open_time_ms": None, "executed_entry_price": None}
+        200, {"position_open": False, "first_fill_at_ms": None, "average_entry_price": None}
     )
 
 
-def _open_position_open(entry_bar_open_time_ms: int, executed_entry_price: str) -> FakeResponse:
+def _open_position_open(first_fill_at_ms: int, average_entry_price: str) -> FakeResponse:
     return FakeResponse(
         200,
         {
             "position_open": True,
-            "entry_bar_open_time_ms": entry_bar_open_time_ms,
-            "executed_entry_price": executed_entry_price,
+            "first_fill_at_ms": first_fill_at_ms,
+            "average_entry_price": average_entry_price,
         },
     )
 
 
 def _abi_open_position_public_error() -> FakeResponse:
-    return FakeResponse(400, {"error": {"code": "bad_request", "message": "malformed identifier"}})
+    return FakeResponse(
+        422,
+        {
+            "error": {
+                "code": "validation_failed",
+                "message": "malformed identifier",
+                "details": [{"path": "/path/trade_cycle_id", "message": "malformed"}],
+            }
+        },
+    )
 
 
 def _abi_open_position_protocol_error() -> FakeResponse:
@@ -310,9 +319,77 @@ def test_happy_path_applies_desired_entry_and_saves_current_trade_cycle(
         assert state.current_trade_cycle is not None
         assert state.current_trade_cycle.applied_entry_package.calculated_quantity == "1.5"
 
+        # Cycle 1 has no prior current_trade_cycle, so the resolver never
+        # calls ABI's pair-addressed open-position endpoint -- there is no
+        # trade_cycle_id yet to place in the request.
+        open_position_requests = [r for r in abi_server.requests if "/open-position" in r.path]
+        assert len(open_position_requests) == 0
+
         entry_package_requests = [r for r in abi_server.requests if "/entry-package" in r.path]
         assert len(entry_package_requests) == 1
         assert entry_package_requests[0].json()["risk_multiplier"] == state.risk_multiplier == "1"
+
+
+def test_brand_new_instance_reaches_live_entry_without_any_abi_open_position_call(
+    tmp_path: Path, engine_server: FakeHttpServer, abi_server: FakeHttpServer
+) -> None:
+    """current_trade_cycle=None -> the resolver never calls ABI at all.
+
+    There is nothing to configure a fake open-position response for: no
+    trade_cycle_id exists yet, so no request is ever sent.
+    """
+    _set_engine_routes(engine_server, live_entry=_live_entry_absent())
+    app = _build_app(
+        tmp_path, engine_base_url=engine_server.base_url, abi_base_url=abi_server.base_url
+    )
+
+    with TestClient(app) as client:
+        response = _post_closed_bar(client, 1)
+
+        assert response.status_code == 200
+        assert abi_server.requests == []
+        live_entry_requests = [r for r in engine_server.requests if r.path == _LIVE_ENTRY_PATH]
+        assert len(live_entry_requests) == 1
+
+        outcomes = _dispatch_outcomes(tmp_path / "journal" / "runtime.jsonl")
+        assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_succeeded"
+
+
+def test_existing_trade_cycle_reaches_live_entry_after_real_abi_closed_response(
+    tmp_path: Path, engine_server: FakeHttpServer, abi_server: FakeHttpServer
+) -> None:
+    """Once a current_trade_cycle exists, ABI is actually asked -- and a
+    real (not skipped) closed response still routes to live-entry."""
+    _set_engine_routes(
+        engine_server, live_entry=sequential(_live_entry_present(), _live_entry_absent())
+    )
+    _set_abi_routes(
+        abi_server, open_position=_open_position_closed(), entry_package=_entry_package_applied
+    )
+    app = _build_app(
+        tmp_path, engine_base_url=engine_server.base_url, abi_base_url=abi_server.base_url
+    )
+
+    with TestClient(app) as client:
+        first = _post_closed_bar(client, 1)
+        assert first.status_code == 200
+        state = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
+        assert state is not None
+        assert state.current_trade_cycle is not None
+        trade_cycle_id = state.current_trade_cycle.trade_cycle_id
+
+        second = _post_closed_bar(client, 2)
+        assert second.status_code == 200
+
+        open_position_requests = [r for r in abi_server.requests if "/open-position" in r.path]
+        assert len(open_position_requests) == 1
+        assert unquote(open_position_requests[0].path) == (
+            f"/v1/strategy-instances/{_STRATEGY_INSTANCE_ID}"
+            f"/trade-cycles/{trade_cycle_id}/open-position"
+        )
+
+        live_entry_requests = [r for r in engine_server.requests if r.path == _LIVE_ENTRY_PATH]
+        assert len(live_entry_requests) == 2
 
 
 def test_no_op_when_desired_entry_is_null_and_no_current_cycle(
@@ -329,6 +406,8 @@ def test_no_op_when_desired_entry_is_null_and_no_current_cycle(
         response = _post_closed_bar(client, 1)
 
         assert response.status_code == 200
+        open_position_requests = [r for r in abi_server.requests if "/open-position" in r.path]
+        assert len(open_position_requests) == 0
         entry_package_requests = [r for r in abi_server.requests if "/entry-package" in r.path]
         assert len(entry_package_requests) == 0
 
@@ -365,21 +444,76 @@ def test_cancel_clears_cycle_only_after_entry_package_absent_confirmation(
         assert state_after_cancel is not None
         assert state_after_cancel.current_trade_cycle is None
 
+        # Cycle 1 had no current_trade_cycle (no ABI open-position call);
+        # cycle 2 had one, so the resolver called ABI exactly once.
+        open_position_requests = [r for r in abi_server.requests if "/open-position" in r.path]
+        assert len(open_position_requests) == 1
+
         entry_package_requests = [r for r in abi_server.requests if "/entry-package" in r.path]
         assert len(entry_package_requests) == 2
+
+
+def test_legacy_pre_alignment_open_position_success_shape_is_no_longer_accepted(
+    tmp_path: Path, engine_server: FakeHttpServer, abi_server: FakeHttpServer
+) -> None:
+    """The pre-alignment success shape (entry_bar_open_time_ms/
+    executed_entry_price) is a protocol error now, not a silently coerced
+    result. This can only be observed once ABI is actually called, so cycle
+    1 establishes a current_trade_cycle first."""
+    _set_engine_routes(engine_server, live_entry=_live_entry_present())
+    _set_abi_routes(
+        abi_server, open_position=_open_position_closed(), entry_package=_entry_package_applied
+    )
+    app = _build_app(
+        tmp_path, engine_base_url=engine_server.base_url, abi_base_url=abi_server.base_url
+    )
+
+    with TestClient(app) as client:
+        first = _post_closed_bar(client, 1)
+        assert first.status_code == 200
+        state_after_apply = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
+        assert state_after_apply is not None
+        assert state_after_apply.current_trade_cycle is not None
+
+        legacy_shape = FakeResponse(
+            200,
+            {
+                "position_open": False,
+                "entry_bar_open_time_ms": None,
+                "executed_entry_price": None,
+            },
+        )
+        _set_abi_routes(
+            abi_server, open_position=legacy_shape, entry_package=_entry_package_applied
+        )
+
+        second = _post_closed_bar(client, 2)
+        assert second.status_code == 200
+
+        state_after_failure = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
+        assert state_after_failure == state_after_apply
+
+        entry_package_requests = [r for r in abi_server.requests if "/entry-package" in r.path]
+        assert len(entry_package_requests) == 1
+
+        outcomes = _dispatch_outcomes(tmp_path / "journal" / "runtime.jsonl")
+        assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_failed"
 
 
 def test_open_trade_projection_remains_explicitly_unsupported(
     tmp_path: Path, engine_server: FakeHttpServer, abi_server: FakeHttpServer
 ) -> None:
+    """position_open=true fails closed in the router itself, before any
+    Engine open-trade call -- see design.md "position_open=true fails
+    closed before Engine, with no field mapping". The fake Engine open-trade
+    route is still configured so a regression that starts calling it again
+    would be caught (request count would become nonzero)."""
     _set_engine_routes(
         engine_server, live_entry=_live_entry_present(), open_trade=_open_trade_success()
     )
     _set_abi_routes(
         abi_server,
-        open_position=sequential(
-            _open_position_closed(), _open_position_open(1720000000000, "100")
-        ),
+        open_position=_open_position_open(1720000000000, "100"),
         entry_package=_entry_package_applied,
     )
     app = _build_app(
@@ -399,11 +533,18 @@ def test_open_trade_projection_remains_explicitly_unsupported(
         state_after_open_trade = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
         assert state_after_open_trade == state_after_apply
 
+        # Cycle 1: no current_trade_cycle, no ABI open-position call. Cycle
+        # 2: current_trade_cycle exists, exactly one ABI open-position call,
+        # answered "open" -- and the router fails closed on that answer
+        # without ever reaching Strategy Engine's open-trade port.
+        open_position_requests = [r for r in abi_server.requests if "/open-position" in r.path]
+        assert len(open_position_requests) == 1
+
         entry_package_requests = [r for r in abi_server.requests if "/entry-package" in r.path]
         assert len(entry_package_requests) == 1
 
         open_trade_requests = [r for r in engine_server.requests if r.path == _OPEN_TRADE_PATH]
-        assert len(open_trade_requests) == 1
+        assert open_trade_requests == []
 
         outcomes = _dispatch_outcomes(tmp_path / "journal" / "runtime.jsonl")
         assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_failed"
@@ -419,35 +560,55 @@ _FAILURE_KINDS = ["timeout", "network_failure", "protocol_error", "public_error"
 def test_abi_open_position_lookup_failure_stops_before_engine(
     tmp_path: Path, engine_server: FakeHttpServer, abi_server: FakeHttpServer, kind: str
 ) -> None:
+    """The resolver only calls ABI's open-position endpoint once a
+    current_trade_cycle exists, so this test first establishes one (cycle 1,
+    no ABI open-position call at all) before injecting the failure on cycle
+    2's lookup. `network_failure` uses a per-route `DisconnectResponse` on
+    the same real server/base URL, not an unreachable URL, since cycle 1's
+    entry-package call must still succeed against that same base URL."""
     _set_engine_routes(engine_server, live_entry=_live_entry_present())
-    abi_base_url = abi_server.base_url
-    abi_timeout = 5.0
-
-    if kind == "timeout":
-        _set_abi_routes(abi_server, open_position=FakeResponse(200, {}, delay_seconds=1.0))
-        abi_timeout = 0.05
-    elif kind == "network_failure":
-        abi_base_url = _UNREACHABLE_URL
-    elif kind == "protocol_error":
-        _set_abi_routes(abi_server, open_position=_abi_open_position_protocol_error())
-    else:
-        _set_abi_routes(abi_server, open_position=_abi_open_position_public_error())
+    abi_open_position_timeout = 0.05 if kind == "timeout" else 5.0
 
     app = _build_app(
         tmp_path,
         engine_base_url=engine_server.base_url,
-        abi_base_url=abi_base_url,
-        abi_open_position_timeout=abi_timeout,
+        abi_base_url=abi_server.base_url,
+        abi_open_position_timeout=abi_open_position_timeout,
     )
 
     with TestClient(app) as client:
-        response = _post_closed_bar(client, 1)
+        _set_abi_routes(abi_server, entry_package=_entry_package_applied)
+        first = _post_closed_bar(client, 1)
+        assert first.status_code == 200
+        state_after_apply = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
+        assert state_after_apply is not None
+        assert state_after_apply.current_trade_cycle is not None
+        live_entry_requests_before = len(
+            [r for r in engine_server.requests if r.path == _LIVE_ENTRY_PATH]
+        )
 
-        assert response.status_code == 200
-        assert len(engine_server.requests) == 0
+        if kind == "timeout":
+            open_position_response: object = FakeResponse(200, {}, delay_seconds=1.0)
+        elif kind == "network_failure":
+            open_position_response = DisconnectResponse()
+        elif kind == "protocol_error":
+            open_position_response = _abi_open_position_protocol_error()
+        else:
+            open_position_response = _abi_open_position_public_error()
+        _set_abi_routes(
+            abi_server, open_position=open_position_response, entry_package=_entry_package_applied
+        )
 
-        state = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
-        assert state is None or state.current_trade_cycle is None
+        second = _post_closed_bar(client, 2)
+        assert second.status_code == 200
+
+        live_entry_requests_after = len(
+            [r for r in engine_server.requests if r.path == _LIVE_ENTRY_PATH]
+        )
+        assert live_entry_requests_after == live_entry_requests_before
+
+        state_after_failure = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
+        assert state_after_failure == state_after_apply
 
         outcomes = _dispatch_outcomes(tmp_path / "journal" / "runtime.jsonl")
         assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_failed"
@@ -573,9 +734,10 @@ def test_abi_entry_package_failure_leaves_no_saved_cycle(
         assert response.status_code == 200
         assert response.json() == {"status": "accepted"}
 
-        # Every upstream boundary succeeded exactly once; no retry anywhere.
+        # Cycle 1 has no prior current_trade_cycle, so the resolver never
+        # calls ABI's pair-addressed open-position endpoint for this cycle.
         open_position_requests = [r for r in abi_server.requests if "/open-position" in r.path]
-        assert len(open_position_requests) == 1
+        assert len(open_position_requests) == 0
         live_entry_requests = [r for r in engine_server.requests if r.path == _LIVE_ENTRY_PATH]
         assert len(live_entry_requests) == 1
 

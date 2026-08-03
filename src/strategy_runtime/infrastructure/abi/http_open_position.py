@@ -49,7 +49,7 @@ class HttpxAbiOpenPositionLookupAdapter:
         )
 
     def lookup(self, request: OpenPositionLookupRequest) -> OpenPositionLookupResponse:
-        path = _open_position_path(request.strategy_instance_id)
+        path = _open_position_path(request.strategy_instance_id, request.trade_cycle_id)
         try:
             response = self._client.get(path, headers={"accept": "application/json"})
         except httpx.TimeoutException as exc:
@@ -80,9 +80,10 @@ class HttpxAbiOpenPositionLookupAdapter:
         self.close()
 
 
-def _open_position_path(strategy_instance_id: str) -> str:
-    segment = _encode_opaque_path_segment(strategy_instance_id)
-    return f"/v1/strategy-instances/{segment}/open-position"
+def _open_position_path(strategy_instance_id: str, trade_cycle_id: str) -> str:
+    strategy_segment = _encode_opaque_path_segment(strategy_instance_id)
+    cycle_segment = _encode_opaque_path_segment(trade_cycle_id)
+    return f"/v1/strategy-instances/{strategy_segment}/trade-cycles/{cycle_segment}/open-position"
 
 
 def _encode_opaque_path_segment(value: str) -> str:

@@ -11,10 +11,13 @@ from strategy_runtime.runtime.open_position.errors import (
 from strategy_runtime.runtime.open_position.models import OpenPositionLookupResponse
 from strategy_runtime.utility.deployment_catalog.models import FrozenJsonValue, freeze_json
 
-_SUCCESS_FIELDS = frozenset({"position_open", "entry_bar_open_time_ms", "executed_entry_price"})
-_PUBLIC_ERROR_STATUSES = frozenset({400, 422})
-_ERROR_OBJECT_REQUIRED_FIELDS = frozenset({"code", "message"})
-_ERROR_OBJECT_ALLOWED_FIELDS = frozenset({"code", "message", "details"})
+_SUCCESS_FIELDS = frozenset({"position_open", "first_fill_at_ms", "average_entry_price"})
+_VALIDATION_DETAIL_FIELDS = frozenset({"path", "message"})
+_ERROR_ENVELOPE_FIELDS = frozenset({"error"})
+_ERROR_OBJECT_FIELDS_WITHOUT_DETAILS = frozenset({"code", "message"})
+_ERROR_OBJECT_FIELDS_WITH_DETAILS = frozenset({"code", "message", "details"})
+_NO_DETAILS_PUBLIC_CODES = frozenset({"unknown_trade_cycle_binding", "unsupported_exchange_scope"})
+_INTERNAL_ERROR_CODE = "internal_error"
 
 
 def decode_open_position_response(
@@ -26,16 +29,14 @@ def decode_open_position_response(
 
     if status_code == 200:
         return _decode_success(payload)
-    if status_code in _PUBLIC_ERROR_STATUSES:
-        code, message, details = _decode_error_envelope(payload)
+    if status_code == 422:
+        code, message, details = _decode_public_error_envelope(payload)
         raise OpenPositionLookupPublicError(
             status_code=status_code, code=code, message=message, details=details
         )
-    if 500 <= status_code <= 599:
-        _decode_error_envelope(payload)
-        raise OpenPositionLookupUnavailable(
-            f"ABI open-position lookup unavailable: HTTP {status_code}"
-        )
+    if status_code == 500:
+        _decode_internal_error_envelope(payload)
+        raise OpenPositionLookupUnavailable("ABI open-position lookup unavailable: HTTP 500")
     raise OpenPositionLookupProtocolError(f"undocumented ABI HTTP status: {status_code}")
 
 
@@ -46,20 +47,20 @@ def _decode_success(payload: object) -> OpenPositionLookupResponse:
         if type(position_open) is not bool:
             raise TypeError("position_open must be a boolean")
 
-        entry_bar_payload = body["entry_bar_open_time_ms"]
-        entry_bar_open_time_ms: int | None
-        if entry_bar_payload is None:
-            entry_bar_open_time_ms = None
-        elif type(entry_bar_payload) is int:
-            entry_bar_open_time_ms = entry_bar_payload
+        first_fill_payload = body["first_fill_at_ms"]
+        first_fill_at_ms: int | None
+        if first_fill_payload is None:
+            first_fill_at_ms = None
+        elif type(first_fill_payload) is int:
+            first_fill_at_ms = first_fill_payload
         else:
-            raise TypeError("entry_bar_open_time_ms must be a JSON integer or null")
+            raise TypeError("first_fill_at_ms must be a JSON integer or null")
 
-        executed_price_payload = body["executed_entry_price"]
-        executed_entry_price = (
+        average_price_payload = body["average_entry_price"]
+        average_entry_price = (
             None
-            if executed_price_payload is None
-            else _string(executed_price_payload, "executed_entry_price")
+            if average_price_payload is None
+            else _string(average_price_payload, "average_entry_price")
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise OpenPositionLookupProtocolError(
@@ -69,8 +70,8 @@ def _decode_success(payload: object) -> OpenPositionLookupResponse:
     try:
         return OpenPositionLookupResponse(
             position_open=position_open,
-            entry_bar_open_time_ms=entry_bar_open_time_ms,
-            executed_entry_price=executed_entry_price,
+            first_fill_at_ms=first_fill_at_ms,
+            average_entry_price=average_entry_price,
         )
     except (TypeError, ValueError) as exc:
         raise OpenPositionLookupProtocolError(
@@ -78,28 +79,61 @@ def _decode_success(payload: object) -> OpenPositionLookupResponse:
         ) from exc
 
 
-def _decode_error_envelope(payload: object) -> tuple[str, str, FrozenJsonValue | None]:
+def _decode_public_error_envelope(payload: object) -> tuple[str, str, FrozenJsonValue | None]:
     try:
-        envelope = _closed_object(payload, frozenset({"error"}), "error envelope")
+        envelope = _closed_object(payload, _ERROR_ENVELOPE_FIELDS, "error envelope")
         error = envelope["error"]
         if type(error) is not dict:
             raise TypeError("error must be a JSON object")
         error_object = cast("dict[str, object]", error)
-        actual = frozenset(error_object)
-        if not actual >= _ERROR_OBJECT_REQUIRED_FIELDS:
-            missing = sorted(_ERROR_OBJECT_REQUIRED_FIELDS - actual)
-            raise ValueError(f"error object is missing required fields: {missing}")
-        if not actual <= _ERROR_OBJECT_ALLOWED_FIELDS:
-            unknown = sorted(actual - _ERROR_OBJECT_ALLOWED_FIELDS)
-            raise ValueError(f"error object has unknown fields: {unknown}")
-        code = _non_empty_string(error_object["code"], "error.code")
-        message = _non_empty_string(error_object["message"], "error.message")
-        details = freeze_json(error_object["details"]) if "details" in error_object else None
+        code = _non_empty_string(error_object.get("code"), "error.code")
+
+        if code == "validation_failed":
+            fields = _closed_object(error_object, _ERROR_OBJECT_FIELDS_WITH_DETAILS, "error")
+            message = _non_empty_string(fields["message"], "error.message")
+            details = _decode_validation_details(fields["details"])
+            return code, message, details
+
+        if code in _NO_DETAILS_PUBLIC_CODES:
+            fields = _closed_object(error_object, _ERROR_OBJECT_FIELDS_WITHOUT_DETAILS, "error")
+            message = _non_empty_string(fields["message"], "error.message")
+            return code, message, None
+
+        raise ValueError(f"undocumented open-position error code: {code!r}")
     except (KeyError, TypeError, ValueError) as exc:
         raise OpenPositionLookupProtocolError(
             f"invalid ABI open-position error envelope: {exc}"
         ) from exc
-    return code, message, details
+
+
+def _decode_validation_details(value: object) -> FrozenJsonValue:
+    if type(value) is not list or len(value) == 0:
+        raise ValueError("error.details must be a non-empty array")
+    items = cast("list[object]", value)
+    for item in items:
+        detail = _closed_object(item, _VALIDATION_DETAIL_FIELDS, "error.details item")
+        _non_empty_string(detail["path"], "error.details[].path")
+        _non_empty_string(detail["message"], "error.details[].message")
+    frozen = freeze_json(items)
+    return frozen
+
+
+def _decode_internal_error_envelope(payload: object) -> None:
+    try:
+        envelope = _closed_object(payload, _ERROR_ENVELOPE_FIELDS, "error envelope")
+        error = envelope["error"]
+        if type(error) is not dict:
+            raise TypeError("error must be a JSON object")
+        error_object = cast("dict[str, object]", error)
+        fields = _closed_object(error_object, _ERROR_OBJECT_FIELDS_WITHOUT_DETAILS, "error")
+        code = _non_empty_string(fields["code"], "error.code")
+        if code != _INTERNAL_ERROR_CODE:
+            raise ValueError(f"undocumented 500 error code: {code!r}")
+        _non_empty_string(fields["message"], "error.message")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise OpenPositionLookupProtocolError(
+            f"invalid ABI open-position error envelope: {exc}"
+        ) from exc
 
 
 def _load_strict_json(content: bytes) -> object:
