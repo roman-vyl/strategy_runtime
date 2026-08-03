@@ -63,19 +63,32 @@
   fields above (these branches are status/transport-driven, not
   field-shape-driven).
 
-## 4. Router Field Propagation
+## 4. Router: Fail-Closed Open-Trade Boundary
 
-- [ ] 4.1 Update `StrategyUseCaseRouter`'s open-trade branch
-  (`runtime/routing/router.py`) to read `resolved.first_fill_at_ms` /
-  `resolved.average_entry_price` in place of the renamed fields, passing
-  `first_fill_at_ms` through unchanged as
-  `OpenTradeProjectionRequest.entry_bar_open_time_ms` (Engine's own,
-  unrelated field name — not renamed, not recomputed).
-- [ ] 4.2 Confirm no other production module references
+- [ ] 4.1 Change `StrategyUseCaseRouter`'s open-trade branch
+  (`runtime/routing/router.py`) to raise `OpenTradeContextUnavailable(unit
+  .strategy_instance_id)` unconditionally when `resolved.position_open` is
+  `true`, before evaluating the current trade cycle, its frozen desired
+  entry, or either fill fact. Remove the `OpenTradeProjectionRequest`
+  construction and the `StrategyEngineOpenTradePort.project_open_trade`
+  call from this branch entirely — do not read, copy, or rename
+  `resolved.first_fill_at_ms` / `resolved.average_entry_price` anywhere in
+  the router, and do not synthesize `entry_bar_open_time_ms` or
+  `executed_entry_price`.
+- [ ] 4.2 Add a router unit test: given a fully-formed resolved state
+  (`position_open=true`, an existing frozen current trade cycle, and real
+  `first_fill_at_ms`/`average_entry_price` values), the router still raises
+  `OpenTradeContextUnavailable` and makes zero calls to
+  `StrategyEngineOpenTradePort` — proving the fail-closed boundary applies
+  even when the "old" completeness check would have passed, not only when
+  context looks incomplete.
+- [ ] 4.3 Confirm no other production module references
   `entry_bar_open_time_ms`/`executed_entry_price` as ABI-origin field names
   (grep for both identifiers across `src/` after 1–4 land; any remaining
   hit outside `runtime/engine/`, `infrastructure/strategy_engine/`, and
-  Engine-contract test files is a missed rename).
+  Engine-contract test files is a missed rename). Confirm
+  `OpenTradeProjectionRequest`/`StrategyEngineOpenTradePort` are not
+  referenced anywhere in `runtime/routing/router.py` after this task group.
 
 ## 5. Contract Tests
 
@@ -112,7 +125,11 @@
 - [ ] 6.2 Update `tests/unit/runtime/test_semantic_pipeline.py` fixtures and
   assertions for the renamed fields and the new request shape (`Abi` fake's
   `lookup` call site and any `PositionResolvedStrategyInstanceRuntimeState`/
-  `OpenPositionLookupResponse` construction).
+  `OpenPositionLookupResponse` construction). Remove or rewrite any existing
+  test in this file that asserts a *successful* open-trade Engine call for
+  complete context — that outcome no longer exists after task group 4;
+  replace it with (or fold it into) an assertion matching task 4.2's
+  unconditional-fail-closed behavior.
 - [ ] 6.3 Update
   `tests/unit/runtime/entry_reconciliation_orchestrator/test_entry_reconciliation_orchestrator.py`
   and any other test file matched by
@@ -125,22 +142,33 @@
   `tests/integration/committed_bar/test_production_e2e.py` fake ABI
   open-position responses to the final path and success/error payload
   shapes.
-- [ ] 7.2 Add/confirm a happy-path test: closed-bar webhook → ABI returns
-  the final closed response (no trade cycle yet, so no ABI call is actually
-  made — assert zero ABI open-position requests) → Strategy Engine
-  live-entry route is called → pipeline does not fail with a protocol
-  error.
-- [ ] 7.3 Add a second happy-path test covering the case where a current
-  trade cycle already exists: ABI open-position lookup is called with the
-  existing `trade_cycle_id`, using the final closed response shape, and the
-  live-entry route is still reached.
+- [ ] 7.2 Add/confirm a happy-path test for a brand-new strategy instance:
+  closed-bar webhook → `current_trade_cycle is None` so the resolver never
+  calls ABI at all (assert the fake ABI open-position server records zero
+  requests for this cycle) → Strategy Engine live-entry route is called →
+  pipeline does not fail with a protocol error. Do not configure a fake ABI
+  open-position response for this scenario — there is nothing to answer.
+- [ ] 7.3 Add a separate happy-path test covering the case where a current
+  trade cycle already exists: the fake ABI server actually receives one
+  open-position request for `(strategy_instance_id, trade_cycle_id)` and
+  returns the final closed response shape
+  (`position_open: false, first_fill_at_ms: null, average_entry_price:
+  null`); the live-entry route is still reached.
 - [ ] 7.4 Add a negative test proving the pre-alignment success shape
   (`entry_bar_open_time_ms`/`executed_entry_price`) is no longer accepted —
   the cycle fails closed (no repository save, failed dispatch outcome
   journaled) rather than being silently coerced.
-- [ ] 7.5 Add a test proving the open-position-open path performs no
-  implicit legacy-field synthesis and exercises the existing fail-closed
-  open-trade behavior (`OpenTradeProjectionUnsupportedError`) unchanged.
+- [ ] 7.5 Add an E2E test for the case where a current trade cycle already
+  exists and the fake ABI server returns the final **open** response
+  (`position_open: true, first_fill_at_ms: <positive int>,
+  average_entry_price: "<positive decimal>"`): assert the response is
+  decoded successfully (no protocol error), assert the Strategy Engine
+  open-trade endpoint receives zero requests, assert no repository save
+  occurs, and assert the cycle is recorded as a failed dispatch outcome via
+  the existing `OpenTradeContextUnavailable` → `CommittedBarOrchestrator`
+  path. Assert no legacy field name
+  (`entry_bar_open_time_ms`/`executed_entry_price`) appears anywhere in the
+  request Strategy Engine would have received, had it been called.
 
 ## 8. I4d Closure Corrections (Unrelated, Small)
 

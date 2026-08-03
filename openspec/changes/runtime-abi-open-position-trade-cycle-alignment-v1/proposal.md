@@ -59,12 +59,19 @@ archived I4d change against the current repository state.
   `.executed_entry_price` to `.first_fill_at_ms` / `.average_entry_price`,
   and add a required `trade_cycle_id` field to `OpenPositionLookupRequest`.
   Propagate the same rename into
-  `PositionResolvedStrategyInstanceRuntimeState` and its one existing
-  downstream reader, `StrategyUseCaseRouter`'s open-trade branch (a
-  same-value field-name propagation into the already-existing
-  `OpenTradeProjectionRequest.entry_bar_open_time_ms` Engine-facing
-  parameter, not a new timestamp computation or candle-grid alignment —
-  that Engine-side field name is Engine's own contract and is unchanged).
+  `PositionResolvedStrategyInstanceRuntimeState`. `first_fill_at_ms` and
+  `average_entry_price` remain ABI/Runtime execution facts in this change;
+  neither is mapped into, renamed into, or otherwise made to reach any
+  Strategy Engine request field.
+- **BREAKING** Change `StrategyUseCaseRouter`'s open-trade branch: for
+  `position_open=true`, the router no longer constructs
+  `OpenTradeProjectionRequest` or calls `StrategyEngineOpenTradePort` at
+  all. It raises the existing `OpenTradeContextUnavailable` unconditionally,
+  fail-closed, before any Engine call — a temporary boundary pending a
+  separate future design of how, or whether, `first_fill_at_ms`/
+  `average_entry_price` should ever reach Strategy Engine.
+  `position_open=false` is unaffected and continues to call
+  `StrategyEngineLiveEntryPort` exactly as before.
 - Change `OpenPositionResolver.resolve(state)` from an unconditional
   identity-only lookup to a trade-cycle-conditional one: when
   `state.current_trade_cycle is None`, no ABI call is made and the resolver
@@ -122,12 +129,13 @@ None.
   trade cycle exists; call ABI with the existing `trade_cycle_id` otherwise),
   and document the accepted Live V1 in-memory lifecycle boundary this rests
   on.
-- `use-case-router`: Update the open-trade mapping requirement's field-name
-  references (`executed_entry_price` → `average_entry_price`; the
-  resolver-supplied entry-bar fact is now sourced from `first_fill_at_ms`)
-  to match the renamed nearest Runtime model; the underlying rule (Engine
-  never receives Runtime/ABI execution identity or the raw executed price)
-  is unchanged.
+- `use-case-router`: Replace the open-trade mapping requirement. For
+  `position_open=true` the router SHALL NOT construct
+  `OpenTradeProjectionRequest` or call `StrategyEngineOpenTradePort`; it
+  SHALL raise the existing `OpenTradeContextUnavailable` unconditionally.
+  `position_open=false` continues to call `StrategyEngineLiveEntryPort`
+  unchanged. This is a temporary fail-closed boundary, not a permanent
+  design decision about Engine's open-trade contract.
 
 ## Impact
 
@@ -135,7 +143,9 @@ None.
   for the future implementation): `runtime/open_position/models.py`,
   `ports.py`, `errors.py`, `resolver.py`; `infrastructure/abi/
   http_open_position.py`, `open_position_codec.py`; `runtime/routing/
-  router.py` (open-trade field references only); `config/model.py` and
+  router.py` (open-trade branch becomes unconditionally fail-closed before
+  any Engine call — no field mapping, no request construction);
+  `config/model.py` and
   `loader.py` are not changed by this alignment (the five I4d outbound
   variables already exist there; only `runtime.env.example` is out of sync).
 - Affected tests: `tests/contract/abi/test_open_position_client.py`,
@@ -154,4 +164,6 @@ None.
 - Explicitly out of scope: restart recovery, identity-only ABI lookup, search
   for a lost trade cycle, durable repository, distributed locking, startup
   reconciliation against the exchange, timestamp normalization or candle-grid
-  alignment, a new open-trade lifecycle, and any ABI/Engine-side change.
+  alignment, deciding how or whether `first_fill_at_ms`/
+  `average_entry_price` should ever reach Strategy Engine, a new open-trade
+  lifecycle, and any ABI/Engine-side change.

@@ -77,11 +77,10 @@ proposal, as a **trade-cycle-conditional lookup**: call ABI only once a
   `EntryReconciliationOrchestrator`'s decision rules (`NoOp`/`Apply`/
   `Replace`/`Cancel`).
 - Timestamp normalization, candle-grid alignment, or any computation that
-  derives one timestamp from another. `first_fill_at_ms` is carried through
-  to Engine's existing `entry_bar_open_time_ms` field unchanged in value —
-  this change does not decide, and explicitly defers, whether that
-  pass-through is Engine's long-term contract; it only keeps today's
-  pre-existing pass-through behavior honest under the renamed source field.
+  derives one timestamp from another. This change does not decide, and does
+  not implement, any mapping of `first_fill_at_ms`/`average_entry_price`
+  into a Strategy Engine request field — see "position_open=true fails
+  closed before Engine, with no field mapping" below.
 - Any ABI-side or Strategy-Engine-side implementation change.
 - Rewriting or silently marking-complete any historical record inside
   `openspec/changes/archive/2026-07-30-runtime-live-entry-production
@@ -173,31 +172,82 @@ needs to branch on this specific code differently from the other two public
 specifically (for example, an operational alert), introducing the subtype
 then is cheap and does not require touching this change's contract.
 
-### Field propagation stops at the router's existing pass-through, not at a new Engine contract decision
+### position_open=true fails closed before Engine, with no field mapping
 
-`PositionResolvedStrategyInstanceRuntimeState.entry_bar_open_time_ms` /
-`.executed_entry_price` rename to `.first_fill_at_ms` / `.average_entry_price`
-one-for-one. The only existing reader beyond the resolver itself is
-`StrategyUseCaseRouter`'s open-trade branch
-(`OpenTradeProjectionRequest(..., entry_bar_open_time_ms=resolved.
-entry_bar_open_time_ms, ...)`), which becomes
-`entry_bar_open_time_ms=resolved.first_fill_at_ms`. `OpenTradeProjectionRequest
-.entry_bar_open_time_ms` is Engine's own wire field name (part of the
-`executed_trade_receipt` envelope defined by the Strategy Engine contract,
-encoded by `infrastructure/strategy_engine/wire_codec.py`) and is unrelated
-to ABI's field naming; it is not renamed. The router passes the value
-through unchanged today (no normalization exists at this call site before
-this change, and none is introduced by it) — this change only updates which
-renamed source attribute that pass-through reads from.
+An earlier draft of this design propagated the `first_fill_at_ms` rename
+straight through into `OpenTradeProjectionRequest.entry_bar_open_time_ms` —
+Engine's existing open-trade wire field — as a "same-value pass-through,
+not a new computation." On review, that framing does not hold: whatever the
+right relationship between an exchange fill timestamp and Engine's
+candle-boundary-shaped `entry_bar_open_time_ms` field turns out to be, this
+change has no basis for asserting today's identity mapping is it. Passing
+the renamed value through silently would make an implicit field-mapping
+decision by omission — exactly the kind of undesigned Engine-contract
+question this change explicitly defers (see Non-Goals).
 
-This propagation boundary is deliberately narrow: it does not reach into
-`wire_codec.py`, the Engine port models, or any Engine-side contract
-question about what `entry_bar_open_time_ms` should mean for an
-exchange-timestamped fill versus a candle-boundary timestamp — that question
-is explicitly out of scope (see Non-Goals) and, practically, moot for this
-change's testable surface, since `StrategyRuntimeOrchestrator` always raises
-`OpenTradeProjectionUnsupportedError` immediately after routing regardless
-of what the open-trade Engine call returns (existing, unchanged behavior).
+Instead, `position_open=true` now fails closed **before** any Engine call:
+
+```text
+resolved.position_open?
+  false -> unchanged: build LiveEntryProjectionRequest, call
+           StrategyEngineLiveEntryPort.project_live_entry(...)
+  true  -> raise OpenTradeContextUnavailable(unit.strategy_instance_id)
+           immediately -- no OpenTradeProjectionRequest is constructed,
+           no StrategyEngineOpenTradePort call is made, no
+           first_fill_at_ms/average_entry_price value is read for this
+           purpose at all
+```
+
+`OpenTradeContextUnavailable` — the router's own existing exception,
+already raised (pre-alignment) when open-trade context looked incomplete —
+is reused rather than introducing a new exception type, per this change's
+instruction to fix a temporary boundary with an existing typed failure.
+Reusing it does broaden its practical meaning: previously it meant "the
+locally available facts are incomplete"; now it also covers "the facts are
+available, but this change has not designed how they may safely reach
+Engine." Both are, at the call site, the same observable outcome (open-trade
+projection cannot proceed), so the broadening is judged acceptable rather
+than worth a second exception type for a temporary state. It stays in
+`runtime/routing/errors.py` (the router's own error module) rather than
+reusing the orchestrator-layer `OpenTradeProjectionUnsupportedError`, which
+would require routing to import from orchestrator — a layering direction
+the codebase does not otherwise have — and which is raised for a materially
+different condition (a fully-formed `OpenTradeProjectedStrategyInstance`
+that reached the orchestrator, not a routing-time refusal to build one).
+
+**Consequence: `OpenTradeProjectedStrategyInstance` becomes unreachable from
+production routing in this change.** `StrategyUseCaseRouter.route(...)` is
+the only production constructor of that type; once it always raises before
+reaching that construction for `position_open=true`,
+`OpenTradeProjectionUnsupportedError` (raised by
+`StrategyRuntimeOrchestrator` for that type) has no live call path left
+through the router. It remains reachable only where a test constructs
+`OpenTradeProjectedStrategyInstance` directly to exercise the orchestrator's
+typed-branch dispatch in isolation (as `test_semantic_pipeline.py` and the
+orchestrator's own focused tests already do) — that isolation testing is
+unaffected by this change and is not something this change removes.
+
+**Propagation is unchanged.** `OpenTradeContextUnavailable` raised inside
+`StrategyUseCaseRouter.route(...)`, itself called from
+`StrategyRuntimeOrchestrator.process(...)` inside the held keyed critical
+section, already propagates uncaught to `CommittedBarOrchestrator`'s
+existing per-unit failure handling under the current, unmodified
+"Propagate Engine projection failure" requirement in the
+`strategy-runtime-orchestrator` spec. No new error-propagation behavior is
+introduced by this decision.
+
+**Alternative considered — still call Engine open-trade, omitting only the
+disputed field.** Rejected: `OpenTradeProjectionRequest.entry_bar_open_time_ms`
+is a required field with no defined "absent" representation; omitting it is
+not expressible without changing the Engine port model, which is out of
+scope.
+
+**Alternative considered — introduce a new, precisely-named exception for
+this specific temporary state.** Rejected for now as premature naming for a
+boundary explicitly expected to be revisited once Engine field-mapping is
+designed; reusing `OpenTradeContextUnavailable` costs nothing observable at
+the current single call site and avoids naming something that may need to
+change shape once the real design lands.
 
 ### Codec rewrite follows the authoritative document's exact per-code shape, not a uniform envelope
 
@@ -292,11 +342,15 @@ repository state has changed since this design was written.
   -written codec again] → Mitigated by the new authoritative
   cross-repository contract test, which fails on the next drift rather than
   requiring another manual re-discovery.
-- [The router's open-trade `entry_bar_open_time_ms` pass-through remains
-  unresolved as a real design question] → Explicitly out of scope and
-  practically inert today (see "Field propagation" decision above); flagged
-  here so it is not mistaken for a decision this change made rather than
-  one it deliberately deferred.
+- [Open-trade routing now fails closed unconditionally for
+  `position_open=true`, even once a real trade cycle and real fill facts
+  exist] → Accepted and temporary by design (see "position_open=true fails
+  closed before Engine" above): this change has no basis for deciding how
+  `first_fill_at_ms`/`average_entry_price` should reach Engine, and passing
+  them through unexamined would be a worse outcome than an explicit,
+  visible fail-closed boundary. `OpenTradeContextUnavailable` already
+  propagates to a journaled failed-dispatch outcome (unchanged), so this is
+  observable, not silent.
 - [Tightening `first_fill_at_ms` to strictly-positive could reject a
   legitimate ABI response if ABI ever legitimately reports `0`] → Matches
   the authoritative schema's own `exclusiveMinimum: 0` exactly; if ABI's
@@ -307,9 +361,11 @@ repository state has changed since this design was written.
 
 1. Rewrite `runtime/open_position/models.py`, `ports.py`, `errors.py`,
    `resolver.py`; `infrastructure/abi/http_open_position.py`,
-   `open_position_codec.py`; and the two-field references in
-   `runtime/routing/router.py`, together — these do not compile/type-check
-   independently, so they land as one implementation step, not incrementally.
+   `open_position_codec.py`; and `runtime/routing/router.py`'s open-trade
+   branch (remove request construction and the Engine call; raise
+   `OpenTradeContextUnavailable` unconditionally for `position_open=true`),
+   together — these do not compile/type-check independently, so they land
+   as one implementation step, not incrementally.
 2. Update `tests/contract/abi/test_open_position_client.py`,
    `tests/unit/runtime/test_semantic_pipeline.py`, the production E2E
    fixtures, and add the new authoritative cross-repository contract test.
@@ -327,9 +383,12 @@ repository state has changed since this design was written.
 
 ## Open Questions
 
-None outstanding for this change's scope. The router's open-trade
-`entry_bar_open_time_ms` pass-through semantics (see "Field propagation"
-decision) is a real open question but is explicitly deferred, not answered
-by guessing, and does not change this change's specs, approach, or task
-breakdown — it will need its own design work if and when the open-trade
-application operation is built.
+None outstanding for this change's scope. How, or whether,
+`first_fill_at_ms`/`average_entry_price` should ever reach Strategy Engine
+is a real open question, but this change answers what to do about it *now*
+(fail closed before Engine, map nothing) rather than leaving that behavior
+undecided — the further question of Engine's eventual contract is out of
+scope by design (see Non-Goals), not an unresolved unknown inside this
+change's own approach, and does not change this change's specs, decisions,
+or task breakdown. It will need its own design work if and when the
+open-trade application operation is built.
