@@ -1,5 +1,8 @@
 """Pure desired-entry equivalence and decision selection."""
 
+from strategy_runtime.runtime.entry_reconciliation.errors import (
+    EntryReconciliationInvariantError,
+)
 from strategy_runtime.runtime.entry_reconciliation.models import (
     Apply,
     Cancel,
@@ -36,6 +39,10 @@ def decide_entry_reconciliation(
     """Select the complete payload-bearing reconciliation decision."""
     if new_desired_entry is not None and type(new_desired_entry) is not DesiredEntry:
         raise TypeError("new_desired_entry must be DesiredEntry or None")
+    if current_trade_cycle is not None and current_trade_cycle.frozen_entry_context is not None:
+        raise EntryReconciliationInvariantError(
+            "entry reconciliation is fail-closed once the trade cycle's entry is frozen"
+        )
 
     acknowledged_desired_entry = get_acknowledged_desired_entry(current_trade_cycle)
     if acknowledged_desired_entry is None:

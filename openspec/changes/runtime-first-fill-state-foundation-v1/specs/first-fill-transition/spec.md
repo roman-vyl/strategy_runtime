@@ -4,7 +4,9 @@
 `align_first_fill_to_entry_bar(first_fill_at_ms, base_timeframe)` SHALL
 return `first_fill_at_ms - (first_fill_at_ms % duration_ms)`, where
 `duration_ms` is the millisecond duration of a `base_timeframe` supported by
-Runtime's small closed set of supported timeframes.
+Runtime's small closed set of supported timeframes: exactly `1m`, `5m`,
+`15m`, `1h`, `4h`, `1d` (case-sensitive, exact string match), with no other
+value accepted.
 
 #### Scenario: Align a fill that occurs inside a candle
 - **WHEN** `first_fill_at_ms` falls strictly between two consecutive bar
@@ -31,8 +33,8 @@ Runtime's small closed set of supported timeframes.
   arithmetic
 
 #### Scenario: Reject an unsupported timeframe
-- **WHEN** `base_timeframe` is not one of Runtime's small closed set of
-  supported timeframes
+- **WHEN** `base_timeframe` is not exactly one of `1m`, `5m`, `15m`, `1h`,
+  `4h`, `1d`
 - **THEN** the helper raises `ValueError` and performs no alignment
   arithmetic
 

@@ -3,6 +3,9 @@ from typing import Literal
 
 import pytest
 
+from strategy_runtime.runtime.entry_reconciliation.errors import (
+    EntryReconciliationInvariantError,
+)
 from strategy_runtime.runtime.entry_reconciliation.models import (
     Apply,
     Cancel,
@@ -15,7 +18,11 @@ from strategy_runtime.runtime.entry_reconciliation.reconciliation import (
     get_acknowledged_desired_entry,
 )
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
-from strategy_runtime.runtime.state.models import AppliedEntryPackage, CurrentTradeCycle
+from strategy_runtime.runtime.state.models import (
+    AppliedEntryPackage,
+    CurrentTradeCycle,
+    FrozenExecutedEntryContext,
+)
 
 
 def desired_entry(
@@ -111,3 +118,31 @@ def test_cycle_identity_does_not_change_equivalence_decision() -> None:
 
     assert decide_entry_reconciliation(entry, first) == NoOp()
     assert decide_entry_reconciliation(entry, second) == NoOp()
+
+
+def frozen_cycle(entry: DesiredEntry, *, trade_cycle_id: str = "cycle-1") -> CurrentTradeCycle:
+    return replace(
+        cycle(entry, trade_cycle_id=trade_cycle_id),
+        frozen_entry_context=FrozenExecutedEntryContext(
+            desired_entry=entry,
+            first_fill_at_ms=1_000,
+            entry_bar_open_time_ms=900,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "new_entry",
+    [
+        desired_entry(),
+        desired_entry(planned_entry_price="101"),
+        None,
+    ],
+)
+def test_frozen_entry_context_fails_closed_before_any_decision(
+    new_entry: DesiredEntry | None,
+) -> None:
+    original = desired_entry()
+
+    with pytest.raises(EntryReconciliationInvariantError, match="frozen"):
+        decide_entry_reconciliation(new_entry, frozen_cycle(original))

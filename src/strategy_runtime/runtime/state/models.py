@@ -41,15 +41,38 @@ class AppliedEntryPackage:
 
 
 @dataclass(frozen=True, slots=True)
+class FrozenExecutedEntryContext:
+    desired_entry: DesiredEntry
+    first_fill_at_ms: int
+    entry_bar_open_time_ms: int
+
+    def __post_init__(self) -> None:
+        if type(self.desired_entry) is not DesiredEntry:
+            raise TypeError("desired_entry must be DesiredEntry")
+        if type(self.first_fill_at_ms) is not int or self.first_fill_at_ms <= 0:
+            raise ValueError("first_fill_at_ms must be a strictly positive integer")
+        if type(self.entry_bar_open_time_ms) is not int or self.entry_bar_open_time_ms < 0:
+            raise ValueError("entry_bar_open_time_ms must be a non-negative integer")
+        if self.entry_bar_open_time_ms > self.first_fill_at_ms:
+            raise ValueError("entry_bar_open_time_ms must not be after first_fill_at_ms")
+
+
+@dataclass(frozen=True, slots=True)
 class CurrentTradeCycle:
     trade_cycle_id: str
     applied_entry_package: AppliedEntryPackage
+    frozen_entry_context: FrozenExecutedEntryContext | None = None
 
     def __post_init__(self) -> None:
         if type(self.trade_cycle_id) is not str or len(self.trade_cycle_id) == 0:
             raise ValueError("trade_cycle_id must be a non-empty string")
         if type(self.applied_entry_package) is not AppliedEntryPackage:
             raise TypeError("applied_entry_package must be AppliedEntryPackage")
+        if (
+            self.frozen_entry_context is not None
+            and type(self.frozen_entry_context) is not FrozenExecutedEntryContext
+        ):
+            raise TypeError("frozen_entry_context must be FrozenExecutedEntryContext or None")
 
     @property
     def desired_entry_frozen(self) -> bool:

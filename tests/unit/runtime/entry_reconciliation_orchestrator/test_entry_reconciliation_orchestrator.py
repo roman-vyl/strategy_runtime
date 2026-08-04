@@ -32,6 +32,7 @@ from strategy_runtime.runtime.routing.models import (
 from strategy_runtime.runtime.state.models import (
     AppliedEntryPackage,
     CurrentTradeCycle,
+    FrozenExecutedEntryContext,
     RegisteredSpecSnapshot,
     StrategyInstanceRuntimeState,
 )
@@ -533,4 +534,31 @@ def test_representative_confirmation_invariants_propagate_without_second_executi
         ).execute(projection(source_state, desired_entry()))
 
     assert len(execution_port.calls) == 1
+    assert source_state == snapshot
+
+
+def test_frozen_entry_context_stops_reconciliation_before_any_execution() -> None:
+    entry = desired_entry()
+    source_state = runtime_state(applied_entry=entry)
+    assert source_state.current_trade_cycle is not None
+    frozen_current_cycle = replace(
+        source_state.current_trade_cycle,
+        frozen_entry_context=FrozenExecutedEntryContext(
+            desired_entry=entry,
+            first_fill_at_ms=1_000,
+            entry_bar_open_time_ms=900,
+        ),
+    )
+    source_state = replace(source_state, current_trade_cycle=frozen_current_cycle)
+    snapshot = replace(source_state)
+    item = projection(source_state, desired_entry(price="101"))
+    execution_port = FakeExecutionPort(object())
+
+    with pytest.raises(EntryReconciliationInvariantError, match="frozen"):
+        EntryReconciliationOrchestrator(
+            RecordingIdFactory(),
+            execution_port,
+        ).execute(item)
+
+    assert execution_port.calls == []
     assert source_state == snapshot
