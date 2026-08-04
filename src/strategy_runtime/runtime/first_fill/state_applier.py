@@ -26,6 +26,8 @@ def apply_first_fill(
         raise FirstFillInvariantError("apply_first_fill requires an existing current trade cycle")
     if current_cycle.trade_cycle_id != trade_cycle_id:
         raise FirstFillInvariantError("trade_cycle_id does not match the current trade cycle")
+    if type(first_fill_at_ms) is not int or first_fill_at_ms <= 0:
+        raise ValueError("first_fill_at_ms must be a strictly positive integer")
 
     if current_cycle.frozen_entry_context is not None:
         if current_cycle.frozen_entry_context.first_fill_at_ms == first_fill_at_ms:

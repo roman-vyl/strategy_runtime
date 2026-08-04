@@ -116,6 +116,19 @@ def test_retry_with_identical_timestamp_is_a_no_op_returning_same_object() -> No
     assert retried is frozen
 
 
+@pytest.mark.parametrize("malformed", [True, 905_000.0])
+def test_retry_with_malformed_timestamp_raises_value_error_not_a_no_op(
+    malformed: object,
+) -> None:
+    frozen = apply_first_fill(runtime_state(), TRADE_CYCLE_ID, 905_000)
+    original_context = frozen.current_trade_cycle.frozen_entry_context  # type: ignore[union-attr]
+
+    with pytest.raises(ValueError, match="first_fill_at_ms must be a strictly positive integer"):
+        apply_first_fill(frozen, TRADE_CYCLE_ID, cast("int", malformed))
+
+    assert frozen.current_trade_cycle.frozen_entry_context is original_context  # type: ignore[union-attr]
+
+
 def test_retry_with_different_timestamp_fails_closed_and_preserves_original() -> None:
     frozen = apply_first_fill(runtime_state(), TRADE_CYCLE_ID, 905_000)
     original_context = frozen.current_trade_cycle.frozen_entry_context  # type: ignore[union-attr]

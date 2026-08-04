@@ -1,5 +1,5 @@
 from dataclasses import replace
-from typing import Literal
+from typing import Literal, cast
 
 import pytest
 
@@ -146,3 +146,8 @@ def test_frozen_entry_context_fails_closed_before_any_decision(
 
     with pytest.raises(EntryReconciliationInvariantError, match="frozen"):
         decide_entry_reconciliation(new_entry, frozen_cycle(original))
+
+
+def test_invalid_current_cycle_type_fails_closed_before_frozen_check() -> None:
+    with pytest.raises(TypeError, match="current_trade_cycle must be CurrentTradeCycle or None"):
+        decide_entry_reconciliation(desired_entry(), cast("CurrentTradeCycle", object()))

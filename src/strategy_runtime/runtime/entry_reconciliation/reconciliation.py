@@ -39,6 +39,8 @@ def decide_entry_reconciliation(
     """Select the complete payload-bearing reconciliation decision."""
     if new_desired_entry is not None and type(new_desired_entry) is not DesiredEntry:
         raise TypeError("new_desired_entry must be DesiredEntry or None")
+    if current_trade_cycle is not None and type(current_trade_cycle) is not CurrentTradeCycle:
+        raise TypeError("current_trade_cycle must be CurrentTradeCycle or None")
     if current_trade_cycle is not None and current_trade_cycle.frozen_entry_context is not None:
         raise EntryReconciliationInvariantError(
             "entry reconciliation is fail-closed once the trade cycle's entry is frozen"
