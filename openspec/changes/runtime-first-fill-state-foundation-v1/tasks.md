@@ -2,10 +2,13 @@
 
 - [ ] 1.1 Add `FrozenExecutedEntryContext` to `runtime/state/models.py`
   (`desired_entry: DesiredEntry`, `first_fill_at_ms: int`,
-  `entry_bar_open_time_ms: int`), with `__post_init__` validation:
-  `desired_entry` must be `DesiredEntry` and correct type; `first_fill_at_ms` must be
-  a strictly positive `int` (type check and `> 0`); `entry_bar_open_time_ms` must be a
-  non-negative `int` (type check and `>= 0`) and `<= first_fill_at_ms`.
+  `entry_bar_open_time_ms: int`), with `__post_init__` validation using
+  strict type checks (`type(x) is int`, not `isinstance`, so `bool` is
+  rejected since `bool` is a subclass of `int` in Python):
+  `type(desired_entry) is DesiredEntry`; `type(first_fill_at_ms) is int` and
+  `first_fill_at_ms > 0`; `type(entry_bar_open_time_ms) is int` and
+  `entry_bar_open_time_ms >= 0` and `entry_bar_open_time_ms <=
+  first_fill_at_ms`. Raise `ValueError`/`TypeError` on any violation.
 - [ ] 1.2 Add `frozen_entry_context: FrozenExecutedEntryContext | None =
   None` as the third field on `CurrentTradeCycle`, after the existing
   `trade_cycle_id`/`applied_entry_package` fields, with a
@@ -21,10 +24,11 @@
   closed mapping `_SUPPORTED_TIMEFRAME_DURATIONS_MS` for `1m`, `5m`,
   `15m`, `1h`, `4h`, `1d`.
 - [ ] 2.3 Implement `align_first_fill_to_entry_bar(first_fill_at_ms: int,
-  base_timeframe: str) -> int`: raise `ValueError` when `first_fill_at_ms`
-  is not a strictly positive `int`; raise `ValueError` when
-  `base_timeframe` is not in the supported mapping; otherwise return
-  `first_fill_at_ms - (first_fill_at_ms % duration_ms)`.
+  base_timeframe: str) -> int`: raise `ValueError` when
+  `type(first_fill_at_ms) is not int` (strict check, `bool` rejected) or
+  `first_fill_at_ms <= 0`; raise `ValueError` when `base_timeframe` is not
+  in the supported mapping; otherwise return `first_fill_at_ms -
+  (first_fill_at_ms % duration_ms)`.
 
 ## 3. Pure First-Fill Transition
 
@@ -113,26 +117,45 @@
 
 ## 5.5. Entry Reconciliation Protection
 
-- [ ] 5.12 Modify `apply_success_confirmation`, `apply_modify_desired_entry`, and
-  `apply_cancel_order_request` in `entry_reconciliation/state_applier.py` to check
-  if `state.current_trade_cycle.frozen_entry_context is not None` at entry and raise
-  `EntryReconciliationInvariantError` with a clear message that entry is frozen,
-  preventing any live-entry reconciliation changes after first fill.
+- [ ] 5.12 Modify `decide_entry_reconciliation` in
+  `runtime/entry_reconciliation/reconciliation.py` to check, immediately after
+  the existing `new_desired_entry` type check and before computing
+  `acknowledged_desired_entry` or evaluating the four-way decision table:
+  if `current_trade_cycle is not None and current_trade_cycle.frozen_entry_context
+  is not None`, raise `EntryReconciliationInvariantError`. This runs before
+  `build_entry_reconciliation_command` and before
+  `EntryReconciliationExecutionPort.execute` are ever reached, so no
+  `EntryReconciliationCommand` is built and no ABI entry-package command is
+  sent for a trade cycle whose entry is already frozen. Do not modify
+  `apply_success_confirmation`, `command_builder.py`, or any other file in
+  `entry_reconciliation/` or `entry_reconciliation_orchestrator/`.
 
 ## 5.6. Unit Tests: Entry Reconciliation Protection
 
-- [ ] 5.13 Create or modify tests in `tests/unit/runtime/entry_reconciliation/`
-  to verify that `apply_success_confirmation`, `apply_modify_desired_entry`, and
-  `apply_cancel_order_request` all raise `EntryReconciliationInvariantError` when
-  called on a state with `current_trade_cycle.frozen_entry_context` set (one test
-  per transition).
+- [ ] 5.13 Add tests in `tests/unit/runtime/entry_reconciliation/
+  test_reconciliation.py` (or equivalent) covering `decide_entry_reconciliation`
+  with a `current_trade_cycle.frozen_entry_context` set:
+  - a `new_desired_entry` equivalent to the acknowledged applied desired
+    entry raises `EntryReconciliationInvariantError` (not `NoOp`);
+  - a `new_desired_entry` different from the acknowledged applied desired
+    entry raises `EntryReconciliationInvariantError` (not `Replace`);
+  - `new_desired_entry = None` raises `EntryReconciliationInvariantError`
+    (not `Cancel`).
+- [ ] 5.14 Add an orchestrator-level test in
+  `tests/unit/runtime/entry_reconciliation_orchestrator/` using a fake
+  `EntryReconciliationExecutionPort` that fails the test if `execute` is
+  called: call `EntryReconciliationOrchestrator.execute` with a projection
+  whose source state has a `current_trade_cycle.frozen_entry_context` set,
+  assert `EntryReconciliationInvariantError` propagates, assert the fake
+  execution port recorded zero calls, and assert the source state is
+  returned unmodified (no repository save path exercised).
 
-## 7. Verification
+## 6. Verification
 
-- [ ] 7.1 Run `make verify` (or the project's configured lint/type/test
+- [ ] 6.1 Run `make verify` (or the project's configured lint/type/test
   target) and confirm no regression in existing `runtime/state`,
   `entry_reconciliation`, `entry_reconciliation_orchestrator`, or
   `orchestrator` test suites caused by the new `CurrentTradeCycle` field and
-  the new frozen-entry-context protection in entry reconciliation transitions.
-- [ ] 7.2 Run `npm exec -- openspec validate "runtime-first-fill-state-foundation-v1"
+  the new frozen-entry-context guard in `decide_entry_reconciliation`.
+- [ ] 6.2 Run `npm exec -- openspec validate "runtime-first-fill-state-foundation-v1"
   --type change --strict` and resolve any reported issues before archiving.

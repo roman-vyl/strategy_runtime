@@ -2,11 +2,11 @@
 
 Runtime's live-entry pipeline completed `I4b` (entry reconciliation) and `I4c`/`I4d`
 (applied entry package application), but nothing in Runtime yet reacts to an
-actual fill. `docs/system-plans/runtime-abi-entry-reconciliation-master-plan.md`
-§19-21 sketches the full `I5` webhook path (`AbiExecutionEventOrchestrator`, fill
-aggregates, and orchestration wiring) as a future increment. This foundation change
-provides the pure first-fill state transition that `I5` needs. That larger work
-will mix two different kinds of work:
+actual fill. `I5` (`runtime-abi-first-fill-orchestration-v1`) is the first-fill
+HTTP callback: `AbiExecutionEventOrchestrator` wired through the shared keyed
+mutex and repository to call `apply_first_fill`. Building the pure domain
+transition and the HTTP/orchestration wiring in one change mixes two
+different kinds of work:
 
 1. A pure domain operation — "the first fill freezes the entry context" —
    that has no dependency on HTTP, ABI wire shapes, the keyed mutex, or the
@@ -42,16 +42,24 @@ reconciliation transition (`apply_success_confirmation`) that this change's
   testable helper.
 - Provide `apply_first_fill` as a small, pure, independently testable state
   transition with explicit idempotent-retry and fail-closed-conflict rules.
+- Add a fail-closed guard to `decide_entry_reconciliation` so live-entry
+  reconciliation stops once a trade cycle's entry context is frozen.
 - Leave every other Runtime module (`repository`, `orchestrator`, `router`,
-  `open_position`, `entry_reconciliation*`, ABI/Engine clients, HTTP) byte-
-  for-byte unchanged.
+  `open_position`, ABI/Engine clients, HTTP) byte-for-byte unchanged.
+  `entry_reconciliation/reconciliation.py` gains exactly one new guard clause
+  in `decide_entry_reconciliation`; no other file in `entry_reconciliation*`
+  changes.
 
 **Non-Goals:**
-- No `phase` field, execution phase state machine, execution-phase lifecycle, or
-  any filled/remaining quantity, average execution price, fill ledger, or
-  `EarlyExecutionObservation` — scope deferred to orchestration layer.
+- No `phase` field, execution phase state machine, execution-phase lifecycle,
+  filled/remaining quantity, average execution price, fill ledger, or
+  `EarlyExecutionObservation` anywhere in Runtime. This is not part of `I5`
+  or Live V1; it can exist only as a separate future change, if and when
+  proven necessary.
 - No HTTP endpoint, no `AbiExecutionEventOrchestrator`, no production
-  composition wiring, no ABI webhook client, no ABI contract change.
+  composition wiring, no ABI webhook client, no ABI contract change. `I5`'s
+  scope is exactly: the first-fill HTTP callback, `AbiExecutionEventOrchestrator`,
+  the shared keyed mutex/repository wiring, and a call to `apply_first_fill`.
 - No Engine open-trade call and no change to `OpenTradeContextUnavailable`
   fail-closed routing.
 - No outbox, retry, or durable deduplication of fill events — this change
@@ -186,6 +194,33 @@ path, while the retried-conflict path mirrors the existing "preserve state
 after contradictory formal success" invariant already ratified for
 `entry_reconciliation`'s confirmation application.
 
+### The frozen-entry guard lives in `decide_entry_reconciliation`, before the four-way decision table
+
+**Decision**: `decide_entry_reconciliation(new_desired_entry, current_trade_cycle)`
+checks `current_trade_cycle is not None and current_trade_cycle.frozen_entry_context
+is not None` first, and raises `EntryReconciliationInvariantError` immediately
+if true — before comparing `new_desired_entry` against the acknowledged
+applied desired entry and before returning `NoOp`, `Apply`, `Replace`, or
+`Cancel`.
+
+**Rationale**: `decide_entry_reconciliation` is the earliest point in the
+`EntryReconciliationOrchestrator.execute` pipeline
+(`decide_entry_reconciliation` → `build_entry_reconciliation_command` →
+`execution_port.execute` → `apply_success_confirmation`). Raising here means
+no `EntryReconciliationCommand` is ever built and
+`EntryReconciliationExecutionPort.execute` is never called, so no ABI
+entry-package command is sent once a trade cycle's entry is frozen. A guard
+placed later — inside `apply_success_confirmation`, which only runs after
+the ABI call already completed — would preserve Runtime's own state but
+would not stop the live ABI side-effect, defeating the point of the
+protection.
+
+**Alternative considered**: Guard inside `apply_success_confirmation` (the
+existing state-transition function). Rejected: by the time
+`apply_success_confirmation` runs, `execution_port.execute` has already sent
+the command to ABI; the guard would be too late to prevent the live-entry
+side-effect this protection exists to stop.
+
 ### Freezing copies the existing `DesiredEntry` object, not a new copy
 
 **Decision**: `FrozenExecutedEntryContext.desired_entry` is set to
@@ -237,7 +272,9 @@ unchanged.
 
 ## Open Questions
 
-- None blocking this change. `executed_entry_price` / average-price
-  handling, the fill-quantity lifecycle, and `AbiExecutionEventOrchestrator`
-  wiring remain open questions explicitly deferred to the future `I5`
-  design, per `runtime-abi-entry-reconciliation-master-plan.md` §17/§22.
+- None blocking this change. `I5`'s scope is exactly the first-fill HTTP
+  callback, `AbiExecutionEventOrchestrator`, the shared keyed mutex/repository
+  wiring, and a call to `apply_first_fill`. Any execution phase, filled/
+  remaining quantity, or average-price lifecycle is not part of `I5` or
+  Live V1 and would require a separate future change, proposed only if and
+  when proven necessary.

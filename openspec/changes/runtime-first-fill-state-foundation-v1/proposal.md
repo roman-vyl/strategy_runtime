@@ -28,8 +28,14 @@ response) with no additional domain logic of its own.
 - Add `FrozenExecutedEntryContext` containing exactly `desired_entry`,
   `first_fill_at_ms`, and `entry_bar_open_time_ms`. Average execution price,
   filled/remaining quantity, any execution phase state machine, fill ledger,
-  and any `EarlyExecutionObservation` remain explicitly out of scope for this
-  change — scope deferred to the orchestration and fill-lifecycle layers.
+  and any `EarlyExecutionObservation` are not part of this change, `I5`, or
+  Live V1; none of them are planned, and any of them would require a
+  separate future change if proven necessary.
+- Add a fail-closed guard to `decide_entry_reconciliation` so live-entry
+  reconciliation (`APPLY`/`REPLACE`/`CANCEL`) raises
+  `EntryReconciliationInvariantError` before building any command once a
+  trade cycle's `frozen_entry_context` is set, so no ABI entry-package
+  command can be sent for a trade cycle whose entry is already frozen.
 - Add a pure helper `align_first_fill_to_entry_bar(first_fill_at_ms,
   base_timeframe) -> entry_bar_open_time_ms` that floors a fill timestamp to
   its containing candle's open time using a small, closed set of supported
@@ -54,34 +60,44 @@ response) with no additional domain logic of its own.
   pure `apply_first_fill` state transition that freezes the executed entry
   context on the first ABI fill, including its idempotent-retry and
   fail-closed-conflict rules, entirely decoupled from ABI transport, HTTP,
-  orchestration, and quantity/price lifecycle.
+  and orchestration.
 
 ### Modified Capabilities
 
 - `current-trade-cycle-state`: Replace the previously exhaustive
-  I2/I4a/I4b `CurrentTradeCycle` shape with one that also carries an
+  I2/I4a/I4b/I4c/I4d `CurrentTradeCycle` shape with one that also carries an
   optional `frozen_entry_context: FrozenExecutedEntryContext | null`, and
-  define the minimal pre-I5 `FrozenExecutedEntryContext` structure
+  define the minimal `FrozenExecutedEntryContext` structure
   (`desired_entry`, `first_fill_at_ms`, `entry_bar_open_time_ms`) while
   still excluding phase, filled/remaining quantity, average execution
   price, and fill ledger from any current-cycle field.
+- `entry-reconciliation`: Add a fail-closed guard to
+  `decide_entry_reconciliation` so `APPLY`/`REPLACE`/`CANCEL` reconciliation
+  raises `EntryReconciliationInvariantError` before any command is built
+  once a trade cycle's `frozen_entry_context` is set.
 
 ## Impact
 
 - Affected production code: `runtime/state/models.py` (extend
-  `CurrentTradeCycle`, add `FrozenExecutedEntryContext`); new
-  `runtime/first_fill/` package (`alignment.py`, `state_applier.py`,
-  `errors.py`).
-- Affected tests: `tests/unit/runtime/test_state_models.py` (extend); new
+  `CurrentTradeCycle`, add `FrozenExecutedEntryContext`);
+  `runtime/entry_reconciliation/reconciliation.py` (add the frozen-entry
+  guard to `decide_entry_reconciliation`); new `runtime/first_fill/`
+  package (`alignment.py`, `state_applier.py`, `errors.py`).
+- Affected tests: `tests/unit/runtime/test_state_models.py` (extend);
+  `tests/unit/runtime/entry_reconciliation/` (extend, frozen-guard
+  coverage); `tests/unit/runtime/entry_reconciliation_orchestrator/`
+  (extend, zero-execution-port-calls coverage); new
   `tests/unit/runtime/first_fill/` (`test_alignment.py`,
   `test_state_applier.py`).
 - Explicitly out of scope, deferred to the future `I5` change
   (`runtime-abi-first-fill-orchestration-v1`): the HTTP first-fill
   callback endpoint, `AbiExecutionEventOrchestrator`, production
   composition wiring, any ABI webhook client, any change to ABI itself,
-  any Engine open-trade call, outbox/retry/durable deduplication, and the
-  filled/remaining quantity and average-price lifecycle.
-- No change to `entry_reconciliation`, `entry_reconciliation_orchestrator`,
-  `open_position` resolver, `routing/router.py`, the repository port/
-  in-memory adapter's public contract, the keyed-mutex registry, or any
-  ABI/Strategy Engine wire contract.
+  any Engine open-trade call, and outbox/retry/durable deduplication.
+  Execution phase, filled/remaining quantity, and average-price lifecycle
+  are not part of `I5` or Live V1 at all; they would require a separate
+  future change if proven necessary.
+- No change to `entry_reconciliation_orchestrator`'s own code (only its
+  test suite gains coverage), `open_position` resolver, `routing/router.py`,
+  the repository port/in-memory adapter's public contract, the keyed-mutex
+  registry, or any ABI/Strategy Engine wire contract.
