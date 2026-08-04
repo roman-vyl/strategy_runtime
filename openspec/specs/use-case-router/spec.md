@@ -96,26 +96,43 @@ can enter projected Runtime state or future ABI reconciliation.
 - **THEN** Runtime rejects the desired entry as malformed
 - **AND** no desired entry can be sent to ABI reconciliation
 
-### Requirement: Open-trade mapping requires frozen entry context
-The router SHALL call open-trade projection only when the runtime state and
-resolved facts contain complete immutable entry context, and it SHALL NOT send
-Runtime-owned instance identity or `executed_entry_price` to Engine. Strategy
-Engine SHALL calculate position management from the frozen
-`planned_entry_price`; the executed price remains a Runtime/ABI execution fact.
+### Requirement: Open-trade routing fails closed before any Engine call
+The router SHALL NOT construct `OpenTradeProjectionRequest` and SHALL NOT
+call `StrategyEngineOpenTradePort.project_open_trade` when
+`resolved.position_open` is `true`. It SHALL raise the existing
+`OpenTradeContextUnavailable` unconditionally for this case, as a temporary
+fail-closed boundary pending a separate future decision on whether or how
+ABI-reported fill facts should reach Strategy Engine.
 
-#### Scenario: Reject missing context before Engine
-- **WHEN** the current trade cycle is absent, its singular desired entry is not frozen, or either execution fact is absent
-- **THEN** the router raises `OpenTradeContextUnavailable`
-- **AND** does not call either Engine port
+#### Scenario: Fail closed immediately for an open position
+- **WHEN** `resolved.position_open` is `true`
+- **THEN** the router raises `OpenTradeContextUnavailable(unit
+  .strategy_instance_id)` before evaluating the current trade cycle, its
+  frozen desired entry, or either fill fact
+- **AND** does not construct `OpenTradeProjectionRequest`
+- **AND** does not call `StrategyEngineOpenTradePort`
 
-#### Scenario: Map the open-trade request
-- **WHEN** an open position has complete context
-- **THEN** the request contains strategy ID, raw spec, market, base timeframe, and target bar
-- **AND** contains the frozen `DesiredEntry`
-- **AND** contains the resolver-supplied entry bar
-- **AND** uses the frozen `DesiredEntry.planned_entry_price` as Engine calculation input
-- **AND** does not contain executed entry price
-- **AND** contains no Runtime strategy-instance ID, Runtime cycle ID, or exchange identifier
+#### Scenario: No fill-fact value is read for Engine mapping
+- **WHEN** the router raises for `position_open=true`
+- **THEN** `resolved.first_fill_at_ms` and `resolved.average_entry_price`
+  are not read, copied, renamed, or otherwise made to reach any Strategy
+  Engine request field
+- **AND** no legacy field name (`entry_bar_open_time_ms`,
+  `executed_entry_price`) is synthesized anywhere in the router
+
+#### Scenario: Live-entry routing is unaffected
+- **WHEN** `resolved.position_open` is `false`
+- **THEN** the router builds `LiveEntryProjectionRequest` and calls
+  `StrategyEngineLiveEntryPort.project_live_entry(...)` exactly as before
+  this change
+
+#### Scenario: The fail-closed failure propagates through the existing boundary
+- **WHEN** `OpenTradeContextUnavailable` is raised
+- **THEN** it propagates uncaught out of `StrategyRuntimeOrchestrator
+  .process(...)` exactly like any other router failure
+- **AND** `CommittedBarOrchestrator` converts it into the existing failed
+  `StrategyCycleDispatchOutcome`, journaled by `JsonlProcessingJournal` —
+  no new error-handling path is introduced
 
 ### Requirement: Position-management diagnostics are opaque and immutable
 The router SHALL preserve open-trade calculation objects without interpretation,
