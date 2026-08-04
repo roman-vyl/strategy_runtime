@@ -39,9 +39,10 @@ already committed to.
   exception — including a `ValueError` propagating from internal alignment
   after a structurally valid request — maps to `500`, never `400`. This
   capability extends `create_http_app(...)` with one new route and one new
-  optional callable parameter; it does not replace or duplicate the
-  existing `http-closed-bar` capability, whose webhook, background-task
-  acknowledgement, and health endpoints are unchanged.
+  required, keyword-only callable parameter (no default, so every caller
+  must explicitly decide the first-fill wiring); it does not replace or
+  duplicate the existing `http-closed-bar` capability, whose webhook,
+  background-task acknowledgement, and health endpoints are unchanged.
 - Modify `runtime-production-composition` to construct exactly one
   `AbiExecutionEventOrchestrator`, passing it the same `state_repository`
   and `keyed_mutex_registry` instances `StrategyRuntimeOrchestrator`

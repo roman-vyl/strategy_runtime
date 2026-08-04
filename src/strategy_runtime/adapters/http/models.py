@@ -20,6 +20,12 @@ class ClosedBarRequest(BaseModel):
         return value
 
 
+class FirstFillRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    first_fill_at_ms: Annotated[StrictInt, Field(gt=0)]
+
+
 class AcceptedResponse(BaseModel):
     status: Literal["accepted"] = "accepted"
 
@@ -39,3 +45,19 @@ class NotReadyResponse(BaseModel):
 class RejectedResponse(BaseModel):
     status: Literal["rejected"] = "rejected"
     reason: Literal["invalid_webhook"] = "invalid_webhook"
+
+
+class FirstFillRecordedResponse(BaseModel):
+    status: Literal["first_fill_recorded"] = "first_fill_recorded"
+
+
+class StrategyInstanceStateNotFoundResponse(BaseModel):
+    status: Literal["strategy_instance_state_not_found"] = "strategy_instance_state_not_found"
+
+
+class FirstFillConflictResponse(BaseModel):
+    status: Literal["first_fill_conflict"] = "first_fill_conflict"
+
+
+class InternalErrorResponse(BaseModel):
+    status: Literal["internal_error"] = "internal_error"

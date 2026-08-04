@@ -16,6 +16,10 @@ from strategy_runtime.infrastructure.strategy_engine import (
     HttpxStrategyEngineOpenTradeAdapter,
 )
 from strategy_runtime.runtime.abi import HttpxAbiEntryPackageAdapter
+from strategy_runtime.runtime.abi_execution_event.models import AbiFirstFillExecutionEvent
+from strategy_runtime.runtime.abi_execution_event.orchestrator import (
+    AbiExecutionEventOrchestrator,
+)
 from strategy_runtime.runtime.coordination import StrategyInstanceKeyedMutexRegistry
 from strategy_runtime.runtime.entry_reconciliation_bridge import (
     AbiEntryPackageExecutionBridge,
@@ -27,6 +31,7 @@ from strategy_runtime.runtime.open_position.resolver import OpenPositionResolver
 from strategy_runtime.runtime.orchestrator.orchestrator import StrategyRuntimeOrchestrator
 from strategy_runtime.runtime.routing.router import StrategyUseCaseRouter
 from strategy_runtime.runtime.state.identity import new_trade_cycle_id
+from strategy_runtime.runtime.state.models import StrategyInstanceRuntimeState
 from strategy_runtime.runtime.state.repository import (
     InMemoryStrategyInstanceRuntimeStateRepository,
 )
@@ -166,6 +171,15 @@ def build_application(
             keyed_mutex_registry=keyed_mutex_registry,
             entry_reconciliation_orchestrator=entry_reconciliation_orchestrator,
         )
+        abi_execution_event_orchestrator = AbiExecutionEventOrchestrator(
+            state_repository=state_repository,
+            keyed_mutex_registry=keyed_mutex_registry,
+        )
+
+        def process_first_fill(
+            event: AbiFirstFillExecutionEvent,
+        ) -> StrategyInstanceRuntimeState:
+            return abi_execution_event_orchestrator.process(event)
 
         def process_strategy_cycle(
             unit: StrategyBarProcessingUnit[DeploymentSpecification],
@@ -194,6 +208,7 @@ def build_application(
             ready=True,
             trace_id_factory=new_identifier,
             process_committed_bar=process_committed_bar,
+            process_first_fill=process_first_fill,
             logger=runtime_logger,
             lifespan=_lifespan,
         )
@@ -209,6 +224,7 @@ def build_application(
             ready=False,
             trace_id_factory=new_identifier,
             process_committed_bar=None,
+            process_first_fill=None,
             logger=runtime_logger,
         )
 

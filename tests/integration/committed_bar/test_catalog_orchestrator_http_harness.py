@@ -105,6 +105,7 @@ def test_fake_webhook_runs_catalog_and_orchestrator_against_bbb_like_specs(tmp_p
         ready=True,
         trace_id_factory=lambda: "trace-bbb-1",
         process_committed_bar=background,
+        process_first_fill=None,
     )
     response = TestClient(app).post(
         "/v1/webhooks/closed-bar",

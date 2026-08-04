@@ -27,6 +27,7 @@ def make_client(
         ready=ready,
         trace_id_factory=lambda: next(values),
         process_committed_bar=recorder if ready else None,
+        process_first_fill=None,
     )
     return TestClient(app), recorder
 
@@ -115,6 +116,7 @@ def test_separate_requests_generate_and_discard_separate_trace_ids() -> None:
         ready=True,
         trace_id_factory=trace_id_factory,
         process_committed_bar=recorder,
+        process_first_fill=None,
     )
     client = TestClient(app)
     payload = {"instrument": "BTCUSDT.P", "timeframe": "5m", "open_time_ms": 1}
@@ -133,6 +135,7 @@ def test_unexpected_pre_acceptance_failure_returns_500() -> None:
         ready=True,
         trace_id_factory=lambda: (_ for _ in ()).throw(RuntimeError("boom")),
         process_committed_bar=recorder,
+        process_first_fill=None,
     )
     client = TestClient(app)
     response = client.post(
@@ -152,6 +155,7 @@ def test_background_failure_does_not_change_acknowledgement() -> None:
         ready=True,
         trace_id_factory=lambda: "trace-1",
         process_committed_bar=failing_use_case,
+        process_first_fill=None,
     )
     client = TestClient(app, raise_server_exceptions=False)
 
@@ -186,6 +190,7 @@ async def test_acknowledgement_is_sent_before_background_task_completes() -> Non
         ready=True,
         trace_id_factory=lambda: "trace-1",
         process_committed_bar=blocking_use_case,  # type: ignore[arg-type]
+        process_first_fill=None,
     )
     body = json.dumps({"instrument": "BTCUSDT.P", "timeframe": "5m", "open_time_ms": 1}).encode()
     request_delivered = False
