@@ -3,9 +3,9 @@
 - [ ] 1.1 Add `FrozenExecutedEntryContext` to `runtime/state/models.py`
   (`desired_entry: DesiredEntry`, `first_fill_at_ms: int`,
   `entry_bar_open_time_ms: int`), with `__post_init__` validation:
-  `desired_entry` must be `DesiredEntry`; `first_fill_at_ms` must be a
-  strictly positive `int`; `entry_bar_open_time_ms` must be a non-negative
-  `int` and `<= first_fill_at_ms`.
+  `desired_entry` must be `DesiredEntry` and correct type; `first_fill_at_ms` must be
+  a strictly positive `int` (type check and `> 0`); `entry_bar_open_time_ms` must be a
+  non-negative `int` (type check and `>= 0`) and `<= first_fill_at_ms`.
 - [ ] 1.2 Add `frozen_entry_context: FrozenExecutedEntryContext | None =
   None` as the third field on `CurrentTradeCycle`, after the existing
   `trade_cycle_id`/`applied_entry_package` fields, with a
@@ -18,8 +18,8 @@
 
 - [ ] 2.1 Create `runtime/first_fill/__init__.py`.
 - [ ] 2.2 Create `runtime/first_fill/alignment.py` with a module-level
-  closed mapping `_SUPPORTED_TIMEFRAME_DURATIONS_MS` for `1m`, `3m`, `5m`,
-  `15m`, `30m`, `1h`, `2h`, `4h`, `6h`, `12h`, `1d`.
+  closed mapping `_SUPPORTED_TIMEFRAME_DURATIONS_MS` for `1m`, `5m`,
+  `15m`, `1h`, `4h`, `1d`.
 - [ ] 2.3 Implement `align_first_fill_to_entry_bar(first_fill_at_ms: int,
   base_timeframe: str) -> int`: raise `ValueError` when `first_fill_at_ms`
   is not a strictly positive `int`; raise `ValueError` when
@@ -35,7 +35,7 @@
   `apply_first_fill(state: StrategyInstanceRuntimeState, trade_cycle_id:
   str, first_fill_at_ms: int) -> StrategyInstanceRuntimeState`:
   - validate input types (`state` is `StrategyInstanceRuntimeState`,
-    `trade_cycle_id` is a non-empty `str`, `first_fill_at_ms` is an `int`),
+    `trade_cycle_id` is a non-empty `str`),
     raising `FirstFillInvariantError` on failure;
   - require `state.current_trade_cycle is not None`, raising
     `FirstFillInvariantError` otherwise;
@@ -111,12 +111,28 @@
   applied `DesiredEntry.source_plan_bar_open_time_ms` raises
   `FirstFillInvariantError` and freezes nothing.
 
-## 6. Verification
+## 5.5. Entry Reconciliation Protection
 
-- [ ] 6.1 Run `make verify` (or the project's configured lint/type/test
+- [ ] 5.12 Modify `apply_success_confirmation`, `apply_modify_desired_entry`, and
+  `apply_cancel_order_request` in `entry_reconciliation/state_applier.py` to check
+  if `state.current_trade_cycle.frozen_entry_context is not None` at entry and raise
+  `EntryReconciliationInvariantError` with a clear message that entry is frozen,
+  preventing any live-entry reconciliation changes after first fill.
+
+## 5.6. Unit Tests: Entry Reconciliation Protection
+
+- [ ] 5.13 Create or modify tests in `tests/unit/runtime/entry_reconciliation/`
+  to verify that `apply_success_confirmation`, `apply_modify_desired_entry`, and
+  `apply_cancel_order_request` all raise `EntryReconciliationInvariantError` when
+  called on a state with `current_trade_cycle.frozen_entry_context` set (one test
+  per transition).
+
+## 7. Verification
+
+- [ ] 7.1 Run `make verify` (or the project's configured lint/type/test
   target) and confirm no regression in existing `runtime/state`,
   `entry_reconciliation`, `entry_reconciliation_orchestrator`, or
-  `orchestrator` test suites caused by the new `CurrentTradeCycle` field.
-- [ ] 6.2 Run `npm exec -- openspec validate --change
-  runtime-first-fill-state-foundation-v1 --strict --no-interactive` and
-  resolve any reported issues before archiving.
+  `orchestrator` test suites caused by the new `CurrentTradeCycle` field and
+  the new frozen-entry-context protection in entry reconciliation transitions.
+- [ ] 7.2 Run `npm exec -- openspec validate "runtime-first-fill-state-foundation-v1"
+  --type change --strict` and resolve any reported issues before archiving.

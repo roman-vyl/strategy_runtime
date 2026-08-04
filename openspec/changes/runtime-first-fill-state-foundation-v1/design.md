@@ -1,12 +1,12 @@
 ## Context
 
-Runtime's live-entry pipeline currently stops at `I4b`: entry reconciliation
-creates and replaces `CurrentTradeCycle.applied_entry_package`, but nothing
-in Runtime ever reacts to an actual fill. `docs/system-plans/
-runtime-abi-entry-reconciliation-master-plan.md` §19-21 sketches the full
-`I5` webhook path (`AbiExecutionEventOrchestrator`, fill aggregates,
-`phase`, average price, partial/full fill state machine) as one large
-future increment. That increment mixes two different kinds of work:
+Runtime's live-entry pipeline completed `I4b` (entry reconciliation) and `I4c`/`I4d`
+(applied entry package application), but nothing in Runtime yet reacts to an
+actual fill. `docs/system-plans/runtime-abi-entry-reconciliation-master-plan.md`
+§19-21 sketches the full `I5` webhook path (`AbiExecutionEventOrchestrator`, fill
+aggregates, and orchestration wiring) as a future increment. This foundation change
+provides the pure first-fill state transition that `I5` needs. That larger work
+will mix two different kinds of work:
 
 1. A pure domain operation — "the first fill freezes the entry context" —
    that has no dependency on HTTP, ABI wire shapes, the keyed mutex, or the
@@ -47,10 +47,9 @@ reconciliation transition (`apply_success_confirmation`) that this change's
   for-byte unchanged.
 
 **Non-Goals:**
-- No `phase` field or any execution-phase state machine
-  (`awaiting_entry` → `partially_filled` → `position_open`).
-- No filled/remaining quantity, no average execution price, no fill ledger.
-- No `EarlyExecutionObservation` or any other pre-fill execution signal.
+- No `phase` field, execution phase state machine, execution-phase lifecycle, or
+  any filled/remaining quantity, average execution price, fill ledger, or
+  `EarlyExecutionObservation` — scope deferred to orchestration layer.
 - No HTTP endpoint, no `AbiExecutionEventOrchestrator`, no production
   composition wiring, no ABI webhook client, no ABI contract change.
 - No Engine open-trade call and no change to `OpenTradeContextUnavailable`
@@ -99,21 +98,19 @@ already-implemented reconciliation orchestrator.
 
 ### Two-tier error model: plain `ValueError`/`TypeError` vs. `FirstFillInvariantError`
 
-**Decision**: `align_first_fill_to_entry_bar` raises plain `ValueError` for
-malformed primitive input (`first_fill_at_ms` not a positive `int`,
-`base_timeframe` not in the supported set), exactly like `DesiredEntry`,
-`AppliedEntryPackage`, `RegisteredSpecSnapshot`, and
-`StrategyInstanceRuntimeState` already do in their own `__post_init__`.
+**Decision**: `FrozenExecutedEntryContext.__post_init__` raises plain `ValueError`/`TypeError`
+for malformed primitive input (`desired_entry` wrong type, `first_fill_at_ms` not a
+positive `int`, `entry_bar_open_time_ms` not a non-negative `int`, or
+`entry_bar_open_time_ms > first_fill_at_ms`). `align_first_fill_to_entry_bar` raises
+`ValueError` for non-positive/non-integer `first_fill_at_ms` or unsupported `base_timeframe`.
 `apply_first_fill` reserves the new `FirstFillInvariantError` (mirroring
-`EntryReconciliationInvariantError`) strictly for cross-object domain-
-invariant violations that only the transition itself can detect: no current
-trade cycle, a `trade_cycle_id` that does not match the current cycle, a
-computed `entry_bar_open_time_ms` earlier than
+`EntryReconciliationInvariantError`) strictly for cross-object domain-invariant
+violations that only the transition itself can detect: no current trade cycle, a
+`trade_cycle_id` mismatch, a computed `entry_bar_open_time_ms` earlier than
 `desired_entry.source_plan_bar_open_time_ms`, and a conflicting retried
 `first_fill_at_ms` for an already-frozen cycle. `apply_first_fill` lets
 `ValueError`/`TypeError` from the alignment helper and from
-`FrozenExecutedEntryContext` construction propagate unchanged — it does not
-wrap them.
+`FrozenExecutedEntryContext` construction propagate unchanged — it does not wrap them.
 
 **Rationale**: This exactly mirrors the existing, established split in
 `entry_reconciliation/state_applier.py`: value-object construction
@@ -133,10 +130,9 @@ package intentionally mirrors.
 ### Closed timeframe-duration whitelist, scoped only to this helper
 
 **Decision**: `alignment.py` defines a small, explicit
-`_SUPPORTED_TIMEFRAME_DURATIONS_MS` mapping (`1m`, `3m`, `5m`, `15m`, `30m`,
-`1h`, `2h`, `4h`, `6h`, `12h`, `1d`) used only by
-`align_first_fill_to_entry_bar`. An unrecognized `base_timeframe` raises
-`ValueError` — fail closed, never a best-effort parse.
+`_SUPPORTED_TIMEFRAME_DURATIONS_MS` mapping (`1m`, `5m`, `15m`, `1h`, `4h`, `1d`)
+used only by `align_first_fill_to_entry_bar`. An unrecognized `base_timeframe`
+raises `ValueError` — fail closed, never a best-effort parse.
 
 **Rationale**: Repository-wide, `timeframe`/`base_timeframe` is treated as
 an opaque, case-sensitive, exact-match string with no duration semantics

@@ -31,10 +31,11 @@ required `applied_entry_package: AppliedEntryPackage`, and one nullable
 
 ## ADDED Requirements
 
-### Requirement: Frozen executed entry context is the minimal pre-I5 first-fill freeze
+### Requirement: Frozen executed entry context is the minimal first-fill freeze
 `FrozenExecutedEntryContext` SHALL contain exactly `desired_entry:
-DesiredEntry`, a strictly positive integer `first_fill_at_ms`, and a
-non-negative integer `entry_bar_open_time_ms`.
+DesiredEntry`, a strictly positive integer `first_fill_at_ms` (type checked,
+`> 0`), and a non-negative integer `entry_bar_open_time_ms` (type checked,
+`>= 0`) where `entry_bar_open_time_ms <= first_fill_at_ms`.
 
 #### Scenario: Preserve one singular desired entry
 - **WHEN** a frozen executed entry context is constructed
@@ -44,17 +45,18 @@ non-negative integer `entry_bar_open_time_ms`.
 
 #### Scenario: Reject invalid context fields
 - **WHEN** `desired_entry` has the wrong type, `first_fill_at_ms` is not a
-  strictly positive integer, or `entry_bar_open_time_ms` is not a
-  non-negative integer
+  strictly positive integer, `entry_bar_open_time_ms` is not a
+  non-negative integer, or `entry_bar_open_time_ms > first_fill_at_ms`
 - **THEN** context construction fails before the value can enter aggregate
   or repository state
 
 #### Scenario: Keep price, quantity, and phase out of the frozen context
 - **WHEN** a frozen executed entry context is constructed
 - **THEN** it contains no average execution price, filled quantity,
-  remaining quantity, fill ledger entry, or execution phase
-- **AND** it is not the full future `I5` target shape that also carries
-  `executed_entry_price`
+  remaining quantity, fill ledger entry, execution phase, or any
+  execution-lifecycle state
+- **AND** it contains exactly the three required fields: `desired_entry`,
+  `first_fill_at_ms`, `entry_bar_open_time_ms`
 
 ### Requirement: The current trade cycle gains its frozen executed entry context only through the first-fill transition
 `CurrentTradeCycle.frozen_entry_context` SHALL remain null until the

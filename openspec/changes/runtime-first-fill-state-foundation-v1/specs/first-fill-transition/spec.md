@@ -136,3 +136,16 @@ ledger, or an `EarlyExecutionObservation`.
 - **THEN** the resulting state contains no `phase` field, no filled or
   remaining quantity, no average execution price, and no fill ledger
   anywhere in the current trade cycle
+
+### Requirement: Entry reconciliation transitions must fail closed once entry context is frozen
+`apply_success_confirmation`, `apply_modify_desired_entry`, and
+`apply_cancel_order_request` in `entry_reconciliation/state_applier.py`
+SHALL raise `EntryReconciliationInvariantError` if
+`state.current_trade_cycle.frozen_entry_context` is not null, preventing
+any live-entry reconciliation change after the first fill has been frozen.
+
+#### Scenario: Reject entry reconciliation when entry is frozen
+- **WHEN** an entry reconciliation transition is called on a `state` where
+  `current_trade_cycle.frozen_entry_context is not None`
+- **THEN** the transition raises `EntryReconciliationInvariantError`
+- **AND** no state is mutated or returned

@@ -3,21 +3,19 @@
 `docs/system-plans/runtime-master-plan.md` (§6, line 257 and lines 280-287)
 and `docs/system-plans/runtime-abi-entry-reconciliation-master-plan.md`
 (§17, §19-21) reserve freezing the executed entry context on first fill as
-future scope owned by `I5`, and explicitly keep the implemented `I4a`/`I4b`
-`CurrentTradeCycle` at only `trade_cycle_id` and `applied_entry_package`.
-`I5` itself (`docs/system-plans/runtime-abi-entry-delivery-map.md`,
-`runtime-master-plan.md` lines 388/446/474/487) is planned as the HTTP
-first-fill callback, `AbiExecutionEventOrchestrator`, and production
-composition wiring around a shared keyed mutex — but that orchestration has
-nothing pure to call yet: no frozen-context model, no entry-bar alignment
-rule, and no pure state transition exist. Building the orchestration and the
-domain transition in one change conflates ABI transport/HTTP concerns with a
-pure, independently testable domain operation and makes `I5` itself large
-and hard to review.
+future scope owned by `I5`. The implemented `I4a`/`I4b`/`I4c`/`I4d`
+`CurrentTradeCycle` holds only `trade_cycle_id` and `applied_entry_package`.
+`I5` (`docs/system-plans/runtime-abi-entry-delivery-map.md`,
+`runtime-master-plan.md` lines 388/446/474/487) will provide HTTP webhook
+handling, `AbiExecutionEventOrchestrator`, and production composition wiring
+around a shared keyed mutex — but that orchestration has no pure domain logic
+to call yet. Building orchestration and domain logic in one change conflates
+ABI transport/HTTP concerns with a pure, independently testable operation
+and makes `I5` itself large and hard to review.
 
-This change closes that small internal gap first: it gives `I5` exactly one
-pure operation to call — "freeze the entry context on the first fill" — so
-`I5` can stay a thin wiring layer (HTTP handler → orchestrator → mutex →
+This foundation closes that gap first: it gives `I5` exactly one pure
+operation to call — "freeze the entry context on the first fill" — so `I5`
+can stay a thin wiring layer (HTTP handler → orchestrator → mutex →
 `repository.get()` → `apply_first_fill(...)` → `repository.save()` →
 response) with no additional domain logic of its own.
 
@@ -25,16 +23,13 @@ response) with no additional domain logic of its own.
 
 - **BREAKING** Add a nullable `frozen_entry_context:
   FrozenExecutedEntryContext | null` field to `CurrentTradeCycle`, changing
-  its previously exhaustive I2/I4a/I4b shape
+  its previously exhaustive I2/I4a/I4b/I4c/I4d shape
   (`trade_cycle_id` + `applied_entry_package` only).
 - Add `FrozenExecutedEntryContext` containing exactly `desired_entry`,
-  `first_fill_at_ms`, and `entry_bar_open_time_ms` — a deliberately narrower
-  shape than the full `I5` target model sketched in
-  `runtime-abi-entry-reconciliation-master-plan.md` §17
-  (which also includes `executed_entry_price`). Average execution price,
-  filled/remaining quantity, the partial/full fill state machine, `phase`,
+  `first_fill_at_ms`, and `entry_bar_open_time_ms`. Average execution price,
+  filled/remaining quantity, any execution phase state machine, fill ledger,
   and any `EarlyExecutionObservation` remain explicitly out of scope for this
-  change and stay owned by the future `I5` design.
+  change — scope deferred to the orchestration and fill-lifecycle layers.
 - Add a pure helper `align_first_fill_to_entry_bar(first_fill_at_ms,
   base_timeframe) -> entry_bar_open_time_ms` that floors a fill timestamp to
   its containing candle's open time using a small, closed set of supported
