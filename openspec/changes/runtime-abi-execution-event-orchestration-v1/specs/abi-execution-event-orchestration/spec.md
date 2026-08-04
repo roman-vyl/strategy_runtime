@@ -42,6 +42,53 @@ field.
 - **THEN** it carries no execution `phase`, filled or remaining quantity,
   average execution price, or fill ledger
 
+### Requirement: AbiFirstFillExecutionEvent validates strictly at construction, before any mutex or repository interaction
+`AbiFirstFillExecutionEvent` construction SHALL validate every field before
+returning a usable instance, using exact-type checks consistent with the
+existing codebase idiom (`type(value) is ...`, not `isinstance`), and an
+invalid event SHALL fail at construction — before `process(...)` ever
+acquires the keyed mutex or calls the repository.
+
+- `strategy_instance_id`: SHALL require `type(value) is str` and non-empty.
+- `trade_cycle_id`: SHALL require `type(value) is str` and non-empty.
+- `first_fill_at_ms`: SHALL require `type(value) is int` and strictly
+  positive (`> 0`); a `bool` value SHALL be rejected even though `bool` is a
+  subtype of `int` in Python, and a `float` value SHALL be rejected.
+
+#### Scenario: Reject a non-string or empty strategy_instance_id
+- **WHEN** `strategy_instance_id` is not exactly `str`, or is an empty
+  string
+- **THEN** constructing `AbiFirstFillExecutionEvent` raises before any
+  field is accepted
+
+#### Scenario: Reject a non-string or empty trade_cycle_id
+- **WHEN** `trade_cycle_id` is not exactly `str`, or is an empty string
+- **THEN** constructing `AbiFirstFillExecutionEvent` raises before any
+  field is accepted
+
+#### Scenario: Reject a non-positive or non-integer first_fill_at_ms
+- **WHEN** `first_fill_at_ms` is not exactly `int`, or is zero or negative
+- **THEN** constructing `AbiFirstFillExecutionEvent` raises before any
+  field is accepted
+
+#### Scenario: Reject a boolean first_fill_at_ms
+- **WHEN** `first_fill_at_ms` is `True` or `False`
+- **THEN** construction raises, even though `bool` would satisfy a looser
+  `isinstance(value, int)` check
+
+#### Scenario: Reject a float first_fill_at_ms
+- **WHEN** `first_fill_at_ms` is a `float`, including a whole-number value
+  such as `1700000000000.0`
+- **THEN** construction raises
+
+#### Scenario: An invalid event never reaches the mutex or the repository
+- **WHEN** any field fails validation during `AbiFirstFillExecutionEvent`
+  construction
+- **THEN** no `StrategyInstanceKeyedMutexRegistry.hold(...)` call occurs
+- **AND** no `StrategyInstanceRuntimeStateRepository` call occurs
+- **AND** `process(...)` is never reached, because no valid event object
+  exists to pass to it
+
 ### Requirement: The orchestrator acquires the shared keyed mutex by exact strategy_instance_id before loading any state
 `AbiExecutionEventOrchestrator` SHALL enter
 `StrategyInstanceKeyedMutexRegistry.hold(event.strategy_instance_id)` before
@@ -153,21 +200,31 @@ from any stage.
 - **AND** the keyed critical section is released
 - **AND** a later same-instance caller can acquire it
 
-### Requirement: The orchestrator calls no Engine, ABI outbound, or sibling-orchestrator collaborator
-`AbiExecutionEventOrchestrator` SHALL NOT call Strategy Engine, any ABI
-outbound client, `StrategyRuntimeOrchestrator`, or
-`EntryReconciliationOrchestrator`, and SHALL NOT construct any Strategy
-Engine request or response DTO.
+### Requirement: The orchestrator's constructor accepts only the shared repository and mutex registry as collaborators
+`AbiExecutionEventOrchestrator.__init__` SHALL accept exactly
+`state_repository: StrategyInstanceRuntimeStateRepository` and
+`keyed_mutex_registry: StrategyInstanceKeyedMutexRegistry` as its
+collaborators, and SHALL accept no Strategy Engine port, no ABI outbound
+client, no `StrategyRuntimeOrchestrator`, and no
+`EntryReconciliationOrchestrator`. Because the instance holds no such
+collaborator, `process(...)` invokes only `hold(...)`, `get(...)`,
+`apply_first_fill(...)`, and conditional `save(...)` — it has nothing else
+to call.
 
-#### Scenario: No Engine or ABI call is made
+#### Scenario: Constructor accepts exactly two collaborators
+- **WHEN** `AbiExecutionEventOrchestrator` is constructed
+- **THEN** its constructor accepts exactly `state_repository` and
+  `keyed_mutex_registry`
+- **AND** no Strategy Engine port, ABI outbound client,
+  `StrategyRuntimeOrchestrator`, or `EntryReconciliationOrchestrator`
+  parameter exists on the constructor
+
+#### Scenario: process invokes only the four sequencing steps
 - **WHEN** `process(...)` executes, whether it saves or not
-- **THEN** no Strategy Engine port is called
-- **AND** no ABI outbound client is called
-
-#### Scenario: No sibling orchestrator is invoked
-- **WHEN** `process(...)` executes
-- **THEN** `StrategyRuntimeOrchestrator` is not called
-- **AND** `EntryReconciliationOrchestrator` is not called
+- **THEN** it invokes only `hold(...)`, `state_repository.get(...)`,
+  `apply_first_fill(...)`, and, conditionally, `state_repository.save(...)`
+- **AND** it constructs no Strategy Engine or ABI request or response
+  object, having no such collaborator to call
 
 ### Requirement: Domain and repository exceptions propagate unmasked
 `AbiExecutionEventOrchestrator` SHALL let every exception raised by
@@ -186,36 +243,3 @@ suppression, retry, or fallback.
 - **THEN** that exception propagates after exactly one save attempt
 - **AND** `process(...)` performs no retry, compensating write, or
   successful return
-
-### Requirement: AbiExecutionEventOrchestrator and StrategyRuntimeOrchestrator are equal writer paths sharing one repository and one keyed-mutex registry
-A conforming production wiring SHALL construct exactly one
-`StrategyInstanceRuntimeStateRepository` instance and exactly one
-`StrategyInstanceKeyedMutexRegistry` instance and supply both to
-`AbiExecutionEventOrchestrator` and to `StrategyRuntimeOrchestrator`, so
-that the two top-level writer paths serialize per exact
-`strategy_instance_id` and observe each other's saved state.
-
-#### Scenario: Same-instance invocations across both writers serialize
-- **WHEN** `StrategyRuntimeOrchestrator.process(...)` and
-  `AbiExecutionEventOrchestrator.process(...)` are invoked for the same
-  exact `strategy_instance_id` against the shared registry
-- **THEN** their critical sections do not overlap
-- **AND** whichever invocation acquires the mutex second loads state only
-  after the first invocation releases it
-
-#### Scenario: A fresh load observes the other writer's prior save
-- **WHEN** `StrategyRuntimeOrchestrator` saves a replacement aggregate for
-  an instance and then releases the mutex
-- **AND** `AbiExecutionEventOrchestrator.process(...)` is subsequently
-  invoked for the same `strategy_instance_id` against the shared repository
-  and registry
-- **THEN** its `get(...)` call returns the aggregate `StrategyRuntimeOrchestrator`
-  saved, not an earlier snapshot
-
-#### Scenario: Different strategy instances remain independent across both writers
-- **WHEN** `StrategyRuntimeOrchestrator` holds its critical section for one
-  `strategy_instance_id` and `AbiExecutionEventOrchestrator.process(...)`
-  is invoked for a different `strategy_instance_id` against the same shared
-  registry
-- **THEN** the second invocation acquires its own critical section without
-  waiting on the first

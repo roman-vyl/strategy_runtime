@@ -39,14 +39,17 @@ tests, or existing specs change in this pass.
   `entry_bar_open_time_ms` (the Engine-facing canonical name) is
   categorically excluded from this input: it exists only after the domain
   transition normalizes the fill timestamp.
-- Fix, as an explicit design constraint (not new code in this pass), that
+- Record, in design.md prose only (not as a normative requirement of the new
+  capability spec, and not implemented or tested in this pass), that
   `AbiExecutionEventOrchestrator` and `StrategyRuntimeOrchestrator` are two
-  equal top-level writer paths that a future production wiring change MUST
-  construct over one shared `StrategyInstanceRuntimeStateRepository`
+  equal top-level writer paths a future, separate production-wiring change
+  must construct over one shared `StrategyInstanceRuntimeStateRepository`
   instance and one shared `StrategyInstanceKeyedMutexRegistry` instance, so
   that the two paths serialize per `strategy_instance_id` through the same
   lock, exactly as `strategy-instance-keyed-coordination` already commits to
-  ("Share one registry across later writers").
+  ("Share one registry across later writers"). This change itself designs
+  only `AbiExecutionEventOrchestrator`, constructed with exactly the two
+  collaborators its own sequencing needs.
 - Reuse the existing `StrategyInstanceStateNotFound` error
   (`runtime/state/errors.py`) for the orchestrator's missing-aggregate
   fail-closed path rather than introduce a new exception type; its existing

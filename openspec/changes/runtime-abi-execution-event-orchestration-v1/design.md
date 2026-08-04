@@ -22,17 +22,32 @@ pipeline: `get_or_create` → open-position resolution → use-case routing →
 Engine projection → reconciliation → conditional save, all under one held
 keyed critical section per `strategy_instance_id`.
 
-ABI's execution fact — "the entry order's first fill happened at this raw
-exchange timestamp" — arrives on a materially different path: it is pushed
-by ABI whenever a fill occurs, asynchronously with respect to any closed-bar
-tick, and for a `strategy_instance_id` that closed-bar processing may be
-concurrently reading or writing at the same moment. Applying it requires the
-same aggregate and the same per-instance serialization
-`StrategyRuntimeOrchestrator` already uses — but not `get_or_create` (the
-aggregate must already be registered; there is nothing to "create" from an
-ABI fill event) and not any of `StrategyRuntimeOrchestrator`'s own pipeline
-stages (position resolution, Engine routing, reconciliation are all
-closed-bar concerns with no meaning for a raw fill notification).
+ABI observes the entry order's execution on the exchange. At the first
+actual fill, ABI captures exactly one raw, unnormalized millisecond
+timestamp — the same value `apply_first_fill`'s `first_fill_at_ms`
+parameter already exists to receive. That single raw timestamp is the only
+fact delivered to Runtime; a repeated delivery is only ever a retry of that
+same already-observed fact carrying the identical timestamp, which
+`apply_first_fill`'s own idempotency rule already covers ("A repeated
+identical first fill is a no-op"). Fills after the first are explicitly out
+of scope for this fact: `AbiExecutionEventOrchestrator` is never invoked for
+them, their occurrence triggers no renormalization, and they never change an
+already-frozen `FrozenExecutedEntryContext`. A different timestamp arriving
+after the context is frozen is not "the next fill" — it is a conflict, and
+`apply_first_fill` already fails it closed ("A conflicting retried fill
+fails closed"). This change designs the handling of exactly one fact per
+trade cycle, not a fill stream.
+
+This fact arrives on a path materially different from any closed-bar tick —
+asynchronously with respect to it, for a `strategy_instance_id` that
+closed-bar processing may be concurrently reading or writing at the same
+moment. Applying it requires the same aggregate and the same per-instance
+serialization `StrategyRuntimeOrchestrator` already uses — but not
+`get_or_create` (the aggregate must already be registered; there is nothing
+to "create" from a first-fill event) and not any of
+`StrategyRuntimeOrchestrator`'s own pipeline stages (position resolution,
+Engine routing, reconciliation are all closed-bar concerns with no meaning
+for a first-fill notification).
 
 This change designs that second, narrower top-level writer:
 `AbiExecutionEventOrchestrator`. It is deliberately not a rewrite or
@@ -50,10 +65,12 @@ peers over shared infrastructure, not a shared class hierarchy or a shared
 - Define its application-level input and output precisely enough that a
   later HTTP-adapter change can map ABI's wire payload onto it without
   redesigning this orchestrator.
-- Fix, as a binding constraint on future production wiring, that this
-  orchestrator and `StrategyRuntimeOrchestrator` share one repository
-  instance and one keyed-mutex registry instance, so the two writer paths
-  serialize correctly per `strategy_instance_id`.
+- Record, as design guidance for a future, separate production-wiring
+  change, that this orchestrator and `StrategyRuntimeOrchestrator` must
+  share one repository instance and one keyed-mutex registry instance so
+  the two writer paths serialize correctly per `strategy_instance_id` — a
+  documented note, not a normative requirement of this change's own
+  capability spec.
 - Keep every timestamp-normalization, candle-boundary, freezing,
   idempotency, and conflict rule exactly where `first-fill-transition`
   already put it — inside `apply_first_fill` — so this change adds zero new
@@ -67,8 +84,10 @@ peers over shared infrastructure, not a shared class hierarchy or a shared
   does not anticipate that mapping's exact shape.
 - Production composition (`bootstrap/application.py`, `create_http_app`,
   wiring `AbiExecutionEventOrchestrator` into a running process). This
-  change fixes the *constraint* the wiring must satisfy (shared repository,
-  shared mutex registry), not the wiring itself.
+  change notes, in design.md prose only, the constraint a future wiring
+  change must satisfy (shared repository, shared mutex registry); it does
+  not encode that constraint as a normative capability requirement, and
+  does not implement or test the wiring itself.
 - Any new timestamp-normalization rule, state machine, command builder,
   generic execution-event dispatcher, event-handler registry, application
   port wrapping `apply_first_fill`, or abstraction over the conditional-save
@@ -78,6 +97,10 @@ peers over shared infrastructure, not a shared class hierarchy or a shared
   phase concept. `apply_first_fill` already commits to introducing none of
   these ("apply_first_fill introduces no execution-phase or quantity
   lifecycle"); this orchestrator inherits that boundary unchanged.
+  `AbiExecutionEventOrchestrator` is designed to receive exactly one raw
+  first-fill timestamp per trade cycle (plus idempotent retries of that same
+  timestamp); it is never invoked for a fill after the first, and this
+  change does not design what would call it for one.
 - Modifying `StrategyRuntimeOrchestrator`, `EntryReconciliationOrchestrator`,
   the repository, the mutex registry, or `apply_first_fill` themselves. All
   four are consumed as already-ratified, unmodified capabilities.
@@ -201,28 +224,33 @@ differently-contracted operations; matching each orchestrator's save
 condition to the actual contract of the operation it wraps is more precise
 than a uniform rule that happens to work for both today.
 
-### Shared repository and shared mutex registry is a wiring constraint fixed now, wiring itself deferred
+### Shared repository and shared mutex registry: a noted constraint for a future, separate wiring change — not designed or tested here
 
 `strategy-instance-keyed-coordination` already commits to "Share one
 registry across later writers": "When later Runtime state writers receive
 the same registry instance and request the same strategy-instance key, both
-critical sections are backed by the same keyed lock." This change treats
-`AbiExecutionEventOrchestrator` as exactly the "later writer" that
-requirement was written to anticipate, and states the corresponding
-obligation on `StrategyInstanceRuntimeStateRepository` explicitly: a future
-production-composition change MUST construct exactly one repository
-instance and exactly one mutex-registry instance and pass both into both
-orchestrators. Without this, two separately-constructed
-`InMemoryStrategyInstanceRuntimeStateRepository` or
-`StrategyInstanceKeyedMutexRegistry` instances would silently defeat
-serialization between the two writer paths — the closed-bar writer could
-save a new `CurrentTradeCycle` while an ABI fill event is mid-flight against
-a stale snapshot, or vice versa.
+critical sections are backed by the same keyed lock." `AbiExecutionEventOrchestrator`
+is exactly the "later writer" that requirement was written to anticipate.
+Without a future production wiring passing one shared
+`StrategyInstanceRuntimeStateRepository` instance and one shared
+`StrategyInstanceKeyedMutexRegistry` instance to both
+`AbiExecutionEventOrchestrator` and `StrategyRuntimeOrchestrator`, two
+separately-constructed repository or registry instances would silently
+defeat serialization between the two writer paths — the closed-bar writer
+could save a new `CurrentTradeCycle` while a first-fill event is mid-flight
+against a stale snapshot, or vice versa.
 
-This change fixes the constraint, not the wiring: production composition
-(`bootstrap/application.py`) is explicitly out of scope here (see Non-
-Goals), so this decision is recorded for the wiring change to satisfy, not
-implemented by this one.
+This change records that constraint here, in design.md, as guidance for
+whichever future, separate production-composition change wires both
+orchestrators together. It is deliberately **not** encoded as a normative
+requirement in this change's own capability spec, and this change neither
+implements nor tests it: `AbiExecutionEventOrchestrator` is constructed here
+with exactly the two collaborators
+(`state_repository`, `keyed_mutex_registry`) its own sequencing needs
+(design.md, "Decisions"; `specs/abi-execution-event-orchestration/spec.md`);
+how a future composition root supplies those two collaborators to both
+orchestrators, and proves they are the same instances, belongs entirely to
+that later, separate wiring change.
 
 **Alternative considered — let each writer own its own repository/registry
 pair and reconcile through some other mechanism (e.g., a database-level
@@ -237,10 +265,11 @@ both existing capabilities were designed to support.
 
 - [A future production-wiring change forgets to share the repository/mutex-
   registry instances between the two orchestrators, silently reintroducing
-  a race] → Mitigated by stating the constraint explicitly in this change's
-  new capability spec (not just in prose here), so the future wiring change
-  has a concrete, testable requirement to satisfy rather than an implicit
-  expectation.
+  a race] → Not mitigated by this change beyond stating the constraint in
+  prose above: this change intentionally leaves the shared-instance
+  guarantee unencoded and untested, since designing and testing production
+  wiring is explicitly out of scope here (see Non-Goals). The future wiring
+  change is responsible for both satisfying and proving this constraint.
 - [Reusing `StrategyInstanceStateNotFound` broadens its call sites from one
   (`save` on an unregistered identity) to two, slightly widening what
   "instance state not found" can mean operationally] → Accepted: both call
@@ -258,16 +287,16 @@ both existing capabilities were designed to support.
 ## Migration Plan
 
 Not applicable in this proposal-only pass — no code changes, so there is
-nothing to deploy or roll back yet. A later implementation change will add
+nothing to deploy or roll back yet. The apply phase of this change will add
 the `AbiExecutionEventOrchestrator` class and its typed input/output models
 as new, additive modules with no modification to any existing production
-file; that change's own design/tasks will define its concrete migration and
-rollback steps (a straightforward revert, since nothing existing is touched).
+file; migration is a straightforward revert, since nothing existing is
+touched.
 
 ## Open Questions
 
 None outstanding for this change's scope. Where exactly the new module
 lives inside `runtime/` (e.g. alongside `runtime/first_fill/` versus a new
-`runtime/abi_execution_event/` package) is left to the implementation
-change, since it has no bearing on this design's sequencing contract, input
+`runtime/abi_execution_event/` package) is left to this change's own apply
+phase, since it has no bearing on this design's sequencing contract, input
 shape, or shared-infrastructure constraint.
