@@ -23,11 +23,12 @@ required `applied_entry_package: AppliedEntryPackage`, and one nullable
   `applied_entry_package`
 - **AND** Runtime makes no claim that any exchange fill has occurred
 
-#### Scenario: Exclude deferred fill-lifecycle and execution-phase state
+#### Scenario: Exclude deferred execution state
 - **WHEN** a current cycle is modeled
-- **THEN** it contains no execution phase, filled quantity, remaining
-  quantity, average entry price, fill ledger, or position-management recipe
-  anywhere on the cycle or on any non-null `frozen_entry_context`
+- **THEN** it contains no phase, filled quantity, remaining quantity,
+  average entry price, fill timestamp, fill ledger, or
+  position-management recipe anywhere on the cycle or on any non-null
+  `frozen_entry_context`
 
 ## ADDED Requirements
 
