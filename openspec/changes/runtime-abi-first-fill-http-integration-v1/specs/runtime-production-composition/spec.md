@@ -26,14 +26,19 @@ pass the same two instances into both the one constructed
 - **AND** that same exact object is the one `AbiExecutionEventOrchestrator`
   uses to serialize every strategy instance's first-fill critical section
 
-#### Scenario: Reusable by a future second writer, with no alternative build mode
+#### Scenario: Shared between both existing top-level writers, with no alternative build mode
 - **WHEN** the composition root finishes construction
 - **THEN** the constructed repository and keyed-mutex-registry instances
-  remain reachable from the composition-owned application bundle/state that
-  `build_application` returns (not only closed over privately and
-  unreachably)
+  are the same two objects held by both existing top-level writers —
+  `StrategyRuntimeOrchestrator` (the closed-bar writer) and
+  `AbiExecutionEventOrchestrator` (the first-fill writer)
+- **AND** both instances remain reachable from the composition-owned
+  `app.state` that `build_application` returns, for test and operational
+  access (not only closed over privately and unreachably inside either
+  orchestrator)
 - **AND** no alternative build mode, parameter, or flag exists to obtain
-  either instance outside this one construction path
+  either instance, or to construct either writer with a different pair of
+  instances, outside this one construction path
 
 #### Scenario: AbiExecutionEventOrchestrator is constructed exactly once, over the shared instances
 - **WHEN** the production graph is constructed

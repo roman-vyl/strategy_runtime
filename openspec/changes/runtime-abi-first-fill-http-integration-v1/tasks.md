@@ -18,11 +18,16 @@
 ## 2. HTTP Adapter Route
 
 - [ ] 2.1 Extend `create_http_app(...)` (`adapters/http/app.py`) with a new
-  optional parameter for the first-fill application callable — name it per
-  existing convention (e.g. `FirstFillUseCase = Callable[
-  [AbiFirstFillExecutionEvent], StrategyInstanceRuntimeState]`, mirroring
-  the existing `BackgroundUseCase` type alias) — defaulting to `None`, and
-  store it on `app.state` alongside `process_committed_bar`.
+  **required, keyword-only** parameter for the first-fill application
+  callable — `process_first_fill: FirstFillUseCase | None` (no default
+  value), name the type alias per existing convention (e.g.
+  `FirstFillUseCase = Callable[[AbiFirstFillExecutionEvent],
+  StrategyInstanceRuntimeState]`, mirroring the existing `BackgroundUseCase`
+  type alias) — and store it on `app.state` alongside
+  `process_committed_bar`. No default means every caller of
+  `create_http_app(...)`, in production wiring and in every test, must
+  explicitly pass either a connected callable or `None` — no caller can
+  silently build an app without making that decision.
 - [ ] 2.2 Add `PUT
   /v1/strategy-instances/{strategy_instance_id}/trade-cycles/{trade_cycle_id}/first-fill`
   as an ordinary synchronous `def` route (not `async def`) so FastAPI runs
@@ -74,10 +79,12 @@
   `abi_execution_event_orchestrator.process(event)` and returns its result
   unmodified — mirroring the existing `process_committed_bar` closure's
   shape.
-- [ ] 3.3 Pass `process_first_fill` into `create_http_app(...)`'s new
-  parameter for the ready-application construction path; the not-ready
-  fallback path (`except Exception:` branch) continues passing `None`,
-  matching its existing `process_committed_bar=None` pattern.
+- [ ] 3.3 Pass `process_first_fill=process_first_fill` explicitly into
+  `create_http_app(...)`'s new required parameter on the ready-application
+  construction path; the not-ready fallback path (`except Exception:`
+  branch) explicitly passes `process_first_fill=None`, matching its
+  existing explicit `process_committed_bar=None` call — both branches must
+  pass the parameter by name since it has no default.
 - [ ] 3.4 Do not add a new environment variable, new outbound HTTP client,
   new lifecycle owner, or new startup mode for this wiring; any failure
   constructing `AbiExecutionEventOrchestrator` or connecting its callable
@@ -135,6 +142,31 @@
   responses) is unchanged — rerun (or reference) its existing test
   coverage to confirm no regression from the new route or the new
   `create_http_app(...)` parameter.
+- [ ] 4.16 A normal, Unicode-containing, whitespace-containing, and
+  literal-`%`-containing `strategy_instance_id` (and independently
+  `trade_cycle_id`), each properly percent-encoded by the test client,
+  round-trips byte-for-byte into the `AbiFirstFillExecutionEvent` the
+  capturing application callable receives — four cases minimum, per
+  `specs/http-abi-first-fill/spec.md`'s path-identifier scenarios.
+- [ ] 4.17 A missing `Content-Type` header and an incorrect `Content-Type`
+  (e.g. `text/plain`) each independently produce `400
+  {"status":"rejected","reason":"invalid_webhook"}`, not `415`.
+- [ ] 4.18 An `Accept` header that does not include `application/json`
+  does not change the response status (no `406`) — confirm the response
+  is governed only by body/path validation.
+
+## Note on out-of-scope routing cases
+
+A literal `/` inside `strategy_instance_id` or `trade_cycle_id` cannot be
+addressed by this endpoint's routing under any encoding (see
+`specs/http-abi-first-fill/spec.md`, "A slash-containing identifier is not
+addressable by this endpoint") — no test asserts a specific response for
+this case, since it is a routing-boundary limitation, not a validated
+input. A dot-only (`.` or `..`) segment has no guaranteed contract at this
+boundary (client-side URL normalization may collapse it before the request
+is ever sent) — no test asserts either "supported" or "rejected with a
+typed error" for this case; this change does not build a custom router to
+give it one.
 
 ## 5. HTTP Adapter Boundary Tests
 
@@ -147,10 +179,21 @@
   per request, never zero and never more than once, including on a request
   that ultimately errors after the callable is invoked.
 - [ ] 5.3 The adapter never touches the repository or mutex registry
-  directly and never calls `apply_first_fill` directly — assert via a
-  fake/spy repository and mutex registry wired into the test app that
-  record zero calls when only the HTTP layer (with a stub application
-  callable) is exercised.
+  directly and never calls `apply_first_fill` directly. `create_http_app`
+  accepts no repository or mutex-registry parameter — this is a structural
+  property, not something a wired fake could prove, since
+  `adapters/http/app.py` has no such collaborator to receive one in the
+  first place. Prove it by: (a) a static/import-level check that
+  `adapters/http/app.py` does not import
+  `StrategyInstanceRuntimeStateRepository`,
+  `StrategyInstanceKeyedMutexRegistry`, or `apply_first_fill` (e.g. via an
+  AST or source-grep architecture-guardrail test, matching the pattern
+  already used for `abi-execution-event-orchestration`'s own architecture
+  guardrail tests); and (b) the capturing-callable proof from 5.1/5.2 as
+  the main behavioral evidence — the adapter's only route to Runtime state
+  is the one injected `process_first_fill` callable it calls exactly once.
+  Do not add a repository or mutex-registry parameter to `create_http_app`
+  to make this testable a different way.
 - [ ] 5.4 Each known exception type (`StrategyInstanceStateNotFound`,
   `FirstFillInvariantError`) raised by a stub callable produces its exact
   documented typed HTTP response (404, 409 respectively) with no other
@@ -243,15 +286,18 @@
 
 ## 9. Proposal-Pass Verification (this change)
 
-- [ ] 9.1 `npm exec -- openspec validate
-  "runtime-abi-first-fill-http-integration-v1" --type change --strict`
-- [ ] 9.2 `npm exec -- openspec validate --all --strict`
-- [ ] 9.3 `git diff --check`
-- [ ] 9.4 `git status --short`
-- [ ] 9.5 Confirm no production code, test file, existing main capability
-  spec, or archived change is modified by this pass — only the new files
-  under
+- [x] 9.1 `npm exec -- openspec validate
+  "runtime-abi-first-fill-http-integration-v1" --type change --strict` —
+  passes (`Change 'runtime-abi-first-fill-http-integration-v1' is valid`).
+- [x] 9.2 `npm exec -- openspec validate --all --strict` — passes (24
+  passed, 0 failed).
+- [x] 9.3 `git diff --check` — clean, no whitespace errors.
+- [x] 9.4 `git status --short` — only files under this change's own
+  directory staged/modified; no production code or test file touched.
+- [x] 9.5 Confirmed: no production code, test file, existing main
+  capability spec, or archived change is modified by this pass — only
+  files under
   `openspec/changes/runtime-abi-first-fill-http-integration-v1/`
   (`.openspec.yaml`, `proposal.md`, `design.md`, `tasks.md`,
   `specs/http-abi-first-fill/spec.md`,
-  `specs/runtime-production-composition/spec.md`).
+  `specs/runtime-production-composition/spec.md`) are touched.

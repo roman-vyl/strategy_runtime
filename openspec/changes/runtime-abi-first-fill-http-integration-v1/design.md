@@ -95,6 +95,105 @@ in the path, not the body. No other field participates in addressing the
 resource: `first_fill_at_ms` is the fact being recorded *about* that
 already-addressed resource, so it belongs in the body, not the path.
 
+### Path identifiers are opaque strings with no format policy — bounded by what Starlette's default path converter can actually carry
+
+`strategy_instance_id` and `trade_cycle_id` are opaque non-empty strings to
+this HTTP boundary: Runtime assigns no regex, no UUID shape, and no other
+format policy to either, and the adapter passes each exactly as decoded —
+no trimming, no case normalization, no other transformation — into
+`AbiFirstFillExecutionEvent`. This follows directly from
+`AbiExecutionEventOrchestrator`'s own already-ratified contract: it already
+requires only `type(value) is str` and non-empty for both fields
+(`abi-execution-event-orchestration`), with no shape constraint beyond
+that; inventing an HTTP-layer format policy stricter than the domain layer
+already requires would reject values `AbiFirstFillExecutionEvent` itself
+would happily accept, for no reason this boundary owns.
+
+This decision was checked against the actual installed routing stack
+(FastAPI 0.139.2 / Starlette 1.3.1), not assumed, because path-segment
+encoding behavior is framework-specific and easy to get wrong in a spec:
+
+- **Normal identifiers, Unicode, embedded whitespace, and a literal `%`
+  character** all round-trip exactly through a standard percent-encoded
+  path segment (`quote(raw, safe="")` on the caller's side) — verified by
+  sending each through a live `TestClient` request and asserting the
+  decoded `path_params` value equals the original raw string byte-for-byte
+  in every case. These are unconditionally supported.
+- **A literal `/` inside an identifier cannot be carried as a single path
+  segment, encoded or not.** Starlette's default path-parameter converter
+  (`str`) matches on a regex that explicitly excludes `/`; per the ASGI
+  spec, `scope["path"]` already carries percent-decoding done by the
+  server, so a caller's `%2F` decodes to a literal `/` before Starlette's
+  router ever sees it, which splits what the caller intended as one
+  segment into two — a segment-count mismatch against this route's fixed
+  four-segment pattern, observed as `404`. No percent-encoding strategy
+  fixes this: it is a categorical limit of routing an identifier through
+  `{param}` path segments, not an adapter bug. `strategy_instance_id` and
+  `trade_cycle_id` therefore MUST NOT contain `/`; this change does not
+  invent a custom path converter or a `:path`-style catch-all route to
+  work around it.
+- **A dot-only segment (`.` or `..`) has no reliable contract at this
+  boundary and is explicitly left unsupported, not silently promised.**
+  Verified directly against Starlette's router (`Route.matches` given a
+  raw ASGI `scope["path"]`) that `.` and `..` match as literal segment
+  text when they already arrive intact in `scope["path"]` — but standard
+  HTTP client URL-construction libraries (httpx, and by extension most
+  production HTTP client stacks, including `TestClient`) apply RFC 3986
+  dot-segment normalization *before* a request is ever sent, collapsing
+  `/x/./y` or `/x/../y` at the URL-construction layer, upstream of
+  anything Runtime's router controls. A live end-to-end `PUT` through a
+  standard client with a dot-only segment therefore returns `404` in
+  practice, not because Starlette rejects it, but because the segment
+  never survives client-side URL normalization to arrive as `.` at all.
+  Given this, the spec makes no promise either way for a dot-only segment:
+  it is a Live V1 HTTP-boundary limitation inherited from standard URL
+  normalization behavior outside this adapter's control, not a case this
+  change tests as either "supported" or "explicitly rejected with a typed
+  error" — building a routing layer that bypasses standard dot-segment
+  normalization (e.g. accepting only a raw, unparsed request line) is
+  explicitly out of scope; a caller needing a genuinely dot-only or
+  slash-containing identifier is a caller this Live V1 boundary does not
+  support.
+
+**Alternative considered — require identifiers to match a specific format
+(UUID, or a restricted charset excluding punctuation/whitespace).**
+Rejected: neither `AbiExecutionEventOrchestrator` nor
+`AbiFirstFillExecutionEvent` (both already ratified) impose any such
+constraint, and Runtime does not currently mint or validate
+`strategy_instance_id`/`trade_cycle_id` values anywhere by a fixed shape;
+adding one here would be an HTTP-layer invention with no upstream
+counterpart to justify it, and would risk rejecting legitimate values the
+rest of the system already accepts.
+
+### Media-type handling relies on the existing validation path — no new error status
+
+A malformed JSON body, a body that is not a JSON object (e.g. a JSON
+array), a body sent with no `Content-Type` header, and a body sent with an
+incorrect `Content-Type` (e.g. `text/plain`) were all verified directly
+against the installed FastAPI/Pydantic stack: every one of these already
+fails Pydantic body parsing with a `RequestValidationError` before the
+route body ever runs, and `create_http_app`'s existing
+`validation_error_handler` (`adapters/http/app.py`) already converts any
+`RequestValidationError` into `400
+{"status":"rejected","reason":"invalid_webhook"}` — the exact response
+this endpoint's contract already requires for a malformed request. No
+missing-or-wrong-`Content-Type` case was found to fall through to a
+different status (there is no `415` or `406` produced anywhere in this
+path today). This endpoint therefore adds no explicit media-type check,
+no `Accept`-header validation, and no new error status: the existing
+shared validation handler already makes every one of these cases
+deterministically `400`, and duplicating that check in the new route would
+be redundant with behavior already proven, not a gap this change needs to
+close.
+
+**Alternative considered — add an explicit `Content-Type: application/json`
+guard ahead of body parsing, returning a dedicated `415`.** Rejected: it
+would introduce a second HTTP status for what the existing shared handler
+already reduces to the same `400 invalid_webhook` outcome this contract
+requires everywhere else for a malformed request, adding a new error
+branch for a case the platform already resolves deterministically and
+correctly.
+
 ### The body carries exactly `first_fill_at_ms` — no Engine-facing, execution-phase, or quantity field
 
 `AbiFirstFillExecutionEvent` (already ratified) carries exactly
@@ -135,15 +234,18 @@ sequencing boundary to prevent.
 
 ### `200` is returned only after `save` — never before, never via a background task
 
-Because the endpoint is synchronous by design (see above), the FastAPI
-handler simply awaits the *result* of the injected callable before
-constructing any response: there is no separate "acknowledge, then
-process" step to order relative to `save`. The callable itself
+Because the endpoint is synchronous by design (see above), the route is
+declared with `def`, not `async def`. FastAPI runs a `def` route in its
+worker threadpool, off the event loop, and the handler body calls
+`process_first_fill(event)` directly — a plain blocking function call, not
+an `await` (there is no coroutine here to await, no `BackgroundTasks`
+registration, and no queue hand-off). There is no separate "acknowledge,
+then process" step to order relative to `save`. The callable itself
 (`AbiExecutionEventOrchestrator.process(...)`) does not return until its
 own mutex-held sequence — including the conditional `save(...)` — has
 completed or raised. A `200` response is therefore only ever constructed
-in the success branch reached after that callable returns normally, which
-is definitionally after any required save.
+in the success branch reached after that direct call returns normally,
+which is definitionally after any required save.
 
 ### The first successful call and an identical retry return the identical response
 
@@ -257,9 +359,23 @@ change does not make.
 ## Migration Plan
 
 Not applicable in this proposal-only pass — no code changes yet. The apply
-phase adds one new route to the existing FastAPI app and one new
-construction step to `build_application`, both additive; nothing existing
-is modified, so migration is a straightforward revert.
+phase modifies three existing production modules —
+`adapters/http/models.py` (new request/response models),
+`adapters/http/app.py` (new route and a new required
+`process_first_fill` parameter on `create_http_app(...)`), and
+`bootstrap/application.py` (new `AbiExecutionEventOrchestrator`
+construction and callable wiring) — plus their corresponding test files.
+The change is additive in *behavior*, not in the literal sense of "no
+existing file touched": the existing closed-bar route's contract, the
+existing outbound HTTP clients, and the existing environment configuration
+are all unchanged, and every edit to the three modules above either adds a
+new code path (the new route, the new orchestrator) or thread a new
+required parameter through call sites that must now make an explicit
+first-fill decision (see "Decisions", `create_http_app`'s new argument is
+required, not defaulted). Migration is still straightforward: reverting
+the apply-phase commit(s) restores the prior behavior of all three files
+exactly, since no existing route, model, or wiring step is altered beyond
+adding this one new parameter and its explicit call-site values.
 
 ## Open Questions
 

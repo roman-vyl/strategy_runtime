@@ -17,6 +17,76 @@ request body.
 - **THEN** Runtime returns `200 OK`
 - **AND** returns `{"status": "first_fill_recorded"}`
 
+### Requirement: Path identifiers are opaque strings, carried and forwarded exactly as decoded
+`strategy_instance_id` and `trade_cycle_id` SHALL each be treated as an
+opaque, non-empty string by the HTTP boundary: Runtime SHALL NOT impose a
+regex, UUID shape, or any other format policy on either value, and SHALL
+NOT trim, case-normalize, or otherwise transform the decoded path-segment
+value before passing it into `AbiFirstFillExecutionEvent`. Each identifier
+SHALL be addressed by its own distinct URL path segment, and the caller
+SHALL percent-encode each segment per standard URL encoding; Runtime SHALL
+pass the exact decoded value of each segment into
+`AbiFirstFillExecutionEvent` unchanged.
+
+A literal `/` character inside either identifier is categorically
+unsupported: the default Starlette path-segment matcher this endpoint uses
+cannot carry a literal `/` within a single `{param}` segment, encoded or
+not — a percent-encoded `%2F` decodes to `/` before routing and splits the
+intended single segment into two, breaking this route's fixed four-segment
+pattern. A dot-only segment (`.` or `..`) has no defined contract at this
+boundary: standard HTTP client URL-construction behavior (RFC 3986
+dot-segment normalization) may collapse such a segment before a request is
+ever sent, upstream of anything this adapter controls, so this requirement
+makes no promise — support or rejection — for a dot-only segment value.
+
+#### Scenario: A normal identifier round-trips unchanged
+- **WHEN** `strategy_instance_id` or `trade_cycle_id` is a typical
+  alphanumeric-with-punctuation identifier (e.g. `"strategy-42"`), properly
+  percent-encoded by the caller
+- **THEN** the value Runtime passes into `AbiFirstFillExecutionEvent` is
+  byte-for-byte identical to the caller's original, unencoded value
+
+#### Scenario: A Unicode identifier round-trips unchanged
+- **WHEN** `strategy_instance_id` or `trade_cycle_id` contains non-ASCII
+  Unicode characters, properly percent-encoded by the caller as UTF-8
+- **THEN** the decoded value Runtime passes into
+  `AbiFirstFillExecutionEvent` is identical to the caller's original
+  Unicode string
+
+#### Scenario: An identifier containing whitespace round-trips unchanged
+- **WHEN** `strategy_instance_id` or `trade_cycle_id` contains embedded
+  whitespace, properly percent-encoded by the caller (e.g. a space as
+  `%20`)
+- **THEN** the decoded value Runtime passes into
+  `AbiFirstFillExecutionEvent` retains the whitespace exactly, with no
+  trimming
+
+#### Scenario: An identifier containing a literal percent character round-trips unchanged
+- **WHEN** `strategy_instance_id` or `trade_cycle_id` contains a literal
+  `%` character, properly percent-encoded by the caller (`%` encoded as
+  `%25`)
+- **THEN** the decoded value Runtime passes into
+  `AbiFirstFillExecutionEvent` contains the literal `%` character, not a
+  partially- or mis-decoded value
+
+#### Scenario: A slash-containing identifier is not addressable by this endpoint
+- **WHEN** a caller needs to address a `strategy_instance_id` or
+  `trade_cycle_id` value containing a literal `/` character
+- **THEN** no percent-encoding of that value produces a request this
+  endpoint's routing can match as one identifier
+- **AND** this requirement does not commit to a specific error response
+  for that case, since the request never reaches this endpoint's own
+  validation logic as intended — it is a Live V1 routing boundary, not a
+  validated-and-rejected input
+
+#### Scenario: A dot-only segment has no guaranteed contract
+- **WHEN** a caller attempts to address a `strategy_instance_id` or
+  `trade_cycle_id` value of exactly `.` or `..`
+- **THEN** this requirement makes no guarantee that the segment survives
+  standard client-side URL normalization to reach Runtime's router intact
+- **AND** this change does not implement a custom routing layer to
+  guarantee delivery of a dot-only segment
+
 ### Requirement: The request body carries exactly one field, validated strictly
 Strategy Runtime SHALL accept a first-fill request body containing exactly
 one field, `first_fill_at_ms`, requiring a strict positive integer, and
@@ -50,8 +120,38 @@ SHALL reject a body containing any other shape.
 
 #### Scenario: Reject a malformed request body
 - **WHEN** the request body is not valid JSON, or is not a JSON object
+  (e.g. a JSON array or a bare scalar)
 - **THEN** Runtime returns `400 Bad Request`
 - **AND** returns `{"status": "rejected", "reason": "invalid_webhook"}`
+
+### Requirement: Media-type handling relies on the existing JSON-object body contract — no separate 406 or 415
+Strategy Runtime SHALL require the first-fill request body to parse as a
+JSON object, using the same body-validation path already registered on
+`create_http_app(...)`, and SHALL NOT introduce a distinct HTTP status for
+a missing or incorrect `Content-Type` header beyond the existing `400
+{"status":"rejected","reason":"invalid_webhook"}` contract. Runtime SHALL
+NOT separately validate the `Accept` header for this endpoint.
+
+#### Scenario: A missing Content-Type header is rejected the same as a malformed body
+- **WHEN** a first-fill request is sent with no `Content-Type` header, so
+  the body is not parsed as JSON
+- **THEN** Runtime returns `400 Bad Request`
+- **AND** returns `{"status": "rejected", "reason": "invalid_webhook"}`
+- **AND** Runtime does not return `415 Unsupported Media Type`
+
+#### Scenario: An incorrect Content-Type header is rejected the same as a malformed body
+- **WHEN** a first-fill request is sent with `Content-Type: text/plain` (or
+  any non-JSON media type) and a body that would otherwise be valid JSON
+- **THEN** Runtime returns `400 Bad Request`
+- **AND** returns `{"status": "rejected", "reason": "invalid_webhook"}`
+- **AND** Runtime does not return `415 Unsupported Media Type`
+
+#### Scenario: The Accept header is not validated
+- **WHEN** a first-fill request carries any `Accept` header value,
+  including one that does not include `application/json`
+- **THEN** Runtime does not return `406 Not Acceptable` on that basis
+- **AND** Runtime's response is governed entirely by the request body and
+  path validation rules already specified, not by the `Accept` header
 
 ### Requirement: The HTTP adapter constructs AbiFirstFillExecutionEvent and delegates to one injected application callable
 The first-fill route SHALL construct
