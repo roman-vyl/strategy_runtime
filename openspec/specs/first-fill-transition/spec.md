@@ -1,7 +1,12 @@
 # first-fill-transition Specification
 
 ## Purpose
-TBD - created by archiving change runtime-first-fill-state-foundation-v1. Update Purpose after archive.
+
+Define how Runtime aligns the first ABI fill to the registered candle grid
+and freezes the currently applied DesiredEntry exactly once into current
+trade-cycle state, including idempotent retry and fail-closed conflict
+handling.
+
 ## Requirements
 ### Requirement: Entry-bar alignment floors a fill timestamp to its containing candle
 `align_first_fill_to_entry_bar(first_fill_at_ms, base_timeframe)` SHALL
