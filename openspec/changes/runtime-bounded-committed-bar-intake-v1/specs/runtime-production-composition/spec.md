@@ -166,3 +166,14 @@ already established for the four outbound HTTP clients.
   outbound HTTP clients also stops the intake worker, exactly once
 - **AND** no HTTP request handler, background thread, or orchestrator call
   ever stops the worker itself
+
+#### Scenario: Worker stop happens strictly before outbound client close
+- **WHEN** the production application shuts down
+- **THEN** the lifecycle owner stops the intake worker — waiting for it to
+  fully exit, including letting any currently in-flight
+  `CommittedBarOrchestrator.process(...)` call finish rather than
+  interrupting it — strictly before closing any of the four outbound HTTP
+  clients
+- **AND** this ordering holds even though the worker's own shutdown wait is
+  not bounded by a fixed timeout of its own, but by the finite outbound
+  timeouts already enforced inside that in-flight call

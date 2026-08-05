@@ -70,6 +70,11 @@ acceptance.
 - **AND** does not enqueue the request's event
 - **AND** does not invoke `CommittedBarOrchestrator.process` or create any
   other processing work for the rejected request
+- **AND** Runtime emits one server-side log line containing the rejected
+  event's `instrument`, `timeframe`, `open_time_ms`, and the configured
+  queue capacity — the wire response alone does not distinguish this case
+  from "Runtime is not ready," since both reuse the same `not_ready`
+  envelope
 
 #### Scenario: Unexpected failure before acceptance
 - **WHEN** an unexpected internal failure occurs before Runtime accepts the

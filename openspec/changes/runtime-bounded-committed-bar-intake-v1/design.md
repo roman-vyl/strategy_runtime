@@ -163,10 +163,20 @@ however many were already in flight).
 at `committed_bar_queue_capacity`. The handler catches exactly this
 exception (not a bare `except Exception`, so a real construction error in
 `CommittedBarEvent(...)` still falls through to the existing `500` path) and
-returns the `503`/`not_ready` response described above. The worker thread
-logs nothing extra for a rejection that never reached the queue — the HTTP
-layer is the sole point where a full-queue rejection is observed and
-logged, since the worker has no visibility into requests it never received.
+returns the `503`/`not_ready` response described above. Because the wire
+response for this case is the generic, pre-existing `NotReadyResponse`
+envelope (deliberately not a new public contract — see "Reusing
+`NotReadyResponse`" above), the HTTP handler SHALL also emit one
+server-side log line for the rejection, at the point it catches `queue.Full`,
+containing exactly `instrument`, `timeframe`, `open_time_ms` (from the
+already-validated `committed_bar` that failed to enqueue), and the
+configured `committed_bar_queue_capacity` — this is the only place an
+operator can distinguish a queue-full rejection from a startup-not-ready
+rejection, since both currently produce the identical wire response. The
+worker thread logs nothing extra for a rejection that never reached the
+queue — it has no visibility into requests it never received; the HTTP
+layer is the sole point where a full-queue rejection is observed and must
+be logged.
 
 ## Per-event failure isolation
 
@@ -218,6 +228,39 @@ in-memory set is introduced by this change.
 
 ## Lifecycle
 
+`CommittedBarIntakeWorker.start()` spawns the single, non-daemon consumer
+thread exactly once; calling it a second time is not a supported operation
+(mirrors `_OutboundHttpClientLifecycle`'s single-owner posture — there is
+exactly one call site).
+
+### Clean-shutdown contract
+
+A non-daemon thread executing `CommittedBarOrchestrator.process(event)` —
+a synchronous, potentially multi-instance-fan-out call — cannot be
+interrupted mid-call by setting a `threading.Event`. The event is only
+observed at the worker's own loop boundary, *after* whatever call is
+currently running has already returned. Shutdown is therefore defined as a
+fixed sequence, not a fixed time bound:
+
+1. FastAPI lifespan shutdown calls `intake_worker.stop_once()`.
+2. `stop_once()` sets an internal stop flag. From this point, the worker
+   will not start processing any further queued item, however many remain.
+3. Any event still sitting in the queue, not yet dequeued, is discarded —
+   the worker does not drain or process it.
+4. If one event is currently being processed
+   (`orchestrator.process(event)` already running) when the stop flag is
+   set, shutdown does **not** interrupt it: `stop_once()` blocks until that
+   specific call returns, whether it returns normally or raises.
+5. Once the worker thread has fully exited — the current event (if any)
+   finished, no next event started, the thread function returned — and
+   only then, do the four shared outbound HTTP clients (Strategy Engine
+   live-entry/open-trade, ABI open-position/entry-package) get closed via
+   the existing `lifecycle.close_all_once()`. This ordering is required,
+   not incidental: closing those clients while the worker thread might
+   still be mid-call, using one of them to finish its current event, would
+   be a lifecycle violation — an in-flight call could observe a closed
+   client.
+
 ```python
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -225,29 +268,51 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        intake_worker.stop_once()
+        intake_worker.stop_once()  # blocks until the worker thread has
+                                    # fully exited (steps 1-5 above) before
+                                    # returning
         lifecycle.close_all_once()
 ```
 
-`CommittedBarIntakeWorker.start()` spawns the single consumer thread exactly
-once; calling it a second time is not a supported operation (mirrors
-`_OutboundHttpClientLifecycle`'s single-owner posture — there is exactly one
-call site). `stop_once()` sets an internal `threading.Event`, then joins the
-worker thread with a bounded timeout; a second call to `stop_once()` is a
-no-op (idempotent, matching `_OutboundHttpClientLifecycle.close_all_once`'s
-existing idempotency pattern exactly). Because the worker's loop polls
-`queue.get(timeout=0.2)` rather than blocking indefinitely, it observes the
-stop event within a bounded, small delay and exits promptly — shutdown does
-not hang waiting for the queue to drain, and any event still sitting in the
-queue at shutdown is discarded, not processed and not persisted.
+### `stop_once()` joins without an arbitrary bounded timeout
+
+`stop_once()` sets the stop flag, then calls `self._thread.join()` with
+**no timeout** — not a small, arbitrary bounded one. A bounded join (for
+example, a fixed few-hundred-millisecond timeout) would be incorrect here:
+`Thread.join(timeout=...)` can return while the thread is still alive, and
+if `stop_once()` treated that return as "stopped," `lifecycle
+.close_all_once()` could run concurrently with the worker's still-in-flight
+outbound calls.
+
+Clean shutdown's real bound is **not** the worker's idle-poll interval
+(`queue.get(timeout=0.2)`, which only bounds how quickly an *idle* worker
+notices the stop flag) — it is the completion time of whatever
+`orchestrator.process(event)` call happens to be running when shutdown
+begins. That, in turn, is bounded by the existing, already-configured,
+finite outbound timeouts each downstream adapter call already enforces
+(`RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS`,
+`RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS`,
+`RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS`), multiplied by however many
+sequential per-instance dispatches remain in that one committed-bar event's
+fan-out. This change introduces no new timeout of its own — it relies
+entirely on those existing, already-enforced outbound timeouts to guarantee
+the current event eventually finishes (successfully or by raising) and the
+thread exits, which is what makes an untimed `join()` safe rather than a
+risk of hanging forever.
+
+`stop_once()` is idempotent (mirrors `_OutboundHttpClientLifecycle
+.close_all_once`'s existing pattern): a second call, after the first has
+already joined the thread, is a no-op — it does not attempt to join an
+already-exited thread a second time and does not raise.
 
 When `build_application` fails partway through construction (the existing
 startup-rollback path), the intake worker is either never started (if
-failure occurs before its construction step) or is stopped via the same
-rollback path that already closes the four outbound HTTP clients — no
-`ready=True` application is ever returned with a worker that wasn't
-properly started, and no `ready=False` application is ever returned with an
-orphaned running worker thread.
+failure occurs before its construction step) or is stopped — following the
+exact same clean-shutdown contract above, worker-join before client-close —
+as part of the same rollback path that already closes the four outbound
+HTTP clients. No `ready=True` application is ever returned with a worker
+that wasn't properly started, and no `ready=False` application is ever
+returned with an orphaned running worker thread.
 
 ## Configuration
 
@@ -256,9 +321,9 @@ orphaned running worker thread.
 integer, parsed with the same `_require_...`-style helper already used for
 `RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS` and friends, checked in
 `RuntimeConfig.__post_init__` alongside the existing `RUNTIME_PORT` bounds
-check. Default: **64**.
+check. Default used in deployment examples and documentation: **256**.
 
-### Why 64
+### Capacity is required and positive; no comfortable-coverage claim is made
 
 The queue holds raw accepted `CommittedBarEvent`s, not per-strategy-instance
 dispatch tickets — one webhook occupies one queue slot regardless of how
@@ -266,18 +331,25 @@ many strategy instances its deployment selection later fans out to. The
 realistic worst case this queue must absorb is therefore bounded by how many
 *distinct MDS streams* (`instrument × timeframe` pairs) can commit within
 the same short window at a shared boundary (top of hour, four hours,
-midnight), not by strategy-instance count. A production deployment tracking
-on the order of a few dozen instruments across MDS's six canonical
-timeframes (`1m, 5m, 15m, 1h, 4h, 1d`) yields a boundary burst on the order
-of several dozen simultaneous commits at worst (most timeframes do not
-co-close with each other except at shared boundaries). 64 covers that
-comfortably with headroom while remaining a small, bounded, fixed-cost
-allocation — consistent with the equivalent default chosen for MDS's
-outbound queue in the companion change, so neither side of the pipe is
-structurally more likely to be the bottleneck than the other. This is a
-starting default, not a tuned production value; operators with a
-significantly larger catalog should raise it via
-`RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY` rather than the code changing.
+midnight), not by strategy-instance count.
+
+This design does **not** claim that any specific default number
+"comfortably covers" a particular catalog size (for example, "a few dozen
+instruments across six timeframes") — `strategy_runtime` has no visibility
+into MDS's actual configured instrument/timeframe count, and asserting a
+specific default is sufficient for an unknown catalog would be an
+unsupported claim. The operational rule instead is: **operators SHALL
+configure `RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY` at least as large as the
+maximum expected MDS boundary burst for their deployment, normally no
+smaller than the number of MDS enabled streams** (`instrument × timeframe`
+pairs) — since a shared boundary (midnight UTC, worst case) can produce one
+webhook per enabled MDS stream within a short window. `256` is documented
+in deployment examples as a generous starting point for small-to-medium
+catalogs, not a value this design proves sufficient for every deployment;
+operators with a larger catalog are expected to raise it explicitly via
+`RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY`. This mirrors the equivalent default
+and equivalent operator-sizing responsibility documented for MDS's own
+outbound queue in the companion change.
 
 ### Worker count is fixed at 1, not configurable
 
@@ -303,38 +375,39 @@ pre-existing, already-documented constraint on
 cross-process guarantee"). This change treats that as an accepted,
 already-established Live V1 boundary, not a new one it introduces.
 
-## Findings: cross-timeframe (HTF) consistency — unresolved, out of scope
+## Findings: cross-timeframe (HTF) consistency — confirmed, not a dependency
 
-This repository cannot determine whether the Strategy Engine derives
-higher-timeframe (1h/4h/1d) features internally from a single base
--timeframe candle stream, or instead depends at evaluation time on
-independently-committed HTF MDS streams. Evidence gathered:
+Earlier exploration for this change established that `strategy_runtime`
+itself carries only one `base_timeframe`/`target_bar_open_time_ms` pair per
+outbound Engine request
+(`infrastructure/strategy_engine/http_projection_client.py`), and that
+`CommittedBarDeploymentSelector.select` filters strictly on
+`deployment.base_timeframe == event.timeframe` — a webhook for `1h` never
+triggers a strategy instance configured with `base_timeframe="5m"`, and vice
+versa.
 
-- Every outbound request this repository sends to the Strategy Engine
-  (`infrastructure/strategy_engine/http_projection_client.py`) carries
-  exactly one `base_timeframe` and one `target_bar_open_time_ms` — there is
-  no field, and no code path, for passing or checking multiple
-  simultaneously-committed timeframes.
-- `CommittedBarDeploymentSelector.select` filters strictly on
-  `deployment.base_timeframe == event.timeframe` — a webhook for `1h` never
-  triggers a strategy instance configured with `base_timeframe="5m"`, and
-  vice versa. Each deployment reacts only to its own configured timeframe's
-  webhook.
-- The Strategy Engine's internal candle-reading and readiness/coverage
-  logic, if any, lives entirely in a separate service/repository that this
-  investigation did not have access to.
+The remaining open question — whether the Strategy Engine derives
+higher-timeframe features internally from a single base-timeframe candle
+stream, or instead depends at evaluation time on independently-committed HTF
+MDS streams — has since been resolved by inspecting the Strategy Engine
+repository's live-entry path directly. `LoadLiveFeatureFrame` constructs
+exactly one `MarketStream(ticker, base_timeframe)` and calls
+`EvaluateIndicatorRange`, which performs exactly one
+`MarketDataPort.load_range(request.market, requested_range)` call before
+handing the already-loaded `MarketFrame` to the evaluator; the evaluator
+itself has no `MarketDataPort` dependency in this use case. This confirms
+that live-entry evaluation reads exactly one base-timeframe candle stream
+through one load call, and does **not** read independently committed
+1h/4h/1d MDS streams at evaluation time.
 
-Because this change only bounds *how many* accepted committed-bar events are
-processed concurrently and *in what order they were accepted* (FIFO), it
-does not alter whether a `5m` webhook for `BTCUSDT.P` could be processed
-(and reach the Engine) before a co-closing `1h` webhook for the same
-instrument is enqueued or processed — that ordering question is unaffected
-by moving from `BackgroundTasks` to a FIFO queue with one worker, since
-`BackgroundTasks` was also effectively concurrent/unordered across different
-webhook requests today. This change deliberately adds no cross-timeframe
-barrier, fixed sleep, or boundary coordinator to address a correctness
-question it cannot verify. If a real correctness gap is later confirmed in
-the Strategy Engine repository, it should be addressed as its own explicitly
-scoped change (proposed name: `engine-cross-timeframe-readiness-v1` or
-similar) — not folded into this intake-queue change or the MDS notifier
-change.
+Combined, this means the arrival order of independently committed
+higher-timeframe MDS streams relative to a lower-timeframe commit is
+**not** a correctness dependency of the current Engine live-entry path.
+This change introduces no cross-timeframe barrier, fixed sleep, or boundary
+coordinator, and no follow-up cross-timeframe-readiness change is proposed
+from this change or its MDS companion — there is no confirmed gap for one
+to close. Moving from `BackgroundTasks` to a FIFO queue with one worker does
+not change this conclusion either way: it only bounds concurrency and
+orders already-accepted events, and neither introduces nor removes any
+dependency on cross-timeframe MDS stream arrival order. No Strategy Engine
+code or specs are modified by this change or by this finding.

@@ -6,8 +6,17 @@
 validates a `ClosedBarRequest`, builds a `CommittedBarEvent`, and calls
 `background_tasks.add_task(app.state.process_committed_bar, committed_bar)`
 before returning `{"status": "accepted"}`. Every accepted webhook request
-becomes its own independent `BackgroundTasks` unit, dispatched to Starlette's
-thread pool with no bound on how many can run at once.
+creates its own framework-managed `BackgroundTasks` unit. Runtime itself
+owns no process-level queue, no capacity bound, no FIFO ordering guarantee,
+and no queue-full rejection path for this work — actual execution
+concurrency for those units is entirely delegated to Starlette/anyio's own
+thread-pool implementation, whatever bound (if any) that implementation
+happens to apply. This is not a claim that execution is literally unbounded
+at the OS-thread level; it is a claim that *Runtime has no application
+-owned concurrency limit of its own* — today, how many
+`CommittedBarOrchestrator.process` calls can be simultaneously mid-flight is
+an accident of the web framework's internal thread-pool sizing, not a
+reviewed or tested property of Runtime's own design.
 
 Market boundary timestamps — the top of an hour, four hours, or midnight
 UTC — are exactly when many independently configured MDS streams commit a
@@ -17,9 +26,11 @@ and each unit independently calls `CommittedBarOrchestrator.process(...)`,
 which independently loads a deployment-catalog snapshot, independently
 selects deployments, and for every selected strategy instance independently
 calls into the Strategy Engine and ABI over HTTP. A burst of near
--simultaneous webhooks therefore becomes a burst of near-simultaneous,
-unbounded concurrent `CommittedBarOrchestrator.process` calls — each one
-driving its own concurrent fan-out of Engine and ABI HTTP calls.
+-simultaneous webhooks therefore becomes a burst of near-simultaneous
+`CommittedBarOrchestrator.process` calls whose actual concurrency Runtime
+does not control, size, order, or reject against — each one driving its own
+fan-out of Engine and ABI HTTP calls, at whatever concurrency the framework
+thread pool happens to allow at that moment.
 
 ### Why the existing keyed mutex does not solve this
 
@@ -34,11 +45,13 @@ calls are simultaneously mid-flight (each doing catalog load, deployment
 selection, and multi-instance fan-out *before* any per-instance mutex is
 even acquired). A burst of ten simultaneous webhooks for ten different
 strategy instances sails straight through the keyed mutex — every instance
-gets its own uncontended lock — while still producing ten concurrent
-`CommittedBarOrchestrator.process` calls, ten concurrent catalog loads, and
-an unbounded number of concurrent outbound Engine/ABI HTTP calls. The mutex
-is a per-key correctness guarantee, not a process-wide concurrency bound;
-this change adds the missing bound without touching the mutex.
+gets its own uncontended lock — while still producing up to ten concurrent
+`CommittedBarOrchestrator.process` calls, up to ten concurrent catalog
+loads, and a correspondingly framework-thread-pool-bounded (not
+Runtime-bounded) number of concurrent outbound Engine/ABI HTTP calls. The
+mutex is a per-key correctness guarantee, not a process-wide concurrency
+bound; this change adds the missing, Runtime-owned bound without touching
+the mutex.
 
 ### Why best-effort, not durable delivery
 

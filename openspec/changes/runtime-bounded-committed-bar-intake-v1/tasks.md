@@ -14,15 +14,32 @@
       `_run()` and SHALL be called at most once per `CommittedBarIntakeWorker`
       instance (guard with an internal flag; a second call is a programming
       error, not a silently-ignored no-op — raise).
-- [ ] `_run()` SHALL loop: `queue.get(timeout=0.2)` (catching `queue.Empty`
-      to re-check the stop condition), then `orchestrator.process(event)`
-      wrapped in `try/except Exception` that logs via
-      `logger.exception(...)` and never re-raises out of `_run()`, then
-      `queue.task_done()` in a `finally`.
-- [ ] `stop_once()` SHALL set an internal `threading.Event`, then join the
-      worker thread with a bounded timeout, and SHALL be idempotent — a
-      second call is a no-op, matching `_OutboundHttpClientLifecycle
-      .close_all_once()`'s existing idempotency pattern.
+- [ ] `_run()` SHALL loop: check the stop flag first (if set, exit without
+      dequeuing anything further — this is what makes "queued but
+      not-yet-started events are discarded" true), otherwise
+      `queue.get(timeout=0.2)` (catching `queue.Empty` to re-check the stop
+      flag while idle), then `orchestrator.process(event)` wrapped in
+      `try/except Exception` that logs via `logger.exception(...)` and
+      never re-raises out of `_run()`, then `queue.task_done()` in a
+      `finally`. The stop flag is only re-checked at this loop boundary —
+      once `orchestrator.process(event)` has started for a dequeued event,
+      `_run()` SHALL let it run to completion (success or exception) before
+      checking the stop flag again; it SHALL NOT attempt to interrupt an
+      in-progress `process(...)` call.
+- [ ] `stop_once()` SHALL set an internal stop flag, then call
+      `self._thread.join()` with **no timeout** (not a small, arbitrary
+      bounded timeout — a bounded join could return while the non-daemon
+      thread is still mid-`process(...)`, which would let a caller
+      incorrectly treat the worker as stopped). `stop_once()` SHALL be
+      idempotent — a second call, after the first has already joined the
+      thread, is a no-op (no exception, no second join attempt), matching
+      `_OutboundHttpClientLifecycle.close_all_once`'s existing idempotency
+      pattern. Clean shutdown's actual bound comes from the current event's
+      own already-configured, finite outbound timeouts
+      (`RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS`,
+      `RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS`,
+      `RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS`), not from any timeout
+      introduced by this task.
 
 ## 2. Configuration
 
@@ -38,10 +55,13 @@
       `RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY` via a new integer-parsing
       helper mirroring `_require_float`, raising `ValueError` for a missing
       or non-integer value before `RuntimeConfig` is constructed.
-- [ ] Set the documented default of `64` only in documentation/deployment
+- [ ] Set the documented default of `256` only in documentation/deployment
       configuration, not as a silent in-code fallback — the field remains
       required, matching every other outbound-adapter configuration field's
-      existing fail-closed posture.
+      existing fail-closed posture. Document alongside it that operators
+      SHALL size this at least as large as their MDS deployment's enabled
+      -stream count (see design.md), not treat `256` as universally
+      sufficient.
 
 ## 3. HTTP endpoint
 
@@ -79,10 +99,14 @@
       `create_http_app(...)`'s `process_committed_bar` argument; pass the
       constructed queue into `create_http_app(...)` instead.
 - [ ] Modify the `_lifespan` context manager to call
-      `intake_worker.start()` before `yield` and
-      `intake_worker.stop_once()` in the `finally` block, ordered before
-      (or alongside — order between these two SHALL NOT matter for
-      correctness) `lifecycle.close_all_once()`.
+      `intake_worker.start()` before `yield` and, in the `finally` block,
+      call `intake_worker.stop_once()` **strictly before**
+      `lifecycle.close_all_once()`. This order is required, not incidental:
+      `stop_once()` blocks until the worker thread (and whatever event it
+      was mid-processing) has fully exited, and only after that may the
+      four shared outbound HTTP clients be closed — closing them first
+      could let the worker's in-flight `orchestrator.process(...)` call
+      observe an already-closed client.
 - [ ] On any construction failure inside `build_application`'s existing
       try/except rollback path, ensure the intake worker is never left
       running: either it was never started (failure occurred before its
@@ -109,6 +133,12 @@
       processing work (assert the fake orchestrator's `process` was not
       called for the rejected event, and the queue's size is unchanged by
       the rejection).
+- [ ] Test: the queue-full rejection emits one server-side log line
+      containing the rejected event's `instrument`, `timeframe`,
+      `open_time_ms`, and the configured queue capacity — since the wire
+      response is the shared `NotReadyResponse` envelope, this log is the
+      only place this distinction (queue-full vs. startup-not-ready) is
+      observable.
 
 ## 6. Verification — worker concurrency and ordering
 
@@ -154,20 +184,52 @@
 - [ ] Test: two accepted events with identical
       `instrument`/`timeframe`/`open_time_ms` (and therefore an unchanged
       desired entry) result in the existing `NoOp` reconciliation path on
-      the second event — no duplicate trade cycle, no duplicate ABI call —
-      proving the queue boundary needed no new dedup logic.
+      the second event: no second trade cycle is created, and no duplicate
+      ABI entry-package create/amend/cancel or duplicate exchange mutation
+      results from the identical event. Do not assert "zero duplicate ABI
+      calls" — the second event may still perform an existing ABI
+      open-position lookup/read as part of normal processing; only the
+      *mutating* outcomes (trade cycle creation, entry-package
+      create/amend/cancel, exchange order mutation) are asserted absent on
+      the duplicate. This proves the queue boundary needed no new dedup
+      logic, without over-claiming what "no duplicate" means.
 
 ## 9. Verification — lifecycle
 
 - [ ] Test: `build_application` with valid configuration constructs exactly
-      one queue and exactly one worker, and the worker's thread is alive
-      after construction.
-- [ ] Test: application shutdown (exiting the lifespan context) stops the
-      worker thread within a bounded time budget, without waiting for the
-      queue to drain, even when items remain queued.
+      one queue and exactly one worker object; immediately after
+      `build_application` returns (before the FastAPI lifespan has started),
+      the worker object exists but its thread is **not** alive — `start()`
+      has not yet been called at this point.
+- [ ] Test: after the FastAPI lifespan has started (e.g. via a test client's
+      startup), the worker's thread is alive, exactly once.
+- [ ] Test: after the FastAPI lifespan has shut down (e.g. via a test
+      client's shutdown), the worker's thread is no longer alive.
+- [ ] Test (clean-shutdown contract, pending discard): with one or more
+      events sitting in the queue and none currently being processed,
+      triggering shutdown results in those queued events never being passed
+      to `orchestrator.process(...)` — assert via a fake orchestrator whose
+      `process` records calls and shows zero calls for the discarded items.
+- [ ] Test (clean-shutdown contract, in-flight completion): with a fake
+      orchestrator whose `process(...)` blocks on a controllable gate,
+      start processing one event, then trigger shutdown while that call is
+      still blocked on the gate; assert `stop_once()` has not returned yet;
+      release the gate; assert `stop_once()` then returns and the blocked
+      `process(...)` call was allowed to run to completion rather than
+      being abandoned.
+- [ ] Test (clean-shutdown contract, client-close ordering): using the same
+      blocked-`process(...)` setup, assert that none of the four outbound
+      HTTP clients are closed while the gate is still held (i.e. while the
+      worker thread is still mid-`process(...)`); release the gate; assert
+      the clients are closed only after `stop_once()` returns.
+- [ ] Test (clean-shutdown contract, no orphan thread): after shutdown
+      completes, assert the worker's thread object reports not alive, and
+      no equivalent orphaned non-daemon thread remains referencing the
+      shut-down application's queue or orchestrator.
 - [ ] Test: calling `stop_once()` twice (simulating shutdown running twice,
       or an explicit second call in a test) is a no-op the second time — no
-      exception, no double-join error.
+      exception, no double-join error, and the four outbound HTTP clients
+      are closed exactly once total, not once per `stop_once()` call.
 - [ ] Test: a construction failure partway through `build_application`
       (simulate a later adapter constructor rejecting its configuration)
       results in a `ready=False` application with no running worker thread

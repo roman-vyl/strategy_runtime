@@ -53,6 +53,11 @@ or evicting an already-queued item.
   `{"status":"not_ready"}` response
 - **AND** no event is enqueued for that request
 - **AND** `CommittedBarOrchestrator.process` is not invoked for that request
+- **AND** Runtime emits one server-side log line for the rejection
+  containing the rejected event's `instrument`, `timeframe`, `open_time_ms`,
+  and the configured queue capacity — since the wire response reuses the
+  generic `not_ready` envelope, this log is the only operator-visible way to
+  distinguish a queue-full rejection from a startup-not-ready rejection
 
 #### Scenario: Rejection does not evict or reorder existing queue contents
 - **WHEN** a request is rejected because the queue is full
@@ -96,6 +101,16 @@ or still queued.
 - **THEN** any resulting no-op behavior comes from existing downstream
   reconciliation/state-save idempotency, not from the queue
 
+#### Scenario: A duplicate event may still perform non-mutating downstream work
+- **WHEN** the worker processes a duplicate event through the existing,
+  unmodified orchestration path
+- **THEN** existing non-mutating calls (for example, an ABI open-position
+  lookup) may still occur exactly as they would for any other event
+- **AND** what is guaranteed absent is the *mutating* outcome: no second
+  trade cycle, no duplicate ABI entry-package create/amend/cancel, and no
+  duplicate exchange order mutation caused by the identical event — not the
+  absence of every downstream call
+
 ### Requirement: Queue and worker lifecycle is owned once by the composition root
 
 Strategy Runtime SHALL construct the intake queue and its worker exactly
@@ -108,12 +123,24 @@ existing outbound HTTP clients.
 - **THEN** exactly one intake queue and exactly one worker thread are
   constructed and started
 
-#### Scenario: Stop once, without hanging
+#### Scenario: Shutdown discards not-yet-started events but waits for the current one
+- **WHEN** the application shuts down while one or more events are queued
+  but not yet dequeued
+- **THEN** the worker does not start processing any of them — they are
+  discarded, not processed and not persisted
+- **AND** if one event's `CommittedBarOrchestrator.process` call is already
+  running at the moment shutdown begins, that call is allowed to finish
+  (successfully or by raising) rather than being interrupted or abandoned
+- **AND** shutdown does not, in either case, wait for the queue itself to
+  drain — only for the one already-in-flight call, if any, to finish
+
+#### Scenario: Outbound HTTP clients close only after the worker has fully stopped
 - **WHEN** the application shuts down
-- **THEN** the worker stops within a bounded time budget
-- **AND** shutdown does not wait for the queue to drain
-- **AND** any event still queued at shutdown is discarded, not processed
-  and not persisted
+- **THEN** the four shared outbound HTTP clients are closed only after the
+  worker thread has fully exited — never while it might still be
+  mid-`process(...)` and potentially still using one of them
+- **AND** this ordering holds whether or not an event was in flight at the
+  moment shutdown began
 
 #### Scenario: A second stop is a no-op
 - **WHEN** the lifecycle owner's stop path runs more than once (for example,
