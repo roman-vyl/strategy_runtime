@@ -16,6 +16,7 @@ than left dormant).
 
 import json
 import re
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import unquote
@@ -33,6 +34,7 @@ from strategy_runtime.runtime.entry_reconciliation_bridge import (
     AbiEntryPackageExecutionBridge,
     EntryReconciliationExecutionError,
 )
+from strategy_runtime.utility.committed_bar import CommittedBarOrchestrator
 from strategy_runtime.utility.deployment_catalog import derive_strategy_instance_id
 
 from ._fake_http_server import (
@@ -94,15 +96,70 @@ def _build_app(
         "RUNTIME_ABI_BASE_URL": abi_base_url,
         "RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS": str(abi_open_position_timeout),
         "RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS": str(abi_entry_package_timeout),
+        "RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY": "256",
     }
     return build_application(env)
 
 
+class _ProcessingSync:
+    """Deterministic, non-sleep-based wait for the intake worker to finish
+    processing the Nth accepted committed-bar event in a test.
+
+    `CommittedBarOrchestrator.process` is called exactly once per accepted
+    webhook by the single intake worker thread, whether it returns normally
+    or raises. Counting its completions lets each E2E test wait for its own
+    webhook(s) to finish processing without any real-time sleep, now that
+    processing happens on a separate worker thread instead of synchronously
+    within the request/response cycle.
+    """
+
+    def __init__(self) -> None:
+        self._condition = threading.Condition()
+        self._posted = 0
+        self._completed = 0
+
+    def record_post(self) -> int:
+        with self._condition:
+            self._posted += 1
+            return self._posted
+
+    def mark_completed(self) -> None:
+        with self._condition:
+            self._completed += 1
+            self._condition.notify_all()
+
+    def wait_for_post(self, post_index: int, timeout: float = 5.0) -> None:
+        with self._condition:
+            ok = self._condition.wait_for(lambda: self._completed >= post_index, timeout=timeout)
+        assert ok, f"timed out waiting for committed-bar event #{post_index} to finish processing"
+
+
+_current_sync = _ProcessingSync()
+
+
+@pytest.fixture(autouse=True)
+def _synchronize_committed_bar_processing(monkeypatch: pytest.MonkeyPatch) -> None:
+    global _current_sync
+    _current_sync = _ProcessingSync()
+    real_process = CommittedBarOrchestrator.process
+
+    def _wrapped_process(self: CommittedBarOrchestrator, committed_bar: object) -> object:
+        try:
+            return real_process(self, committed_bar)  # type: ignore[arg-type]
+        finally:
+            _current_sync.mark_completed()
+
+    monkeypatch.setattr(CommittedBarOrchestrator, "process", _wrapped_process)
+
+
 def _post_closed_bar(client: TestClient, open_time_ms: int) -> object:
-    return client.post(
+    post_index = _current_sync.record_post()
+    response = client.post(
         "/v1/webhooks/closed-bar",
         json={"instrument": _TICKER, "timeframe": _TIMEFRAME, "open_time_ms": open_time_ms},
     )
+    _current_sync.wait_for_post(post_index)
+    return response
 
 
 def _read_journal(journal_path: Path) -> list[dict[str, object]]:
@@ -328,6 +385,62 @@ def test_happy_path_applies_desired_entry_and_saves_current_trade_cycle(
         entry_package_requests = [r for r in abi_server.requests if "/entry-package" in r.path]
         assert len(entry_package_requests) == 1
         assert entry_package_requests[0].json()["risk_multiplier"] == state.risk_multiplier == "1"
+
+
+def test_duplicate_committed_bar_event_is_a_no_op_with_no_duplicate_mutation(
+    tmp_path: Path, engine_server: FakeHttpServer, abi_server: FakeHttpServer
+) -> None:
+    """The intake queue performs no deduplication of its own (see the
+    committed-bar-intake-queue capability): two accepted events carrying the
+    exact same instrument/timeframe/open_time_ms are both enqueued and both
+    processed. This proves that reprocessing an identical committed bar is
+    already a safe no-op through existing downstream idempotency --
+    `decide_entry_reconciliation`'s NoOp path -- with no dedup mechanism
+    needed at the queue boundary. The second event still performs the
+    existing non-mutating ABI open-position lookup (a trade cycle now
+    exists), but produces zero further mutation: no second trade cycle, no
+    second/duplicate entry-package call."""
+    _set_engine_routes(engine_server, live_entry=_live_entry_present())
+    _set_abi_routes(
+        abi_server, open_position=_open_position_closed(), entry_package=_entry_package_applied
+    )
+    app = _build_app(
+        tmp_path, engine_base_url=engine_server.base_url, abi_base_url=abi_server.base_url
+    )
+
+    with TestClient(app) as client:
+        # Two distinct webhook requests, identical instrument/timeframe/
+        # open_time_ms -- e.g. an upstream MDS retry of the same commit.
+        first = _post_closed_bar(client, 1)
+        assert first.status_code == 200
+        state_after_first = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
+        assert state_after_first is not None
+        assert state_after_first.current_trade_cycle is not None
+        trade_cycle_id = state_after_first.current_trade_cycle.trade_cycle_id
+
+        second = _post_closed_bar(client, 1)
+        assert second.status_code == 200
+        assert second.json() == {"status": "accepted"}
+
+        state_after_second = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
+        assert state_after_second is not None
+        assert state_after_second.current_trade_cycle is not None
+        # Same trade cycle, same applied entry -- no second cycle created.
+        assert state_after_second.current_trade_cycle.trade_cycle_id == trade_cycle_id
+        assert state_after_second == state_after_first
+
+        # The duplicate's resolver call is a permitted non-mutating read,
+        # now that a current_trade_cycle exists.
+        open_position_requests = [r for r in abi_server.requests if "/open-position" in r.path]
+        assert len(open_position_requests) == 1
+
+        # No second/duplicate mutating entry-package call for the duplicate.
+        entry_package_requests = [r for r in abi_server.requests if "/entry-package" in r.path]
+        assert len(entry_package_requests) == 1
+
+        outcomes = _dispatch_outcomes(tmp_path / "journal" / "runtime.jsonl")
+        assert len(outcomes) == 2
+        assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_succeeded"
 
 
 def test_brand_new_instance_reaches_live_entry_without_any_abi_open_position_call(

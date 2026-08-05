@@ -32,6 +32,7 @@ def load_runtime_config(environ: Mapping[str, str] | None = None) -> RuntimeConf
     abi_entry_package_timeout_seconds = _require_float(
         values, "RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS"
     )
+    committed_bar_queue_capacity = _require_int(values, "RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY")
 
     return RuntimeConfig(
         host=values.get("RUNTIME_HOST", "127.0.0.1"),
@@ -44,6 +45,7 @@ def load_runtime_config(environ: Mapping[str, str] | None = None) -> RuntimeConf
         abi_base_url=abi_base_url,
         abi_open_position_timeout_seconds=abi_open_position_timeout_seconds,
         abi_entry_package_timeout_seconds=abi_entry_package_timeout_seconds,
+        committed_bar_queue_capacity=committed_bar_queue_capacity,
     )
 
 
@@ -62,3 +64,13 @@ def _require_float(values: Mapping[str, str], name: str) -> float:
         return float(text)
     except ValueError as exc:
         raise ValueError(f"{name} must be a number") from exc
+
+
+def _require_int(values: Mapping[str, str], name: str) -> int:
+    text = values.get(name)
+    if text is None or not text.strip():
+        raise ValueError(f"{name} must be set")
+    try:
+        return int(text)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc

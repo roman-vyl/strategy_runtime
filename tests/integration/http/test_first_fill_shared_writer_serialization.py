@@ -6,6 +6,7 @@ Engine server is started."""
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import replace
@@ -15,6 +16,10 @@ from fastapi.testclient import TestClient
 from strategy_runtime.adapters.http.app import create_http_app
 from strategy_runtime.runtime.abi_execution_event.orchestrator import (
     AbiExecutionEventOrchestrator,
+)
+from strategy_runtime.runtime.committed_bar_intake import (
+    CommittedBarIntakeBoundary,
+    CommittedBarIntakeWorker,
 )
 from strategy_runtime.runtime.coordination import StrategyInstanceKeyedMutexRegistry
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
@@ -26,6 +31,12 @@ from strategy_runtime.runtime.state.models import (
 )
 from strategy_runtime.runtime.state.repository import (
     InMemoryStrategyInstanceRuntimeStateRepository,
+)
+from strategy_runtime.utility.committed_bar import (
+    CommittedBarEvent,
+    CommittedBarOrchestrator,
+    SelectedDeployment,
+    StrategyCycleDispatchOutcome,
 )
 
 _SID_A = "instance-a"
@@ -96,7 +107,7 @@ def _make_harness() -> tuple[TestClient, _RecordingRepository, StrategyInstanceK
     app = create_http_app(
         ready=True,
         trace_id_factory=lambda: "trace-1",
-        process_committed_bar=None,
+        committed_bar_intake=None,
         process_first_fill=orchestrator.process,
     )
     client = TestClient(app, raise_server_exceptions=False)
@@ -174,4 +185,157 @@ def test_instance_b_first_fill_is_not_blocked_while_instance_a_mutex_is_held() -
         writer_thread.join(timeout=5)
 
     assert response.status_code == 200
+    assert repo.get_calls == [_SID_B]
+
+
+# ---------------------------------------------------------------------------
+# Same coverage, but the "closed-bar writer" is the real production call
+# path: HTTP webhook -> CommittedBarIntakeBoundary -> CommittedBarIntakeWorker
+# -> CommittedBarOrchestrator -> dispatch, running on the actual intake
+# worker thread rather than a hand-rolled stand-in thread.
+# ---------------------------------------------------------------------------
+
+
+class _GatedMutexHoldingDispatcher:
+    """Acquire the real keyed-mutex registry for one instance and block on a
+    controllable gate -- standing in for the real per-instance critical
+    section a strategy cycle would hold."""
+
+    def __init__(
+        self,
+        registry: StrategyInstanceKeyedMutexRegistry,
+        writer_holds: threading.Event,
+        release_writer: threading.Event,
+    ) -> None:
+        self._registry = registry
+        self._writer_holds = writer_holds
+        self._release_writer = release_writer
+
+    def dispatch(self, unit: object) -> StrategyCycleDispatchOutcome:
+        strategy_instance_id = unit.strategy_instance_id  # type: ignore[attr-defined]
+        with self._registry.hold(strategy_instance_id):
+            self._writer_holds.set()
+            assert self._release_writer.wait(timeout=5), "release_writer was never set"
+        return StrategyCycleDispatchOutcome.succeeded(strategy_instance_id)
+
+
+class _SingleDeploymentCatalog:
+    def load_snapshot(self) -> None:
+        return None
+
+
+class _FixedTargetSelector:
+    def __init__(self, strategy_instance_id: str) -> None:
+        self._strategy_instance_id = strategy_instance_id
+
+    def select(
+        self, *, event: CommittedBarEvent, snapshot: object
+    ) -> tuple[SelectedDeployment[None], ...]:
+        return (SelectedDeployment(self._strategy_instance_id, None),)
+
+
+class _NoOpJournal:
+    def orchestration_started(self, **_kwargs: object) -> None: ...
+    def orchestration_failed(self, **_kwargs: object) -> None: ...
+    def strategy_cycle_outcome(self, **_kwargs: object) -> None: ...
+    def orchestration_completed(self, **_kwargs: object) -> None: ...
+
+
+def _make_full_intake_harness(
+    target_sid: str,
+) -> tuple[
+    TestClient,
+    _RecordingRepository,
+    CommittedBarIntakeWorker,
+    threading.Event,
+    threading.Event,
+]:
+    inner_repo = InMemoryStrategyInstanceRuntimeStateRepository()
+    _seed(inner_repo, _SID_A)
+    _seed(inner_repo, _SID_B)
+    repo = _RecordingRepository(inner_repo)
+    registry = StrategyInstanceKeyedMutexRegistry()
+    first_fill_orchestrator = AbiExecutionEventOrchestrator(
+        state_repository=repo,  # type: ignore[arg-type]
+        keyed_mutex_registry=registry,
+    )
+
+    writer_holds = threading.Event()
+    release_writer = threading.Event()
+    committed_bar_orchestrator = CommittedBarOrchestrator(
+        deployment_catalog=_SingleDeploymentCatalog(),
+        deployment_selector=_FixedTargetSelector(target_sid),
+        strategy_cycle_dispatcher=_GatedMutexHoldingDispatcher(
+            registry, writer_holds, release_writer
+        ),
+        processing_journal=_NoOpJournal(),
+    )
+    intake = CommittedBarIntakeBoundary(capacity=8)
+    worker = CommittedBarIntakeWorker(
+        intake, committed_bar_orchestrator, logging.getLogger("test.shared_writer")
+    )
+    worker.start()
+
+    app = create_http_app(
+        ready=True,
+        trace_id_factory=lambda: "trace-1",
+        committed_bar_intake=intake,
+        process_first_fill=first_fill_orchestrator.process,
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+    return client, repo, worker, writer_holds, release_writer
+
+
+def test_first_fill_waits_for_the_real_intake_worker_holding_the_same_instance_mutex() -> None:
+    client, repo, worker, writer_holds, release_writer = _make_full_intake_harness(_SID_A)
+    try:
+        response = client.post(
+            "/v1/webhooks/closed-bar",
+            json={"instrument": "BTCUSDT.P", "timeframe": "5m", "open_time_ms": 1},
+        )
+        assert response.status_code == 200
+        assert writer_holds.wait(timeout=2), "intake worker never acquired the mutex"
+        repo.get_calls.clear()  # drop the dispatcher's own activity, if any
+
+        result: dict[str, object] = {}
+
+        def do_put() -> None:
+            result["response"] = client.put(
+                _url(_SID_A), json={"first_fill_at_ms": _FIRST_FILL_AT_MS}
+            )
+
+        put_thread = threading.Thread(target=do_put)
+        put_thread.start()
+
+        # While the real intake worker holds instance-A's mutex, the
+        # first-fill path must not have reached repo.get(...) yet.
+        time.sleep(0.2)
+        assert repo.get_calls == []
+
+        release_writer.set()
+        put_thread.join(timeout=5)
+    finally:
+        worker.stop_once()
+
+    response = result["response"]
+    assert response.status_code == 200  # type: ignore[union-attr]
+    assert repo.get_calls == [_SID_A]
+
+
+def test_instance_b_first_fill_is_not_blocked_by_the_real_intake_worker_on_instance_a() -> None:
+    client, repo, worker, writer_holds, release_writer = _make_full_intake_harness(_SID_A)
+    try:
+        response = client.post(
+            "/v1/webhooks/closed-bar",
+            json={"instrument": "BTCUSDT.P", "timeframe": "5m", "open_time_ms": 1},
+        )
+        assert response.status_code == 200
+        assert writer_holds.wait(timeout=2), "intake worker never acquired the mutex"
+
+        put_response = client.put(_url(_SID_B), json={"first_fill_at_ms": _FIRST_FILL_AT_MS})
+    finally:
+        release_writer.set()
+        worker.stop_once()
+
+    assert put_response.status_code == 200
     assert repo.get_calls == [_SID_B]

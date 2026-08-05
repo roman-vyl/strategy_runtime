@@ -1,5 +1,6 @@
 """Runtime composition root: the single production construction path."""
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
@@ -20,6 +21,10 @@ from strategy_runtime.runtime.abi_execution_event.models import AbiFirstFillExec
 from strategy_runtime.runtime.abi_execution_event.orchestrator import (
     AbiExecutionEventOrchestrator,
 )
+from strategy_runtime.runtime.committed_bar_intake import (
+    CommittedBarIntakeBoundary,
+    CommittedBarIntakeWorker,
+)
 from strategy_runtime.runtime.coordination import StrategyInstanceKeyedMutexRegistry
 from strategy_runtime.runtime.entry_reconciliation_bridge import (
     AbiEntryPackageExecutionBridge,
@@ -37,7 +42,6 @@ from strategy_runtime.runtime.state.repository import (
 )
 from strategy_runtime.shared.identifiers import new_identifier, utc_timestamp
 from strategy_runtime.utility.committed_bar import (
-    CommittedBarEvent,
     CommittedBarOrchestrator,
     StrategyBarProcessingUnit,
 )
@@ -113,6 +117,7 @@ def build_application(
     """
     runtime_logger = logger or logging.getLogger("strategy_runtime")
     lifecycle = _OutboundHttpClientLifecycle(runtime_logger)
+    intake_worker: CommittedBarIntakeWorker | None = None
     try:
         config = load_runtime_config(environ)
         prepare_journal_path(config.journal_path)
@@ -194,20 +199,24 @@ def build_application(
             processing_journal=journal,
         )
 
-        def process_committed_bar(event: CommittedBarEvent) -> None:
-            orchestrator.process(event)
+        committed_bar_intake = CommittedBarIntakeBoundary(config.committed_bar_queue_capacity)
+        intake_worker = CommittedBarIntakeWorker(committed_bar_intake, orchestrator, runtime_logger)
 
         @asynccontextmanager
         async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+            assert intake_worker is not None
+            intake_worker.start()
             try:
                 yield
             finally:
+                committed_bar_intake.stop_accepting()
+                await asyncio.to_thread(intake_worker.stop_once)
                 lifecycle.close_all_once()
 
         app = create_http_app(
             ready=True,
             trace_id_factory=new_identifier,
-            process_committed_bar=process_committed_bar,
+            committed_bar_intake=committed_bar_intake,
             process_first_fill=process_first_fill,
             logger=runtime_logger,
             lifespan=_lifespan,
@@ -216,14 +225,17 @@ def build_application(
         app.state.keyed_mutex_registry = keyed_mutex_registry
         app.state.outbound_http_client_lifecycle = lifecycle
         app.state.outbound_http_clients = lifecycle.clients
+        app.state.committed_bar_intake_worker = intake_worker
 
     except Exception:
         runtime_logger.exception("Runtime startup readiness failed")
+        if intake_worker is not None:
+            intake_worker.stop_once()
         lifecycle.close_all_once()
         return create_http_app(
             ready=False,
             trace_id_factory=new_identifier,
-            process_committed_bar=None,
+            committed_bar_intake=None,
             process_first_fill=None,
             logger=runtime_logger,
         )

@@ -26,6 +26,7 @@ def _valid_environ(tmp_path: Path) -> dict[str, str]:
         "RUNTIME_ABI_BASE_URL": "http://abi.invalid",
         "RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS": "5",
         "RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS": "5",
+        "RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY": "256",
     }
 
 

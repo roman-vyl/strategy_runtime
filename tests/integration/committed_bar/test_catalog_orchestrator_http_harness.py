@@ -1,9 +1,15 @@
 import json
+import logging
+import threading
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from strategy_runtime.adapters.http.app import create_http_app
+from strategy_runtime.runtime.committed_bar_intake import (
+    CommittedBarIntakeBoundary,
+    CommittedBarIntakeWorker,
+)
 from strategy_runtime.utility.committed_bar import (
     CommittedBarEvent,
     CommittedBarOrchestrator,
@@ -97,23 +103,41 @@ def test_fake_webhook_runs_catalog_and_orchestrator_against_bbb_like_specs(tmp_p
         processing_journal=journal,
     )
     results = []
+    processed = threading.Event()
+    real_process = orchestrator.process
 
-    def background(event: CommittedBarEvent) -> None:
-        results.append(orchestrator.process(event))
+    def _recording_process(event: CommittedBarEvent) -> object:
+        try:
+            result = real_process(event)
+            results.append(result)
+            return result
+        finally:
+            processed.set()
 
-    app = create_http_app(
-        ready=True,
-        trace_id_factory=lambda: "trace-bbb-1",
-        process_committed_bar=background,
-        process_first_fill=None,
-    )
-    response = TestClient(app).post(
-        "/v1/webhooks/closed-bar",
-        json={"instrument": "BTCUSDT.P", "timeframe": "5m", "open_time_ms": 12345},
-    )
+    orchestrator.process = _recording_process  # type: ignore[method-assign]
 
-    assert response.status_code == 200
-    assert response.json() == {"status": "accepted"}
+    intake = CommittedBarIntakeBoundary(capacity=8)
+    worker = CommittedBarIntakeWorker(intake, orchestrator, logging.getLogger("test"))
+    worker.start()
+    try:
+        app = create_http_app(
+            ready=True,
+            trace_id_factory=lambda: "trace-bbb-1",
+            committed_bar_intake=intake,
+            process_first_fill=None,
+        )
+        response = TestClient(app).post(
+            "/v1/webhooks/closed-bar",
+            json={"instrument": "BTCUSDT.P", "timeframe": "5m", "open_time_ms": 12345},
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "accepted"}
+        assert processed.wait(timeout=5), "intake worker never processed the accepted event"
+    finally:
+        intake.stop_accepting()
+        worker.stop_once()
+
     preflight_snapshot = FilesystemDeploymentCatalog(specs).load_snapshot()
     expected_ids = [
         item.strategy_instance_id

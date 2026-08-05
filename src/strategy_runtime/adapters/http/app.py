@@ -1,9 +1,10 @@
 """FastAPI application adapter."""
 
 import logging
+import queue
 from collections.abc import Callable
 
-from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.types import Lifespan
@@ -22,13 +23,16 @@ from strategy_runtime.adapters.http.models import (
     StrategyInstanceStateNotFoundResponse,
 )
 from strategy_runtime.runtime.abi_execution_event.models import AbiFirstFillExecutionEvent
+from strategy_runtime.runtime.committed_bar_intake import (
+    CommittedBarIntakeBoundary,
+    IntakeNotAccepting,
+)
 from strategy_runtime.runtime.first_fill.errors import FirstFillInvariantError
 from strategy_runtime.runtime.state.errors import StrategyInstanceStateNotFound
 from strategy_runtime.runtime.state.models import StrategyInstanceRuntimeState
 from strategy_runtime.shared.identifiers import IdentifierFactory
 from strategy_runtime.utility.committed_bar import CommittedBarEvent
 
-BackgroundUseCase = Callable[[CommittedBarEvent], None]
 FirstFillUseCase = Callable[[AbiFirstFillExecutionEvent], StrategyInstanceRuntimeState]
 
 
@@ -36,14 +40,14 @@ def create_http_app(
     *,
     ready: bool,
     trace_id_factory: IdentifierFactory,
-    process_committed_bar: BackgroundUseCase | None,
+    committed_bar_intake: CommittedBarIntakeBoundary | None,
     process_first_fill: FirstFillUseCase | None,
     logger: logging.Logger | None = None,
     lifespan: Lifespan[FastAPI] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Strategy Runtime", version="0.1.0", lifespan=lifespan)
     app.state.ready = ready
-    app.state.process_committed_bar = process_committed_bar
+    app.state.committed_bar_intake = committed_bar_intake
     app.state.process_first_fill = process_first_fill
     app.state.trace_id_factory = trace_id_factory
     app.state.logger = logger or logging.getLogger(__name__)
@@ -81,9 +85,8 @@ def create_http_app(
     )
     async def closed_bar_webhook(
         request: ClosedBarRequest,
-        background_tasks: BackgroundTasks,
     ) -> AcceptedResponse | JSONResponse:
-        if not app.state.ready or app.state.process_committed_bar is None:
+        if not app.state.ready or app.state.committed_bar_intake is None:
             return JSONResponse(status_code=503, content=NotReadyResponse().model_dump())
 
         try:
@@ -93,10 +96,28 @@ def create_http_app(
                 open_time_ms=request.open_time_ms,
             )
             _trace_id = app.state.trace_id_factory()
-            background_tasks.add_task(
-                app.state.process_committed_bar,
-                committed_bar,
+            app.state.committed_bar_intake.put_nowait(committed_bar)
+        except IntakeNotAccepting:
+            app.state.logger.warning(
+                "closed-bar rejected: intake_stopping",
+                extra={
+                    "instrument": committed_bar.instrument,
+                    "timeframe": committed_bar.timeframe,
+                    "open_time_ms": committed_bar.open_time_ms,
+                },
             )
+            return JSONResponse(status_code=503, content=NotReadyResponse().model_dump())
+        except queue.Full:
+            app.state.logger.error(
+                "closed-bar rejected: queue_full",
+                extra={
+                    "instrument": committed_bar.instrument,
+                    "timeframe": committed_bar.timeframe,
+                    "open_time_ms": committed_bar.open_time_ms,
+                    "capacity": app.state.committed_bar_intake.capacity,
+                },
+            )
+            return JSONResponse(status_code=503, content=NotReadyResponse().model_dump())
         except Exception:
             app.state.logger.exception("Failed to accept closed-bar webhook")
             return JSONResponse(status_code=500, content={"status": "error"})

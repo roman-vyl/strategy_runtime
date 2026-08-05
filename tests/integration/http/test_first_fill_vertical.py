@@ -64,7 +64,7 @@ def _make_vertical_client() -> tuple[TestClient, InMemoryStrategyInstanceRuntime
     app = create_http_app(
         ready=True,
         trace_id_factory=lambda: "trace-1",
-        process_committed_bar=None,
+        committed_bar_intake=None,
         process_first_fill=orchestrator.process,
     )
     return TestClient(app, raise_server_exceptions=False), repo

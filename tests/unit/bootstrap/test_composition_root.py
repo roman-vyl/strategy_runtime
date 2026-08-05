@@ -2,6 +2,7 @@
 
 import inspect
 import json
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ def _valid_environ(tmp_path: Path) -> dict[str, str]:
         "RUNTIME_ABI_BASE_URL": "http://abi.invalid",
         "RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS": "5",
         "RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS": "5",
+        "RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY": "256",
     }
 
 
@@ -306,25 +308,31 @@ def test_default_sink_dispatches_into_the_real_strategy_runtime_orchestrator(
     _write_deployment(tmp_path / "specs" / "selected.json")
 
     process_calls: list[StrategyBarProcessingUnit[object]] = []
+    processed = threading.Event()
     real_process = StrategyRuntimeOrchestrator.process
 
     def _recording_process(
         self: StrategyRuntimeOrchestrator, unit: StrategyBarProcessingUnit[object]
     ) -> object:
         process_calls.append(unit)
-        return real_process(self, unit)
+        try:
+            return real_process(self, unit)
+        finally:
+            processed.set()
 
     monkeypatch.setattr(StrategyRuntimeOrchestrator, "process", _recording_process)
 
     app = build_application(env)
     assert app.state.ready is True
 
-    client = TestClient(app, raise_server_exceptions=False)
-    response = client.post(
-        "/v1/webhooks/closed-bar",
-        json={"instrument": "BTCUSDT.P", "timeframe": "5m", "open_time_ms": 1},
-    )
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/v1/webhooks/closed-bar",
+            json={"instrument": "BTCUSDT.P", "timeframe": "5m", "open_time_ms": 1},
+        )
 
-    assert response.status_code == 200
+        assert response.status_code == 200
+        assert processed.wait(timeout=5), "intake worker never processed the accepted event"
+
     assert len(process_calls) == 1
     assert process_calls[0].deployment.source_path == "selected.json"
