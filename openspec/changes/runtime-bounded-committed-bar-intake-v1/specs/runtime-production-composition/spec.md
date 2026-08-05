@@ -149,10 +149,12 @@ orchestrator instance.
 - **AND** `create_http_app(...)` receives that same queue object as its
   committed-bar intake parameter
 
-### Requirement: Committed-bar intake worker is started once and stopped exactly once by one lifecycle owner
+### Requirement: Committed-bar intake worker is started once and stopped exactly once by one lifecycle owner, in a fixed shutdown sequence
 The composition root SHALL be the single owner of the committed-bar intake
 worker's start/stop lifecycle, matching the existing ownership pattern
-already established for the four outbound HTTP clients.
+already established for the four outbound HTTP clients, and SHALL execute
+shutdown as three ordered steps: stop accepting new events, then wait for
+the worker to stop, then close the outbound HTTP clients.
 
 #### Scenario: Started during application startup
 - **WHEN** the production application's lifespan begins
@@ -167,13 +169,31 @@ already established for the four outbound HTTP clients.
 - **AND** no HTTP request handler, background thread, or orchestrator call
   ever stops the worker itself
 
+#### Scenario: Shutdown stops accepting new events before waiting on the worker
+- **WHEN** the production application shuts down
+- **THEN** the lifecycle owner first calls `stop_accepting()` on the intake
+  boundary — synchronously, on the event-loop thread, since this operation
+  is a single lock acquisition and never blocks
+- **AND** only after that does it wait for the worker to stop
+
+#### Scenario: Waiting for the worker is offloaded so it does not block the event loop
+- **WHEN** the production application shuts down
+- **THEN** the lifecycle owner waits for the worker to stop via
+  `await asyncio.to_thread(intake_worker.stop_once)`, not by calling
+  `stop_once()` directly on the event-loop thread
+- **AND** other coroutines scheduled on the same event loop continue to run
+  while this wait is in progress
+
 #### Scenario: Worker stop happens strictly before outbound client close
 - **WHEN** the production application shuts down
-- **THEN** the lifecycle owner stops the intake worker — waiting for it to
-  fully exit, including letting any currently in-flight
+- **THEN** the lifecycle owner waits for the offloaded worker-stop to
+  complete — including letting any currently in-flight
   `CommittedBarOrchestrator.process(...)` call finish rather than
   interrupting it — strictly before closing any of the four outbound HTTP
   clients
-- **AND** this ordering holds even though the worker's own shutdown wait is
-  not bounded by a fixed timeout of its own, but by the finite outbound
-  timeouts already enforced inside that in-flight call
+- **AND** this ordering holds regardless of how long that wait takes: the
+  wait's network operations are bounded by the finite outbound timeouts
+  already enforced inside the in-flight call, but its local operations are
+  not bounded by any timeout this change introduces — the ordering
+  guarantee does not depend on, and is not undermined by, that absence of a
+  bound

@@ -23,44 +23,228 @@ because the underlying critical sections are thread-blocking, not
 
 ```text
 runtime/committed_bar_intake/
-  queue.py     BoundedCommittedBarIntakeQueue — thin wrapper over
-               queue.Queue[CommittedBarEvent] with a fixed maxsize
-  worker.py    CommittedBarIntakeWorker — owns the dedicated thread,
-               start()/stop_once(), drains the queue one event at a
+  boundary.py  CommittedBarIntakeBoundary — the one process-owned intake
+               object; wraps queue.Queue[CommittedBarEvent] and exposes
+               put_nowait(event), stop_accepting(), get(timeout),
+               task_done() — no raw queue.Queue reference is exposed to
+               callers outside this module
+  worker.py    CommittedBarIntakeWorker — owns the dedicated thread and
+               its not_started/running/stopping/stopped state machine;
+               start()/stop_once(); drains the boundary one event at a
                time into CommittedBarOrchestrator.process
 
 adapters/http/
-  app.py       closed_bar_webhook enqueues instead of scheduling a
-               BackgroundTasks unit (existing file, modified)
+  app.py       closed_bar_webhook enqueues via the boundary's
+               put_nowait(...) instead of scheduling a BackgroundTasks
+               unit (existing file, modified)
 
 config/
   model.py     + committed_bar_queue_capacity field (existing file)
   loader.py    + RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY parsing (existing file)
 
 bootstrap/
-  application.py   constructs the queue + worker, wires lifespan
-                    start/stop (existing file, modified)
+  application.py   constructs the boundary + worker, wires lifespan
+                    start/stop-accepting/stop (existing file, modified)
 ```
 
 ## Ownership
 
-- **Queue**: `queue.Queue[CommittedBarEvent](maxsize=config
-  .committed_bar_queue_capacity)`, constructed exactly once in
-  `build_application`, owned exclusively by `CommittedBarIntakeWorker`. The
-  HTTP layer holds only a reference sufficient to call `put_nowait`; it does
-  not own the queue's lifecycle.
+- **Intake boundary**: `CommittedBarIntakeBoundary`, constructed exactly
+  once in `build_application`, wraps one
+  `queue.Queue[CommittedBarEvent](maxsize=config.committed_bar_queue_capacity)`.
+  It is the *only* object either the HTTP layer or the worker holds a
+  reference to — neither reaches into a raw `queue.Queue` directly (see
+  "The intake boundary replaces a raw queue reference" below for why).
 - **Worker**: `CommittedBarIntakeWorker` owns one `threading.Thread`
-  (`daemon=False`, explicitly joined on shutdown — see "Lifecycle" below)
-  running a loop that is the queue's only consumer. It is constructed with a
-  reference to the existing, unmodified `CommittedBarOrchestrator` instance
-  (the same one `build_application` already constructs today) and calls
-  `orchestrator.process(event)` directly — no new indirection layer between
-  the worker and the orchestrator.
+  (`daemon=False`) running a loop that is the boundary's only consumer, plus
+  a small state machine (`not_started | running | stopping | stopped`, see
+  "Atomic stop/start boundary" below) that makes shutdown race-free. It is
+  constructed with a reference to the existing, unmodified
+  `CommittedBarOrchestrator` instance (the same one `build_application`
+  already constructs today) and calls `orchestrator.process(event)`
+  directly — no new indirection layer between the worker and the
+  orchestrator.
 - **Producer**: `closed_bar_webhook` (`adapters/http/app.py`) calls
-  `app.state.committed_bar_intake_queue.put_nowait(committed_bar)`. This is
-  thread-safe and non-blocking (`queue.Queue`'s internal lock never blocks
-  on `put_nowait`), so it can be called directly from the `async def`
-  handler without `run_in_threadpool` or any executor hop.
+  `app.state.committed_bar_intake.put_nowait(committed_bar)`. This is
+  thread-safe and non-blocking, so it can be called directly from the
+  `async def` handler without `run_in_threadpool` or any executor hop.
+
+## The intake boundary replaces a raw queue reference
+
+A raw `queue.Queue` exposed as `app.state`'s entire public surface has no
+way to refuse new work once shutdown has begun — `queue.Queue.put_nowait`
+only ever fails on capacity, never on "the process is shutting down."
+Without a distinct signal for that second condition, the HTTP layer would
+keep accepting and enqueuing webhooks for as long as capacity allowed, even
+after the worker has already been told to stop — those events would then
+simply sit in the queue and be discarded at shutdown, silently, with the
+caller having been told `200 accepted`.
+
+`CommittedBarIntakeBoundary` closes that gap by owning one `threading.Lock`
+(`_accept_lock`) shared by exactly two operations:
+
+```python
+class CommittedBarIntakeBoundary:
+    def __init__(self, capacity: int) -> None:
+        self._queue: queue.Queue[CommittedBarEvent] = queue.Queue(maxsize=capacity)
+        self._accept_lock = threading.Lock()
+        self._accepting = True
+
+    def put_nowait(self, event: CommittedBarEvent) -> None:
+        with self._accept_lock:
+            if not self._accepting:
+                raise IntakeNotAccepting()
+            self._queue.put_nowait(event)  # may itself raise queue.Full
+
+    def stop_accepting(self) -> None:
+        with self._accept_lock:
+            self._accepting = False
+
+    def get(self, timeout: float) -> CommittedBarEvent:
+        return self._queue.get(timeout=timeout)  # worker-only; single consumer
+
+    def task_done(self) -> None:
+        self._queue.task_done()
+```
+
+Because `put_nowait` and `stop_accepting` share `_accept_lock`, every call
+to either one linearizes relative to every call to the other. For any given
+webhook request, exactly one of two orderings holds:
+
+- its `put_nowait` call acquires the lock **before** `stop_accepting` does
+  — the event is genuinely enqueued (subject to the normal capacity check),
+  and the caller's `200 accepted` is honest;
+- `stop_accepting` acquires the lock **first** — `put_nowait` observes
+  `self._accepting is False` and raises `IntakeNotAccepting` *before ever
+  touching the underlying queue*, and the caller receives the existing
+  `503`/`not_ready` response instead of a false `200`.
+
+There is no third outcome where a request is accepted into the queue after
+shutdown has begun.
+
+`IntakeNotAccepting` is a distinct exception from `queue.Full` specifically
+so the HTTP handler (and its logging — see "Queue-full and intake-stopped
+rejections" below) can tell the two rejection reasons apart, even though
+both currently produce the identical wire response.
+
+## Atomic stop/start boundary
+
+A naive worker loop —
+
+```python
+while not stop_flag.is_set():
+    event = queue.get(timeout=0.2)
+    orchestrator.process(event)
+```
+
+— has a race: `stop_flag` can be set by another thread *after* the loop's
+check passes but *before* (or during) `queue.get()`, so an event can be
+dequeued and start processing even though shutdown was already requested,
+with no guarantee shutdown will wait for it, and no guarantee it won't. The
+fix is one small state machine, guarded by one lock that is never held
+across a blocking call:
+
+```python
+class _State(Enum):
+    NOT_STARTED = auto()
+    RUNNING = auto()
+    STOPPING = auto()
+    STOPPED = auto()
+
+class CommittedBarIntakeWorker:
+    def __init__(self, intake, orchestrator, logger) -> None:
+        self._intake = intake
+        self._orchestrator = orchestrator
+        self._logger = logger
+        self._lifecycle_lock = threading.Lock()   # short-held only
+        self._stop_lock = threading.Lock()        # serializes stop_once()
+        self._state = _State.NOT_STARTED
+        self._thread: threading.Thread | None = None
+
+    def _run(self) -> None:
+        while True:
+            try:
+                event = self._intake.get(timeout=0.2)
+            except queue.Empty:
+                with self._lifecycle_lock:
+                    if self._state is not _State.RUNNING:
+                        return
+                continue
+
+            with self._lifecycle_lock:
+                if self._state is not _State.RUNNING:
+                    # stop_once() already transitioned RUNNING -> STOPPING
+                    # before this event could become "current". Discard it.
+                    self._intake.task_done()
+                    return
+                # Still RUNNING: this exact event becomes current *before*
+                # the lock is released, so any stop_once() call that
+                # acquires the lock immediately afterward is guaranteed to
+                # see a RUNNING state that it must wait out, not a state it
+                # can transition out from under this event.
+                current = event
+
+            try:
+                self._orchestrator.process(current)
+            except Exception:
+                self._logger.exception(
+                    "committed-bar intake worker failed to process one event"
+                )
+            finally:
+                self._intake.task_done()
+```
+
+The lifecycle lock is held only for the state check and the handoff of
+`current` — never across `self._intake.get(...)` (which can block up to
+0.2s) and never across `self._orchestrator.process(...)` (which can run for
+as long as the current committed-bar event's fan-out takes). This is what
+makes the earlier instruction — "do not hold the lifecycle lock while
+`orchestrator.process` executes" — true: the lock's only job is to make the
+*decision* of "does this event start" atomic with respect to `stop_once()`,
+not to serialize the processing itself.
+
+### `stop_once()` behavior, one case per starting state
+
+```python
+def stop_once(self) -> None:
+    with self._stop_lock:            # only one caller ever reaches the join
+        with self._lifecycle_lock:
+            if self._state is _State.NOT_STARTED:
+                self._state = _State.STOPPED
+                return                # never call join() on an unstarted thread
+            if self._state is _State.STOPPED:
+                return                # already fully stopped; no-op
+            # self._state is RUNNING here (STOPPING is unreachable while
+            # holding _stop_lock — see below)
+            self._state = _State.STOPPING
+            thread = self._thread
+        thread.join()                 # lock released; the worker thread may
+                                       # still need _lifecycle_lock in _run()
+        with self._lifecycle_lock:
+            self._state = _State.STOPPED
+```
+
+- **Called before `start()`**: state is `NOT_STARTED`; transitions directly
+  to `STOPPED` without ever constructing or joining a thread.
+- **Called while `RUNNING`**: transitions to `STOPPING` (which `_run()` will
+  observe at its next lock acquisition — either immediately, if it is idle
+  in `queue.Empty` handling or between events, or after finishing whatever
+  event is already current), then joins the thread, then marks `STOPPED`.
+- **Called after already `STOPPED`**: no-op, immediately.
+- **Called concurrently from two callers**: `_stop_lock` fully serializes
+  the entire method body, so the second caller blocks on `_stop_lock`
+  until the first caller has already driven the state to `STOPPED` and
+  returned. The second caller then acquires `_stop_lock`, observes
+  `STOPPED` under `_lifecycle_lock`, and returns without ever calling
+  `thread.join()` itself — **only the first caller performs the join**.
+
+This is why two locks exist rather than one: `_lifecycle_lock` is the
+fine-grained lock the worker thread itself must acquire (briefly) inside
+`_run()`, so it can never be held across `thread.join()` or the second
+caller would deadlock against the very thread it's trying to join.
+`_stop_lock` is the coarse lock that answers "has `stop_once()` already
+been called by someone else" without needing the worker thread's
+involvement at all.
 
 ## Concurrency invariants
 
@@ -68,12 +252,11 @@ bootstrap/
 max concurrent CommittedBarOrchestrator.process calls = 1
 ```
 
-This follows directly from there being exactly one consumer thread running
-a strictly sequential `while not stopped: event = queue.get(); orchestrator
-.process(event)` loop — never a thread pool, never `asyncio.gather`, never a
-second worker. The next `queue.get()` does not return until the previous
-`process(...)` call has returned (successfully or by raising, see "Per
--event failure isolation" below).
+This follows directly from there being exactly one consumer thread, and
+from the atomic stop/start boundary above guaranteeing that at most one
+event is ever "current" at a time — the next `self._intake.get(...)` call
+inside `_run()` does not execute until the previous `process(...)` call
+(and its `finally: self._intake.task_done()`) has already returned.
 
 ```text
 per strategy instance: max concurrent state-writing critical sections = 1
@@ -101,7 +284,11 @@ Different `strategy_instance_id` keys use different `threading.Lock`
 objects (`StrategyInstanceKeyedMutexRegistry.hold`), so a first-fill request
 for instance B proceeds immediately even while the intake worker holds
 instance A's lock. This change introduces no new lock that spans multiple
-instances — no global state mutex is added anywhere.
+instances — no global state mutex is added anywhere. (The worker's own
+`_lifecycle_lock`/`_stop_lock` guard only the worker's own start/stop/
+current-event bookkeeping; they have no relationship to
+`StrategyInstanceKeyedMutexRegistry` and are never held while any
+strategy-instance critical section is open.)
 
 ## HTTP endpoint change
 
@@ -110,7 +297,7 @@ instances — no global state mutex is added anywhere.
 async def closed_bar_webhook(
     request: ClosedBarRequest,
 ) -> AcceptedResponse | JSONResponse:
-    if not app.state.ready or app.state.committed_bar_intake_queue is None:
+    if not app.state.ready or app.state.committed_bar_intake is None:
         return JSONResponse(status_code=503, content=NotReadyResponse().model_dump())
     try:
         committed_bar = CommittedBarEvent(
@@ -119,8 +306,23 @@ async def closed_bar_webhook(
             open_time_ms=request.open_time_ms,
         )
         _trace_id = app.state.trace_id_factory()
-        app.state.committed_bar_intake_queue.put_nowait(committed_bar)
+        app.state.committed_bar_intake.put_nowait(committed_bar)
+    except IntakeNotAccepting:
+        app.state.logger.warning(
+            "closed-bar rejected: intake_stopping",
+            instrument=committed_bar.instrument,
+            timeframe=committed_bar.timeframe,
+            open_time_ms=committed_bar.open_time_ms,
+        )
+        return JSONResponse(status_code=503, content=NotReadyResponse().model_dump())
     except queue.Full:
+        app.state.logger.error(
+            "closed-bar rejected: queue_full",
+            instrument=committed_bar.instrument,
+            timeframe=committed_bar.timeframe,
+            open_time_ms=committed_bar.open_time_ms,
+            capacity=app.state.committed_bar_queue_capacity,
+        )
         return JSONResponse(status_code=503, content=NotReadyResponse().model_dump())
     except Exception:
         app.state.logger.exception("Failed to accept closed-bar webhook")
@@ -132,71 +334,51 @@ async def closed_bar_webhook(
 is no longer a per-request background unit. `_trace_id` continues to be
 generated and discarded, matching the existing, unmodified "Runtime reserves
 an internal trace hook" requirement — this change does not plumb `trace_id`
-into the queue or the worker.
+into the boundary or the worker.
 
-### Reusing `NotReadyResponse` for queue-full, deliberately
+### Reusing `NotReadyResponse` for both rejection reasons, deliberately
 
-The queue-full case reuses the existing `503 NotReadyResponse` envelope
-(`{"status": "not_ready"}`) rather than introducing a new response model.
-This is a deliberate choice, not an oversight: from the caller's
-perspective (MDS's notifier, per the companion change) any non-success
-response is already treated identically — logged, dropped, not retried — so
-a wire-level distinction between "not ready" and "queue full" would add a
-new public contract with no corresponding consumer behavior to justify it.
-Operators distinguish the two causes server-side, through Runtime's logs
-(the worker/queue emits its own diagnostic on a full-queue rejection,
-distinct from the readiness-gate log path), not through the HTTP response
-shape. If a future consumer needs to distinguish these cases over the wire,
-that is a new, separately justified change — not introduced speculatively
-here.
+Both the queue-full case and the intake-stopping case reuse the existing
+`503 NotReadyResponse` envelope (`{"status": "not_ready"}`) rather than
+introducing a new response model. This is a deliberate choice, not an
+oversight: from the caller's perspective (MDS's notifier, per the companion
+change) any non-success response is already treated identically — logged,
+dropped, not retried — so a wire-level distinction between these cases and
+the pre-existing "not ready" case would add a new public contract with no
+corresponding consumer behavior to justify it. Operators distinguish the
+causes server-side, through Runtime's logs (see the next section), not
+through the HTTP response shape. If a future consumer needs to distinguish
+these cases over the wire, that is a new, separately justified change — not
+introduced speculatively here.
 
-A rejected-for-capacity request creates **zero** processing work: the event
-is never constructed into a queue item, `CommittedBarOrchestrator.process`
-is never invoked, and no thread is spawned — this differs from today's
-behavior only in that today's endpoint has no rejection path at all for this
-condition (every accepted request always got a `BackgroundTasks` unit,
-however many were already in flight).
+A rejected-for-capacity or rejected-for-shutdown request creates **zero**
+processing work: `CommittedBarOrchestrator.process` is never invoked and no
+thread is spawned for it.
 
-## Queue-full behavior
+## Queue-full and intake-stopped rejections are logged with distinct reasons
 
-`queue.put_nowait(...)` raises `queue.Full` synchronously when the queue is
-at `committed_bar_queue_capacity`. The handler catches exactly this
-exception (not a bare `except Exception`, so a real construction error in
-`CommittedBarEvent(...)` still falls through to the existing `500` path) and
-returns the `503`/`not_ready` response described above. Because the wire
-response for this case is the generic, pre-existing `NotReadyResponse`
-envelope (deliberately not a new public contract — see "Reusing
-`NotReadyResponse`" above), the HTTP handler SHALL also emit one
-server-side log line for the rejection, at the point it catches `queue.Full`,
-containing exactly `instrument`, `timeframe`, `open_time_ms` (from the
-already-validated `committed_bar` that failed to enqueue), and the
-configured `committed_bar_queue_capacity` — this is the only place an
-operator can distinguish a queue-full rejection from a startup-not-ready
-rejection, since both currently produce the identical wire response. The
-worker thread logs nothing extra for a rejection that never reached the
-queue — it has no visibility into requests it never received; the HTTP
-layer is the sole point where a full-queue rejection is observed and must
-be logged.
+Both rejection paths produce the identical `503`/`not_ready` wire response,
+so the HTTP handler is the sole place either is observable, and it SHALL
+log them distinguishably:
+
+- **`queue_full`**: `put_nowait` raised `queue.Full` — the boundary was
+  still accepting, but had no capacity. Logged at `ERROR`, containing
+  `instrument`, `timeframe`, `open_time_ms`, and the configured
+  `committed_bar_queue_capacity`.
+- **`intake_stopping`** (also acceptable: `not_accepting`): `put_nowait`
+  raised `IntakeNotAccepting` — `stop_accepting()` had already run.
+  Logged at `WARNING` (this is an expected, not exceptional, consequence of
+  an in-progress shutdown, unlike `queue_full` which signals undersized
+  capacity), containing the same `instrument`/`timeframe`/`open_time_ms`.
+
+The worker thread logs nothing extra for either rejection — it has no
+visibility into requests it never received; the HTTP layer is the sole
+point where either rejection is observed and must be logged.
 
 ## Per-event failure isolation
 
-```python
-def _run(self) -> None:
-    while not self._stop_event.is_set():
-        try:
-            event = self._queue.get(timeout=0.2)
-        except queue.Empty:
-            continue
-        try:
-            self._orchestrator.process(event)
-        except Exception:
-            self._logger.exception(
-                "committed-bar intake worker failed to process one event"
-            )
-        finally:
-            self._queue.task_done()
-```
-
+Failure isolation is unchanged in substance from the atomic-boundary
+pseudocode already shown above under "Atomic stop/start boundary":
 `CommittedBarOrchestrator.process` already isolates *per-strategy-instance*
 dispatch failures internally (`StrategyCycleDispatchOutcome.failed(...)`,
 recorded via `JsonlProcessingJournal`) and only raises out of `process(...)`
@@ -205,18 +387,18 @@ for an upstream preparation failure (`CommittedBarPreparationError` — a
 was dispatched, per the existing `committed-bar-orchestrator` capability).
 The worker's own `try`/`except` around `process(...)` exists specifically to
 survive that outer failure mode: one event whose catalog load or selection
-raises is logged and discarded, and the loop continues to the next queued
-event without the worker thread dying. This is the same "log through the
-existing journal/error boundary, keep processing" posture already
-established for per-instance failures — this change extends it one layer
-up, to the whole-event level, without inventing a second journaling
-mechanism.
+raises is logged and the loop continues to the next queued event (dequeued
+through the same atomic check) without the worker thread dying. This is the
+same "log through the existing journal/error boundary, keep processing"
+posture already established for per-instance failures — this change extends
+it one layer up, to the whole-event level, without inventing a second
+journaling mechanism.
 
 ## FIFO and duplicate handling
 
-The queue is a plain FIFO (`queue.Queue`'s native ordering) — accepted
-events are processed in the exact order they were enqueued. No
-deduplication is performed at the queue boundary: a duplicate
+The boundary preserves plain FIFO ordering (`queue.Queue`'s native
+ordering) — accepted events are processed in the exact order they were
+enqueued. No deduplication is performed at the boundary: a duplicate
 `CommittedBarEvent` (same `instrument`/`timeframe`/`open_time_ms`, e.g. from
 an MDS-side retry or a race) is enqueued and processed exactly like any
 other event, and the existing downstream idempotency
@@ -229,37 +411,12 @@ in-memory set is introduced by this change.
 ## Lifecycle
 
 `CommittedBarIntakeWorker.start()` spawns the single, non-daemon consumer
-thread exactly once; calling it a second time is not a supported operation
-(mirrors `_OutboundHttpClientLifecycle`'s single-owner posture — there is
-exactly one call site).
+thread exactly once and transitions `NOT_STARTED -> RUNNING`; calling it a
+second time is not a supported operation.
 
-### Clean-shutdown contract
+### Shutdown sequence
 
-A non-daemon thread executing `CommittedBarOrchestrator.process(event)` —
-a synchronous, potentially multi-instance-fan-out call — cannot be
-interrupted mid-call by setting a `threading.Event`. The event is only
-observed at the worker's own loop boundary, *after* whatever call is
-currently running has already returned. Shutdown is therefore defined as a
-fixed sequence, not a fixed time bound:
-
-1. FastAPI lifespan shutdown calls `intake_worker.stop_once()`.
-2. `stop_once()` sets an internal stop flag. From this point, the worker
-   will not start processing any further queued item, however many remain.
-3. Any event still sitting in the queue, not yet dequeued, is discarded —
-   the worker does not drain or process it.
-4. If one event is currently being processed
-   (`orchestrator.process(event)` already running) when the stop flag is
-   set, shutdown does **not** interrupt it: `stop_once()` blocks until that
-   specific call returns, whether it returns normally or raises.
-5. Once the worker thread has fully exited — the current event (if any)
-   finished, no next event started, the thread function returned — and
-   only then, do the four shared outbound HTTP clients (Strategy Engine
-   live-entry/open-trade, ABI open-position/entry-package) get closed via
-   the existing `lifecycle.close_all_once()`. This ordering is required,
-   not incidental: closing those clients while the worker thread might
-   still be mid-call, using one of them to finish its current event, would
-   be a lifecycle violation — an in-flight call could observe a closed
-   client.
+Shutdown is three ordered steps, not a single call:
 
 ```python
 @asynccontextmanager
@@ -268,51 +425,89 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        intake_worker.stop_once()  # blocks until the worker thread has
-                                    # fully exited (steps 1-5 above) before
-                                    # returning
+        intake.stop_accepting()
+        await asyncio.to_thread(intake_worker.stop_once)
         lifecycle.close_all_once()
 ```
 
-### `stop_once()` joins without an arbitrary bounded timeout
+1. **`intake.stop_accepting()`** — synchronous, instantaneous (one lock
+   acquisition). From this point, every new webhook request is rejected
+   with `intake_stopping` (see above); no further event can enter the
+   boundary. This runs directly on the event-loop thread — it never blocks.
+2. **`await asyncio.to_thread(intake_worker.stop_once)`** — offloaded to a
+   thread because `stop_once()` can call `thread.join()`, which is a
+   blocking call with no bound of its own (see "Shutdown's actual bound" and
+   "Do not block the event loop during join" below). Awaiting the
+   offloaded call still means this coroutine does not proceed to step 3
+   until `stop_once()` has fully returned, but it does **not** block the
+   event loop's other work while waiting — other scheduled coroutines
+   continue to run on the loop during this wait.
+3. **`lifecycle.close_all_once()`** — closes the four shared outbound HTTP
+   clients. This step only runs after step 2's `await` has completed, i.e.
+   only after the worker thread has fully exited (any event that was
+   `current` when `stop_accepting()`/`stop_once()` ran has already finished,
+   successfully or by raising). This ordering is required, not incidental:
+   closing those clients before the worker thread has exited could let its
+   still-in-flight `orchestrator.process(...)` call observe an
+   already-closed client.
 
-`stop_once()` sets the stop flag, then calls `self._thread.join()` with
-**no timeout** — not a small, arbitrary bounded one. A bounded join (for
-example, a fixed few-hundred-millisecond timeout) would be incorrect here:
-`Thread.join(timeout=...)` can return while the thread is still alive, and
-if `stop_once()` treated that return as "stopped," `lifecycle
-.close_all_once()` could run concurrently with the worker's still-in-flight
-outbound calls.
+### Do not block the event loop during join
 
-Clean shutdown's real bound is **not** the worker's idle-poll interval
-(`queue.get(timeout=0.2)`, which only bounds how quickly an *idle* worker
-notices the stop flag) — it is the completion time of whatever
-`orchestrator.process(event)` call happens to be running when shutdown
-begins. That, in turn, is bounded by the existing, already-configured,
-finite outbound timeouts each downstream adapter call already enforces
-(`RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS`,
+FastAPI's lifespan is an async context manager running on the event loop.
+Calling `intake_worker.stop_once()` directly (unwrapped) from `_lifespan`
+would call a potentially long, purely synchronous `Thread.join()` on the
+event-loop thread itself, blocking every other coroutine scheduled on that
+loop for the duration — the same class of problem this change's MDS-facing
+`asyncio.to_thread` usage (in the companion change) exists to avoid, now on
+the Runtime side during shutdown. `await asyncio.to_thread(intake_worker
+.stop_once)` offloads the call to a worker thread from the interpreter's
+thread pool, so the event loop remains free to run other scheduled
+coroutines while this coroutine awaits that offloaded call's completion.
+
+### Shutdown's actual bound — an accepted tradeoff, not a hang-proof guarantee
+
+Clean shutdown deliberately waits for whichever one committed-bar event was
+`current` at the moment shutdown began (if any) to finish, rather than
+interrupting it. That wait's *network* portion is bounded by the existing,
+already-configured, finite outbound timeouts each downstream adapter call
+already enforces (`RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS`,
 `RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS`,
 `RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS`), multiplied by however many
 sequential per-instance dispatches remain in that one committed-bar event's
-fan-out. This change introduces no new timeout of its own — it relies
-entirely on those existing, already-enforced outbound timeouts to guarantee
-the current event eventually finishes (successfully or by raising) and the
-thread exits, which is what makes an untimed `join()` safe rather than a
-risk of hanging forever.
+fan-out.
 
-`stop_once()` is idempotent (mirrors `_OutboundHttpClientLifecycle
-.close_all_once`'s existing pattern): a second call, after the first has
-already joined the thread, is a no-op — it does not attempt to join an
-already-exited thread a second time and does not raise.
+This change does **not** claim that those finite HTTP timeouts make the
+untimed `thread.join()` provably safe against ever hanging. They bound only
+the *network* operations inside `process(...)`. Local work inside the same
+call — deployment-catalog file access, acquiring
+`StrategyInstanceKeyedMutexRegistry`'s per-instance lock, in-memory
+repository reads/writes, or an unanticipated defect (an infinite loop, a
+deadlock elsewhere in the call graph) — is given **no new hard deadline** by
+this change. The worker layer introduces no forced interruption and no hard
+shutdown timeout of its own: if the current event's local work never
+returns, `stop_once()`'s `thread.join()` genuinely waits forever, and so
+does the `await asyncio.to_thread(...)` in `_lifespan`.
+
+This is an accepted clean-shutdown tradeoff for Live V1, not a proven
+safety property: the alternative (a hard shutdown timeout that abandons the
+worker thread) would risk closing the four shared outbound HTTP clients
+while that thread is still using one of them — a worse, silent-corruption
+-shaped failure mode than a shutdown that occasionally takes longer than
+expected. No forced-interruption or hard-timeout mechanism is introduced by
+this change to close that gap; if a real production need for one is later
+observed, it is a separate, explicitly scoped decision.
+
+`stop_once()` remains idempotent as already specified above: a second call,
+after the first has already driven the state to `STOPPED`, is a no-op.
 
 When `build_application` fails partway through construction (the existing
 startup-rollback path), the intake worker is either never started (if
 failure occurs before its construction step) or is stopped — following the
-exact same clean-shutdown contract above, worker-join before client-close —
-as part of the same rollback path that already closes the four outbound
-HTTP clients. No `ready=True` application is ever returned with a worker
-that wasn't properly started, and no `ready=False` application is ever
-returned with an orphaned running worker thread.
+exact same shutdown sequence above, `stop_accepting` then `stop_once` then
+client-close — as part of the same rollback path that already closes the
+four outbound HTTP clients. No `ready=True` application is ever returned
+with a worker that wasn't properly started, and no `ready=False`
+application is ever returned with an orphaned running worker thread.
 
 ## Configuration
 
@@ -325,8 +520,8 @@ check. Default used in deployment examples and documentation: **256**.
 
 ### Capacity is required and positive; no comfortable-coverage claim is made
 
-The queue holds raw accepted `CommittedBarEvent`s, not per-strategy-instance
-dispatch tickets — one webhook occupies one queue slot regardless of how
+The boundary holds raw accepted `CommittedBarEvent`s, not per-strategy
+-instance dispatch tickets — one webhook occupies one slot regardless of how
 many strategy instances its deployment selection later fans out to. The
 realistic worst case this queue must absorb is therefore bounded by how many
 *distinct MDS streams* (`instrument × timeframe` pairs) can commit within
@@ -366,11 +561,11 @@ is a safety property of this change, not a performance knob.
 This change does not add, remove, or enforce any code-level guard against
 running Runtime with `uvicorn --workers N > 1` or multiple replicas — that
 gap already exists today (confirmed: no such guard exists anywhere in the
-repository) and is out of scope for this change. The intake queue and its
-worker are process-local Python objects (`queue.Queue`, `threading.Thread`);
-running more than one Runtime process or worker would give each its own
-independent queue with no coordination between them, exactly mirroring the
-pre-existing, already-documented constraint on
+repository) and is out of scope for this change. The intake boundary and its
+worker are process-local Python objects (`queue.Queue`, `threading.Thread`,
+`threading.Lock`); running more than one Runtime process or worker would
+give each its own independent boundary with no coordination between them,
+exactly mirroring the pre-existing, already-documented constraint on
 `StrategyInstanceKeyedMutexRegistry` ("Live V1 coordination makes no
 cross-process guarantee"). This change treats that as an accepted,
 already-established Live V1 boundary, not a new one it introduces.

@@ -33,8 +33,8 @@ accepted closed-bar notification and SHALL currently discard it without
 propagating it into queued processing.
 
 #### Scenario: Create identity before queue handoff
-- **WHEN** a valid request passes readiness checks and the intake queue has
-  capacity
+- **WHEN** a valid request passes readiness checks and the intake boundary
+  is still accepting and has capacity
 - **THEN** Runtime creates one `trace_id`
 - **AND** enqueues the validated `CommittedBarEvent` alone into the intake
   queue
@@ -47,14 +47,15 @@ propagating it into queued processing.
 
 #### Scenario: Rejected requests have no accepted flow
 - **WHEN** Runtime rejects a request before acceptance, whether for
-  validation, readiness, or intake-queue-capacity reasons
+  validation, readiness, intake-queue-capacity, or intake-stopping
+  (shutdown already in progress) reasons
 - **THEN** Runtime does not create an accepted flow for that request
 - **AND** does not enqueue anything for that request
 
 ### Requirement: Runtime reports pre-acceptance failures
 Strategy Runtime SHALL distinguish request validation, readiness,
-intake-queue-capacity, and unexpected internal failures that happen before
-acceptance.
+intake-queue-capacity, intake-stopping, and unexpected internal failures
+that happen before acceptance.
 
 #### Scenario: Runtime is not ready
 - **WHEN** the process is live but startup readiness is false
@@ -70,11 +71,24 @@ acceptance.
 - **AND** does not enqueue the request's event
 - **AND** does not invoke `CommittedBarOrchestrator.process` or create any
   other processing work for the rejected request
-- **AND** Runtime emits one server-side log line containing the rejected
-  event's `instrument`, `timeframe`, `open_time_ms`, and the configured
-  queue capacity — the wire response alone does not distinguish this case
-  from "Runtime is not ready," since both reuse the same `not_ready`
-  envelope
+- **AND** Runtime emits one server-side log line, reason `queue_full`,
+  containing the rejected event's `instrument`, `timeframe`,
+  `open_time_ms`, and the configured queue capacity — the wire response
+  alone does not distinguish this case from "Runtime is not ready" or from
+  "intake is stopping," since all three reuse the same `not_ready` envelope
+
+#### Scenario: Intake has stopped accepting (shutdown in progress)
+- **WHEN** Runtime is ready but shutdown has already called
+  `stop_accepting()` on the intake boundary — regardless of whether the
+  boundary currently has spare capacity
+- **THEN** the closed-bar endpoint returns `503 Service Unavailable`
+- **AND** returns `{"status":"not_ready"}`
+- **AND** does not enqueue the request's event
+- **AND** does not invoke `CommittedBarOrchestrator.process` or create any
+  other processing work for the rejected request
+- **AND** Runtime emits one server-side log line, reason `intake_stopping`
+  (distinct from `queue_full`), containing the rejected event's
+  `instrument`, `timeframe`, and `open_time_ms`
 
 #### Scenario: Unexpected failure before acceptance
 - **WHEN** an unexpected internal failure occurs before Runtime accepts the

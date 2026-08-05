@@ -85,22 +85,31 @@ be implemented, tested, and rolled back independently.
 
 - **MODIFIED** `http-closed-bar`: `POST /v1/webhooks/closed-bar` stops using
   `fastapi.BackgroundTasks.add_task(...)` and instead performs one bounded,
-  non-blocking enqueue onto a new intake queue. Acceptance semantics
-  (`200 {"status":"accepted"}` means "accepted into a volatile queue," not
-  "processed") are preserved; the trace-id-generated-then-discarded behavior
-  is preserved unchanged; validation and not-ready semantics are preserved
-  unchanged. **BREAKING** for the specific case of a full queue: this
-  previously-unbounded endpoint now has a bounded intake capacity and can
-  return `503` for a reason other than "not ready."
+  non-blocking `put_nowait` onto a new intake boundary
+  (`CommittedBarIntakeBoundary`, wrapping a bounded `queue.Queue`).
+  Acceptance semantics (`200 {"status":"accepted"}` means "accepted into a
+  volatile queue," not "processed") are preserved; the
+  trace-id-generated-then-discarded behavior is preserved unchanged;
+  validation and not-ready semantics are preserved unchanged. **BREAKING**
+  for two specific rejection cases beyond today's behavior: a full queue,
+  and a request arriving after shutdown has begun calling
+  `stop_accepting()` — both return `503` for a reason other than "not
+  ready," and are logged with distinct server-side reasons (`queue_full`
+  vs. `intake_stopping`) even though both reuse the existing wire envelope.
 - **ADDED** `committed-bar-intake-queue`: a new capability defining the
-  bounded FIFO queue, its exactly-one consumer worker, queue-full behavior,
-  and per-event failure isolation.
+  bounded FIFO intake boundary, its exactly-one consumer worker (with an
+  atomic, race-free start/stop state machine — see design.md), the
+  stop-accepting-before-shutdown behavior, queue-full/intake-stopping
+  rejection logging, and per-event failure isolation.
 - **MODIFIED** `runtime-production-composition`: the composition root
-  constructs the intake queue and its single worker exactly once, wires the
-  worker's target to the existing (unmodified) `CommittedBarOrchestrator
+  constructs the intake boundary and its single worker exactly once, wires
+  the worker's target to the existing (unmodified) `CommittedBarOrchestrator
   .process`, adds one new required configuration field
-  (`RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY`), and documents the fixed,
-  non-configurable worker count of exactly one.
+  (`RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY`), documents the fixed,
+  non-configurable worker count of exactly one, and sequences shutdown as
+  `stop_accepting()` → offloaded `stop_once()` (via `asyncio.to_thread`, so
+  the event loop is never blocked by the worker's join) → outbound-client
+  close.
 
 ## What Does Not Change
 
@@ -143,6 +152,13 @@ be implemented, tested, and rolled back independently.
   reprocessing an identical committed bar a safe no-op, so adding a second
   dedup mechanism at the queue would duplicate existing behavior for no
   correctness benefit.
+- Shutdown deliberately waits for one already-current committed-bar event to
+  finish rather than interrupting it. Its network operations are bounded by
+  existing finite Engine/ABI timeouts, but its local work (catalog access,
+  mutex waits, repository operations) is given no new hard deadline by this
+  change — the worker introduces no forced interruption or hard shutdown
+  timeout. This is an accepted clean-shutdown tradeoff for Live V1, not a
+  claim that shutdown is proven never to hang.
 
 ## Capabilities
 
@@ -156,8 +172,10 @@ be implemented, tested, and rolled back independently.
 
 - `http-closed-bar` — the webhook handler enqueues instead of scheduling a
   `BackgroundTasks` unit; acceptance no longer implies an unbounded amount of
-  concurrently-scheduled background work; a new queue-full failure mode is
-  introduced alongside the existing not-ready and validation failure modes.
+  concurrently-scheduled background work; two new failure modes are
+  introduced alongside the existing not-ready and validation failure modes
+  — queue-full and intake-stopping (post-shutdown-start) — both returning
+  the existing `503` envelope but logged with distinct server-side reasons.
 - `runtime-production-composition` — the composition root gains ownership of
   the intake queue and worker lifecycle, one new required configuration
   field, and an explicit, non-configurable worker-count-of-one constraint.
