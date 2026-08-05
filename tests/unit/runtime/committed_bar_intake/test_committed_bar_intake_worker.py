@@ -113,6 +113,98 @@ def test_start_called_twice_raises_instead_of_silently_no_opping() -> None:
         worker.stop_once()
 
 
+def test_start_vs_stop_once_race_stop_cannot_join_an_unstarted_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """start() must publish RUNNING and hand the OS-level thread.start() to
+    completion as one atomic step under `_lifecycle_lock` -- a concurrent
+    stop_once() must not be able to observe RUNNING (and attempt to join)
+    before the real `Thread.start()` call has actually happened."""
+    intake = CommittedBarIntakeBoundary(capacity=8)
+    orchestrator = RecordingOrchestrator()
+    worker = CommittedBarIntakeWorker(intake, orchestrator, _LOGGER)  # type: ignore[arg-type]
+
+    start_paused = threading.Event()
+    release_start = threading.Event()
+    real_thread_start = threading.Thread.start
+
+    def _paused_thread_start(self: threading.Thread) -> None:
+        if self.name == "committed-bar-intake-worker":
+            start_paused.set()
+            assert release_start.wait(timeout=5), "release_start was never set"
+        real_thread_start(self)
+
+    monkeypatch.setattr(threading.Thread, "start", _paused_thread_start)
+
+    start_errors: list[BaseException] = []
+
+    def _invoke_start() -> None:
+        try:
+            worker.start()
+        except BaseException as exc:  # pragma: no cover - captured for assertion
+            start_errors.append(exc)
+
+    start_thread = threading.Thread(target=_invoke_start)
+    start_thread.start()
+    assert start_paused.wait(timeout=2), "start() never reached the paused thread.start() call"
+
+    stop_once_returned = threading.Event()
+    stop_errors: list[BaseException] = []
+
+    def _invoke_stop() -> None:
+        try:
+            worker.stop_once()
+        except BaseException as exc:  # pragma: no cover - captured for assertion
+            stop_errors.append(exc)
+        else:
+            stop_once_returned.set()
+
+    stop_thread = threading.Thread(target=_invoke_stop)
+    stop_thread.start()
+
+    # While the worker's own thread.start() is paused, stop_once() cannot
+    # even acquire _lifecycle_lock to observe RUNNING, let alone reach
+    # thread.join() on a thread that has not actually started yet -- which
+    # would otherwise raise RuntimeError("cannot join thread before it is
+    # started").
+    assert not stop_once_returned.wait(timeout=0.3)
+
+    release_start.set()
+    start_thread.join(timeout=5)
+    stop_thread.join(timeout=5)
+
+    assert start_errors == []
+    assert stop_errors == []
+    assert stop_once_returned.is_set()
+    assert worker.state == "STOPPED"
+    assert not worker._thread.is_alive()  # type: ignore[union-attr]
+
+
+def test_start_thread_start_failure_leaves_worker_stopped_with_no_live_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    intake = CommittedBarIntakeBoundary(capacity=8)
+    orchestrator = RecordingOrchestrator()
+    worker = CommittedBarIntakeWorker(intake, orchestrator, _LOGGER)  # type: ignore[arg-type]
+
+    def _raising_thread_start(self: threading.Thread) -> None:
+        if self.name == "committed-bar-intake-worker":
+            raise RuntimeError("simulated OS thread creation failure")
+
+    monkeypatch.setattr(threading.Thread, "start", _raising_thread_start)
+
+    with pytest.raises(RuntimeError, match="simulated OS thread creation failure"):
+        worker.start()
+
+    assert worker.state == "STOPPED"
+
+    # stop_once() afterward is a safe no-op: no exception, no join attempt.
+    worker.stop_once()
+    assert worker.state == "STOPPED"
+
+    assert not any(thread.name == "committed-bar-intake-worker" for thread in threading.enumerate())
+
+
 def test_stop_once_before_start_transitions_directly_to_stopped_without_joining() -> None:
     intake = CommittedBarIntakeBoundary(capacity=8)
     orchestrator = RecordingOrchestrator()

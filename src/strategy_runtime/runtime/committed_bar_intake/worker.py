@@ -46,17 +46,26 @@ class CommittedBarIntakeWorker:
         return self._state.name
 
     def start(self) -> None:
+        thread = threading.Thread(
+            target=self._run,
+            name="committed-bar-intake-worker",
+            daemon=False,
+        )
         with self._lifecycle_lock:
             if self._state is not _State.NOT_STARTED:
                 raise RuntimeError("CommittedBarIntakeWorker.start() called more than once")
-            self._state = _State.RUNNING
-            thread = threading.Thread(
-                target=self._run,
-                name="committed-bar-intake-worker",
-                daemon=False,
-            )
             self._thread = thread
-        thread.start()
+            self._state = _State.RUNNING
+            try:
+                thread.start()
+            except BaseException:
+                # thread.start() raised before the OS thread ever began
+                # running _run(): no thread exists to join, so the worker
+                # goes directly to one explicit terminal state instead of
+                # being left RUNNING (a lie) or STOPPING (implies a join is
+                # still owed). stop_once() afterward is then a plain no-op.
+                self._state = _State.STOPPED
+                raise
 
     def stop_once(self) -> None:
         with self._stop_lock:

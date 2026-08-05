@@ -21,6 +21,14 @@
       apart for logging purposes (see task 3).
 - [x] `get(timeout)` and `task_done()` are worker-only (single consumer);
       they delegate directly to the underlying `queue.Queue`.
+- [x] `CommittedBarIntakeBoundary.__init__` SHALL validate its own
+      `capacity` argument locally (`type(capacity) is int` and `capacity >
+      0`, `ValueError` otherwise, `bool` explicitly rejected) before
+      constructing the underlying `queue.Queue` — `queue.Queue(maxsize=0)`
+      and negative `maxsize` both silently mean "unbounded" to the standard
+      library, so this local invariant is what actually prevents this
+      boundary from ever becoming one, independent of and in addition to
+      `RuntimeConfig`'s own production-configuration gate.
 
 ## 2. Worker with atomic stop/start boundary
 
@@ -144,6 +152,22 @@
 - [x] Expose the constructed boundary and worker on `app.state` (mirroring
       how `state_repository`/`keyed_mutex_registry`/`outbound_http_clients`
       are already exposed) for test and operational access.
+- [x] `intake_worker.start()` SHALL be called *inside* `_lifespan`'s `try`
+      block, not before it, so that if `start()` itself raises, the
+      `finally` block's full cleanup sequence (`stop_accepting()`,
+      offloaded `stop_once()`, `close_all_once()`) still runs before the
+      original startup error propagates uncaught — no swallowed error, no
+      faked `ready`-shaped outcome, and no orphaned worker thread.
+- [x] `CommittedBarIntakeWorker.start()` SHALL publish `RUNNING` and call
+      the real `thread.start()` as one atomic step under `_lifecycle_lock`
+      (constructing the `Thread` object first, outside the lock, but not
+      calling `.start()` on it until the lock is held), so a concurrent
+      `stop_once()` can never observe `RUNNING` before the underlying OS
+      thread has actually been started — closing the race where
+      `stop_once()` could otherwise call `.join()` on a thread that was
+      never really started. If `thread.start()` itself raises, the worker
+      transitions directly to `STOPPED` (not left `RUNNING`/`STOPPING`)
+      before the original exception is re-raised.
 
 ## 5. Verification — HTTP boundary
 
@@ -219,18 +243,31 @@
       (`StrategyRuntimeOrchestrator.process`'s `with self
       ._keyed_mutex_registry.hold(...)`) remains held across the full
       state-load → engine-projection → reconciliation → state-save sequence
-      when invoked from the intake worker thread (adapt or reuse the
-      existing keyed-coordination test approach against the new call path).
+      when invoked from the intake worker thread. Proven by
+      `test_first_fill_waits_for_the_real_strategy_runtime_orchestrator_critical_section`
+      in
+      `tests/integration/http/test_first_fill_shared_writer_serialization.py`,
+      which drives the real, unmodified `StrategyRuntimeOrchestrator` (and
+      `EntryReconciliationOrchestrator`) through the real intake worker
+      thread, with fakes only at `StrategyRuntimeOrchestrator`'s own
+      established collaborator ports (open-position resolution, Engine
+      use-case routing, reconciliation execution) — not a direct
+      mutex-holding stand-in dispatcher. (The earlier, simpler
+      `_GatedMutexHoldingDispatcher`-based tests in the same file remain, but
+      only prove the intake worker's dispatch call path reaches the shared
+      registry — they are not what proves this specific requirement.)
 - [x] Test: a first-fill request for the same `strategy_instance_id` as an
-      in-flight committed-bar cycle blocks until the intake worker's
+      in-flight committed-bar cycle blocks until the intake worker's real
       critical section releases, then observes the freshly saved state —
-      extend
-      `tests/integration/http/test_first_fill_shared_writer_serialization.py`
-      to exercise the new intake-worker call path instead of (or in
-      addition to) the removed `BackgroundTasks` path.
+      same test as above: first-fill is proven blocked (zero
+      `repository.get(...)` calls while the real cycle's Engine-projection
+      step is gated) and, once unblocked, freezes exactly the trade cycle
+      the real cycle applied and saved.
 - [x] Test: a first-fill request for a *different* `strategy_instance_id`
-      is not blocked while the intake worker holds another instance's
-      critical section (extend the same existing test file).
+      is not blocked while the intake worker holds another instance's real
+      critical section —
+      `test_different_instance_first_fill_completes_while_the_real_cycle_remains_blocked`,
+      same file.
 
 ## 8. Verification — idempotency and duplicates
 
@@ -323,6 +360,14 @@
       raises `ValueError` from `RuntimeConfig.__post_init__`.
 - [x] Test: a valid positive integer value is reflected exactly as the
       constructed boundary's underlying queue `maxsize`.
+- [x] `config/runtime.env.example` (the canonical deployment example
+      design.md's "Configuration" section refers to) includes
+      `RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY=256`. Test: reading the real
+      file, parsing its `KEY=VALUE` entries, and passing them to
+      `load_runtime_config` produces a valid configuration with
+      `committed_bar_queue_capacity == 256` — so a future required
+      variable missing from that file fails this test instead of only
+      being discovered at deployment time.
 
 ## 11. Multi-process guard documentation
 

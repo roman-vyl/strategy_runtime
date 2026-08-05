@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from strategy_runtime.bootstrap.application import build_application
+from strategy_runtime.runtime.committed_bar_intake import IntakeNotAccepting
 from strategy_runtime.utility.committed_bar import CommittedBarEvent, CommittedBarOrchestrator
 
 
@@ -397,3 +398,55 @@ def test_construction_failure_leaves_ready_false_with_no_running_worker(
         t for t in threading.enumerate() if t.name == "committed-bar-intake-worker"
     ]
     assert threads_named_intake_worker == []
+
+
+# ---------------------------------------------------------------------------
+# Lifespan-startup failure: intake_worker.start() raising must not skip
+# cleanup or be swallowed to fake a ready application.
+# ---------------------------------------------------------------------------
+
+
+def test_lifespan_startup_failure_still_runs_full_cleanup_and_propagates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    app = build_application(_valid_environ(tmp_path))
+    worker = app.state.committed_bar_intake_worker
+    intake = app.state.committed_bar_intake
+
+    real_thread_start = threading.Thread.start
+
+    def _raising_thread_start(self: threading.Thread) -> None:
+        if self.name == "committed-bar-intake-worker":
+            raise RuntimeError("simulated OS thread creation failure")
+        real_thread_start(self)
+
+    monkeypatch.setattr(threading.Thread, "start", _raising_thread_start)
+
+    async def _enter_and_exit_lifespan() -> None:
+        async with app.router.lifespan_context(app):
+            raise AssertionError("lifespan must fail before ever yielding")
+
+    with pytest.raises(RuntimeError, match="simulated OS thread creation failure"):
+        asyncio.run(_enter_and_exit_lifespan())
+
+    # The startup error was not swallowed to pretend readiness: it propagated
+    # out of the lifespan context manager (asserted above). Cleanup still ran
+    # in full despite that failure:
+    assert worker.state == "STOPPED"
+
+    with pytest.raises(IntakeNotAccepting):
+        intake.put_nowait(CommittedBarEvent("BTCUSDT.P", "5m", 1))
+
+    assert all(
+        client._client.is_closed  # type: ignore[attr-defined]
+        for client in app.state.outbound_http_clients
+    )
+
+    assert not any(thread.name == "committed-bar-intake-worker" for thread in threading.enumerate())
+
+    # stop_once() afterward remains a safe no-op against the start-failure
+    # terminal state.
+    worker.stop_once()
+    assert worker.state == "STOPPED"

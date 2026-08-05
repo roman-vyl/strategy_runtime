@@ -35,5 +35,6 @@ class RuntimeConfig:
             raise ValueError("RUNTIME_SPECS_PATH must not be empty")
         if not self.service_instance.strip():
             raise ValueError("RUNTIME_SERVICE_INSTANCE must not be empty")
-        if self.committed_bar_queue_capacity <= 0:
+        capacity = self.committed_bar_queue_capacity
+        if type(capacity) is not int or capacity <= 0:
             raise ValueError("RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY must be a positive integer")

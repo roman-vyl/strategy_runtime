@@ -421,14 +421,22 @@ Shutdown is three ordered steps, not a single call:
 ```python
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    intake_worker.start()
     try:
+        intake_worker.start()
         yield
     finally:
         intake.stop_accepting()
         await asyncio.to_thread(intake_worker.stop_once)
         lifecycle.close_all_once()
 ```
+
+`intake_worker.start()` is called *inside* the `try` block, not before it: if
+`start()` itself raises (for example, the underlying `thread.start()` fails),
+the `finally` block still runs in full — `stop_accepting()`,
+`stop_once()` (which is a safe no-op against the terminal state `start()`
+leaves the worker in when it fails to launch), and `close_all_once()` — and
+the original startup error still propagates out of the lifespan afterward,
+uncaught. No `ready=True`-shaped outcome is faked by swallowing that error.
 
 1. **`intake.stop_accepting()`** — synchronous, instantaneous (one lock
    acquisition). From this point, every new webhook request is rejected
@@ -517,6 +525,18 @@ integer, parsed with the same `_require_...`-style helper already used for
 `RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS` and friends, checked in
 `RuntimeConfig.__post_init__` alongside the existing `RUNTIME_PORT` bounds
 check. Default used in deployment examples and documentation: **256**.
+
+`CommittedBarIntakeBoundary.__init__` additionally validates its own
+`capacity` argument independently of `RuntimeConfig` (`type(capacity) is int`
+and `capacity > 0`, raising `ValueError` otherwise, `bool` included since
+`type(True) is not int`). This is a local invariant of the boundary itself,
+not a second copy of the production configuration gate: `queue.Queue(maxsize
+=0)` and `queue.Queue(maxsize=-1)` both silently mean *unbounded* to the
+standard library, so without this check a capacity value that reached the
+boundary un-validated (by construction, never possible via
+`build_application`'s own path, since `RuntimeConfig` already rejects it
+first) could silently defeat this change's core bound instead of failing
+loudly.
 
 ### Capacity is required and positive; no comfortable-coverage claim is made
 

@@ -119,6 +119,21 @@ def test_runtime_config_post_init_rejects_non_positive_committed_bar_queue_capac
         )
 
 
+def test_runtime_config_post_init_rejects_bool_committed_bar_queue_capacity() -> None:
+    """`bool` is a subclass of `int` in Python, but `True`/`False` are not
+    meaningful queue capacities -- direct construction must reject them
+    even though `True > 0` would otherwise pass a bare `<= 0` check."""
+    with pytest.raises(ValueError):
+        RuntimeConfig(
+            strategy_engine_base_url="http://engine.internal",
+            strategy_engine_timeout_seconds=5.0,
+            abi_base_url="http://abi.internal",
+            abi_open_position_timeout_seconds=5.0,
+            abi_entry_package_timeout_seconds=5.0,
+            committed_bar_queue_capacity=True,  # type: ignore[arg-type]
+        )
+
+
 @pytest.mark.parametrize(
     "name",
     ["RUNTIME_STRATEGY_ENGINE_BASE_URL", "RUNTIME_ABI_BASE_URL"],
@@ -157,3 +172,26 @@ def test_prepare_specs_path_creates_directory(tmp_path: Path) -> None:
     path = tmp_path / "nested" / "specs"
     prepare_specs_path(path)
     assert path.is_dir()
+
+
+def _parse_env_example(path: Path) -> dict[str, str]:
+    """Parse the canonical `KEY=VALUE` lines of `config/runtime.env.example`
+    without duplicating its contents, so a future required variable missing
+    from that file fails this test rather than going unnoticed."""
+    entries: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        key, _, value = stripped.partition("=")
+        entries[key.strip()] = value.strip()
+    return entries
+
+
+def test_canonical_runtime_env_example_is_a_valid_ready_configuration() -> None:
+    example_path = Path("config/runtime.env.example")
+    env = _parse_env_example(example_path)
+
+    config = load_runtime_config(env)
+
+    assert config.committed_bar_queue_capacity == 256

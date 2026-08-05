@@ -205,8 +205,8 @@ def build_application(
         @asynccontextmanager
         async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
             assert intake_worker is not None
-            intake_worker.start()
             try:
+                intake_worker.start()
                 yield
             finally:
                 committed_bar_intake.stop_accepting()

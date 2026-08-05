@@ -24,6 +24,14 @@ class CommittedBarIntakeBoundary:
     """
 
     def __init__(self, capacity: int) -> None:
+        if type(capacity) is not int or capacity <= 0:
+            # queue.Queue(maxsize=0) or a negative maxsize silently means
+            # "unbounded" -- reject here so this boundary can never become
+            # an accidental unbounded queue. `bool` is explicitly rejected
+            # too (`type(True) is not int`), since `True`/`False` are not
+            # meaningful queue capacities even though `bool` subclasses
+            # `int`.
+            raise ValueError("CommittedBarIntakeBoundary capacity must be a positive int")
         self._queue: queue.Queue[CommittedBarEvent] = queue.Queue(maxsize=capacity)
         self._accept_lock = threading.Lock()
         self._accepting = True

@@ -33,6 +33,21 @@ def test_capacity_is_reflected_exactly_as_the_underlying_queue_maxsize() -> None
     assert boundary.capacity == 17
 
 
+@pytest.mark.parametrize(
+    "capacity",
+    [0, -1, -256, True, False, 1.5, 8.0, "8"],
+    ids=["zero", "negative", "very_negative", "true", "false", "float", "whole_float", "string"],
+)
+def test_constructor_rejects_invalid_capacity(capacity: object) -> None:
+    with pytest.raises(ValueError):
+        CommittedBarIntakeBoundary(capacity)  # type: ignore[arg-type]
+
+
+def test_constructor_accepts_a_positive_int_capacity() -> None:
+    boundary = CommittedBarIntakeBoundary(1)
+    assert boundary.capacity == 1
+
+
 def test_put_nowait_raises_queue_full_at_capacity_without_evicting_existing_items() -> None:
     boundary = CommittedBarIntakeBoundary(capacity=1)
     boundary.put_nowait(_event(1))
