@@ -8,49 +8,34 @@ was processed.
 
 #### Scenario: Return before queued processing completes
 - **WHEN** Runtime accepts a valid closed-bar notification
-- **THEN** Runtime enqueues the validated event into the bounded
-  committed-bar intake queue
-- **AND** returns the HTTP acknowledgement without waiting for the intake
-  worker to dequeue or process that event
+- **THEN** Runtime enqueues the validated event into the bounded intake
+  queue and returns the acknowledgement without waiting for the intake
+  worker to dequeue or process it
 
-#### Scenario: Downstream failure does not change acknowledgement
-- **WHEN** queued processing fails after Runtime returned `200`
-- **THEN** the failure remains internal to Runtime
-- **AND** Runtime does not change or repeat the response to MDS
-
-#### Scenario: Acceptance does not imply trading success
-- **WHEN** Runtime returns `{"status":"accepted"}`
-- **THEN** the response does not assert that a strategy was discovered or
-  evaluated
-- **AND** does not assert that ABI or an exchange accepted or executed any
-  action
-- **AND** does not assert that the queued event will be processed before
-  the process next terminates or restarts
+#### Scenario: Downstream outcome never changes the acknowledgement
+- **WHEN** queued processing later fails, or the queued event is never
+  processed before the process terminates or restarts
+- **THEN** the failure or loss remains internal to Runtime
+- **AND** the response already sent to the caller is not changed or
+  repeated, and does not assert that a strategy was discovered or
+  evaluated, or that ABI or an exchange accepted or executed any action
 
 ### Requirement: Runtime reserves an internal trace hook for accepted notifications
 Strategy Runtime SHALL generate one internal trace identifier for each
 accepted closed-bar notification and SHALL currently discard it without
-propagating it into queued processing.
+propagating it into queued processing or the HTTP response.
 
-#### Scenario: Create identity before queue handoff
-- **WHEN** a valid request passes readiness checks and the intake boundary
-  is still accepting and has capacity
-- **THEN** Runtime creates one `trace_id`
-- **AND** enqueues the validated `CommittedBarEvent` alone into the intake
-  queue
-- **AND** does not place `trace_id` in the queued item, the orchestration
-  object graph, or the processing journal
-
-#### Scenario: Do not expose flow identity to MDS
-- **WHEN** Runtime accepts a closed-bar notification
-- **THEN** the HTTP response does not contain `trace_id`
+#### Scenario: Create identity before queue handoff, expose nothing
+- **WHEN** a valid request passes readiness checks and is enqueued
+- **THEN** Runtime creates one `trace_id`, enqueues the validated
+  `CommittedBarEvent` alone, and does not place `trace_id` in the queued
+  item, the orchestration object graph, the processing journal, or the
+  HTTP response
 
 #### Scenario: Rejected requests have no accepted flow
-- **WHEN** Runtime rejects a request before acceptance, whether for
-  validation, readiness, intake-queue-capacity, or intake-stopping
-  (shutdown already in progress) reasons
-- **THEN** Runtime does not create an accepted flow for that request
-- **AND** does not enqueue anything for that request
+- **WHEN** Runtime rejects a request before acceptance, for any reason
+- **THEN** Runtime does not create an accepted flow or enqueue anything
+  for that request
 
 ### Requirement: Runtime reports pre-acceptance failures
 Strategy Runtime SHALL distinguish request validation, readiness,
@@ -59,40 +44,33 @@ that happen before acceptance.
 
 #### Scenario: Runtime is not ready
 - **WHEN** the process is live but startup readiness is false
-- **THEN** the closed-bar endpoint returns `503 Service Unavailable`
-- **AND** returns `{"status":"not_ready"}`
-- **AND** does not accept the notification
+- **THEN** the closed-bar endpoint returns `503 {"status":"not_ready"}`
+  and does not accept the notification
 
 #### Scenario: Intake queue is at capacity
-- **WHEN** Runtime is ready and the bounded committed-bar intake queue is
-  already at its configured capacity
-- **THEN** the closed-bar endpoint returns `503 Service Unavailable`
-- **AND** returns `{"status":"not_ready"}`
-- **AND** does not enqueue the request's event
-- **AND** does not invoke `CommittedBarOrchestrator.process` or create any
-  other processing work for the rejected request
+- **WHEN** Runtime is ready and the bounded intake queue is already at
+  its configured capacity
+- **THEN** the endpoint returns `503 {"status":"not_ready"}`, does not
+  enqueue the event, and does not invoke `CommittedBarOrchestrator
+  .process`
 - **AND** Runtime emits one server-side log line, reason `queue_full`,
   containing the rejected event's `instrument`, `timeframe`,
-  `open_time_ms`, and the configured queue capacity — the wire response
-  alone does not distinguish this case from "Runtime is not ready" or from
-  "intake is stopping," since all three reuse the same `not_ready` envelope
+  `open_time_ms`, and the configured capacity — the wire response alone
+  does not distinguish this from the other `not_ready`-producing cases
 
 #### Scenario: Intake has stopped accepting (shutdown in progress)
 - **WHEN** Runtime is ready but shutdown has already called
-  `stop_accepting()` on the intake boundary — regardless of whether the
-  boundary currently has spare capacity
-- **THEN** the closed-bar endpoint returns `503 Service Unavailable`
-- **AND** returns `{"status":"not_ready"}`
-- **AND** does not enqueue the request's event
-- **AND** does not invoke `CommittedBarOrchestrator.process` or create any
-  other processing work for the rejected request
-- **AND** Runtime emits one server-side log line, reason `intake_stopping`
-  (distinct from `queue_full`), containing the rejected event's
-  `instrument`, `timeframe`, and `open_time_ms`
+  `stop_accepting()` on the intake boundary, regardless of remaining
+  capacity
+- **THEN** the endpoint returns `503 {"status":"not_ready"}`, does not
+  enqueue the event, and does not invoke `CommittedBarOrchestrator
+  .process`
+- **AND** Runtime emits one server-side log line, reason
+  `intake_stopping` (distinct from `queue_full`), containing the same
+  event fields
 
 #### Scenario: Unexpected failure before acceptance
-- **WHEN** an unexpected internal failure occurs before Runtime accepts the
-  request
-- **THEN** Runtime returns `500 Internal Server Error`
-- **AND** returns `{"status":"error"}`
-- **AND** does not enqueue the request's event
+- **WHEN** an unexpected internal failure occurs before Runtime accepts
+  the request
+- **THEN** Runtime returns `500 {"status":"error"}` and does not enqueue
+  the request's event

@@ -2,205 +2,102 @@
 
 ## Why
 
-`POST /v1/webhooks/closed-bar` (`adapters/http/app.py:82`) currently
-validates a `ClosedBarRequest`, builds a `CommittedBarEvent`, and calls
-`background_tasks.add_task(app.state.process_committed_bar, committed_bar)`
-before returning `{"status": "accepted"}`. Every accepted webhook request
-creates its own framework-managed `BackgroundTasks` unit. Runtime itself
-owns no process-level queue, no capacity bound, no FIFO ordering guarantee,
-and no queue-full rejection path for this work — actual execution
-concurrency for those units is entirely delegated to Starlette/anyio's own
-thread-pool implementation, whatever bound (if any) that implementation
-happens to apply. This is not a claim that execution is literally unbounded
-at the OS-thread level; it is a claim that *Runtime has no application
--owned concurrency limit of its own* — today, how many
-`CommittedBarOrchestrator.process` calls can be simultaneously mid-flight is
-an accident of the web framework's internal thread-pool sizing, not a
-reviewed or tested property of Runtime's own design.
+`POST /v1/webhooks/closed-bar` currently accepts a request and schedules
+processing via `fastapi.BackgroundTasks.add_task(...)`. Runtime itself owns
+no process-level queue, capacity bound, FIFO ordering guarantee, or
+queue-full rejection path for that work — actual concurrency is whatever
+Starlette/anyio's thread pool happens to allow, not a reviewed property of
+Runtime's own design.
 
-Market boundary timestamps — the top of an hour, four hours, or midnight
-UTC — are exactly when many independently configured MDS streams commit a
-candle close within the same wall-clock second. Each commit produces its own
-webhook request, each accepted request spawns its own `BackgroundTasks` unit,
-and each unit independently calls `CommittedBarOrchestrator.process(...)`,
-which independently loads a deployment-catalog snapshot, independently
-selects deployments, and for every selected strategy instance independently
-calls into the Strategy Engine and ABI over HTTP. A burst of near
--simultaneous webhooks therefore becomes a burst of near-simultaneous
-`CommittedBarOrchestrator.process` calls whose actual concurrency Runtime
-does not control, size, order, or reject against — each one driving its own
-fan-out of Engine and ABI HTTP calls, at whatever concurrency the framework
-thread pool happens to allow at that moment.
+Market boundary timestamps (top of hour, four hours, midnight UTC) are
+exactly when many independently configured MDS streams commit a candle
+close within the same wall-clock second, producing a burst of
+near-simultaneous `CommittedBarOrchestrator.process` calls whose
+concurrency Runtime does not control, size, order, or reject against. The
+existing `StrategyInstanceKeyedMutexRegistry` does not solve this: it
+prevents two writers from corrupting the *same* strategy instance's
+state, but does nothing to bound how many distinct `process` calls — each
+doing its own catalog load, deployment selection, and multi-instance
+fan-out — are simultaneously mid-flight before any per-instance mutex is
+even acquired.
 
-### Why the existing keyed mutex does not solve this
+This change gives Runtime a bounded, best-effort intake of its own — not
+durable delivery. Runtime's state repository is already non-durable in
+Live V1 (an in-flight cycle is already an accepted loss on process
+termination), so a durable queue in front of it would only add
+persistence machinery whose guarantee stops at the queue boundary.
 
-`StrategyInstanceKeyedMutexRegistry.hold(strategy_instance_id)`
-(`runtime/coordination/keyed_mutex.py`) already prevents two concurrent
-writers from corrupting the *same* strategy instance's state — that
-correctness property is unaffected by this change and remains mandatory.
-But the mutex is scoped per `strategy_instance_id`; it does nothing to bound
-the *number of distinct instances* whose critical sections are open at once,
-and it does nothing to bound how many `CommittedBarOrchestrator.process`
-calls are simultaneously mid-flight (each doing catalog load, deployment
-selection, and multi-instance fan-out *before* any per-instance mutex is
-even acquired). A burst of ten simultaneous webhooks for ten different
-strategy instances sails straight through the keyed mutex — every instance
-gets its own uncontended lock — while still producing up to ten concurrent
-`CommittedBarOrchestrator.process` calls, up to ten concurrent catalog
-loads, and a correspondingly framework-thread-pool-bounded (not
-Runtime-bounded) number of concurrent outbound Engine/ABI HTTP calls. The
-mutex is a per-key correctness guarantee, not a process-wide concurrency
-bound; this change adds the missing, Runtime-owned bound without touching
-the mutex.
-
-### Why best-effort, not durable delivery
-
-Runtime's own state repository
-(`InMemoryStrategyInstanceRuntimeStateRepository`) is already non-durable in
-Live V1 — an in-flight committed-bar cycle is already an accepted loss on
-process termination (documented in `runtime-production-composition`'s
-"Non-durable Live V1 limitation is accepted, not open"). Adding a durable,
-replayable intake queue in front of an already-non-durable state layer would
-not produce end-to-end durability; it would only add persistence machinery
-whose guarantee stops at the queue boundary. Given that, this change accepts
-the same class of loss the production composition already accepts: an
-accepted-but-unprocessed event is lost if the process terminates before the
-worker drains it, and an event is rejected outright (never silently dropped
-— the caller receives a fail-closed HTTP response) if the bounded queue is
-already full.
-
-### Why this is split across two repositories
-
-MDS decides *whether and when* to notify Runtime and owns the outbound HTTP
-attempt (proposed separately as `mds-runtime-committed-bar-webhook-v1`).
-Runtime owns everything on its side of that HTTP boundary: accepting the
-request, bounding how much of it is buffered, and controlling how many
-committed-bar cycles run concurrently. Runtime has no visibility into MDS's
-ingestion classification, canonical storage, or realtime supervision, and
-this change makes no assumption about MDS's internal queue depth or delivery
-semantics beyond the fixed wire contract both proposals share. Each side can
-be implemented, tested, and rolled back independently.
+This is Runtime's side of a two-repository change: MDS owns whether/when
+to notify and the outbound HTTP attempt (`mds-runtime-committed-bar
+-webhook-v1`, proposed separately); Runtime owns accepting the request,
+bounding how much is buffered, and controlling concurrency. This change
+does not require the MDS side to land first.
 
 ## What Changes
 
-- **MODIFIED** `http-closed-bar`: `POST /v1/webhooks/closed-bar` stops using
-  `fastapi.BackgroundTasks.add_task(...)` and instead performs one bounded,
-  non-blocking `put_nowait` onto a new intake boundary
-  (`CommittedBarIntakeBoundary`, wrapping a bounded `queue.Queue`).
-  Acceptance semantics (`200 {"status":"accepted"}` means "accepted into a
-  volatile queue," not "processed") are preserved; the
-  trace-id-generated-then-discarded behavior is preserved unchanged;
-  validation and not-ready semantics are preserved unchanged. **BREAKING**
-  for two specific rejection cases beyond today's behavior: a full queue,
-  and a request arriving after shutdown has begun calling
-  `stop_accepting()` — both return `503` for a reason other than "not
-  ready," and are logged with distinct server-side reasons (`queue_full`
-  vs. `intake_stopping`) even though both reuse the existing wire envelope.
-- **ADDED** `committed-bar-intake-queue`: a new capability defining the
-  bounded FIFO intake boundary, its exactly-one consumer worker (with an
-  atomic, race-free start/stop state machine — see design.md), the
-  stop-accepting-before-shutdown behavior, queue-full/intake-stopping
-  rejection logging, and per-event failure isolation.
+- **MODIFIED** `http-closed-bar`: the webhook handler stops using
+  `BackgroundTasks.add_task` and instead performs one bounded,
+  non-blocking `put_nowait` onto a new intake boundary. Acceptance
+  semantics (`200 accepted` means "queued," not "processed") and existing
+  validation/not-ready behavior are unchanged. **BREAKING**: two new
+  rejection cases — a full queue, and a request arriving after shutdown
+  has begun — both reuse the existing `503 not_ready` wire response but
+  are logged server-side with distinct reasons (`queue_full` vs.
+  `intake_stopping`).
+- **ADDED** `committed-bar-intake-queue`: a bounded FIFO intake boundary
+  with exactly one consumer worker, queue-full/intake-stopping rejection
+  logging, and per-event failure isolation.
 - **MODIFIED** `runtime-production-composition`: the composition root
-  constructs the intake boundary and its single worker exactly once, wires
-  the worker's target to the existing (unmodified) `CommittedBarOrchestrator
-  .process`, adds one new required configuration field
-  (`RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY`), documents the fixed,
-  non-configurable worker count of exactly one, and sequences shutdown as
-  `stop_accepting()` → offloaded `stop_once()` (via `asyncio.to_thread`, so
-  the event loop is never blocked by the worker's join) → outbound-client
-  close.
+  constructs the intake boundary and its single worker exactly once,
+  wires the worker to the existing (unmodified) `CommittedBarOrchestrator`,
+  adds one new required configuration field
+  (`RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY`), and sequences shutdown as
+  stop-accepting → offloaded worker stop → outbound-client close.
 
 ## What Does Not Change
 
-- `CommittedBarOrchestrator.process` (`utility/committed_bar/orchestrator.py`)
-  is called with the exact same signature and exact same semantics: catalog
-  snapshot, deployment selection, ascending `strategy_instance_id` sort,
-  sequential per-instance dispatch, per-unit failure isolation. This change
-  only replaces *what calls it* (a queue worker instead of a
-  `BackgroundTasks` callback) — not what it does.
-- `StrategyRuntimeOrchestrator`, `EntryReconciliationOrchestrator`, the ABI
-  open-position and entry-package contracts, the Strategy Engine live-entry
-  and open-trade contracts, and `StrategyInstanceRuntimeState` are
-  untouched.
-- `StrategyInstanceKeyedMutexRegistry` and its semantics are untouched — it
-  remains the only correctness guarantee for concurrent same-instance
-  writers, exactly as before.
-- The first-fill endpoint (`PUT .../first-fill`) keeps its synchronous HTTP
-  contract, keeps calling `AbiExecutionEventOrchestrator.process(event)`
-  directly (no queue), and keeps sharing the same `state_repository` and
-  `keyed_mutex_registry` objects it shares today. This change does not
-  introduce any new lock, gate, or global mutex around first-fill, and does
-  not serialize first-fill across different strategy instances.
-- No transactional outbox, no persisted event log, no dead-letter queue, no
-  event replay after restart, no retry/backoff, no configurable worker
-  count, no horizontal scaling, no multi-process shared state.
+`CommittedBarOrchestrator.process` is called with the same signature and
+semantics as today — only *what calls it* changes (a queue worker instead
+of a `BackgroundTasks` callback). `StrategyRuntimeOrchestrator`,
+`EntryReconciliationOrchestrator`, the ABI and Strategy Engine contracts,
+`StrategyInstanceRuntimeState`, and `StrategyInstanceKeyedMutexRegistry`
+are untouched. The first-fill endpoint keeps its synchronous HTTP
+contract, calling `AbiExecutionEventOrchestrator.process` directly with no
+queue, no new lock, and no serialization across strategy instances. No
+transactional outbox, persisted event log, dead-letter queue, replay,
+retry/backoff, configurable worker count, horizontal scaling, or
+multi-process shared state is introduced.
 
-## Accepted losses (Live V1)
+## Non-goals / Accepted losses (Live V1)
 
-- An accepted event still sitting in the queue when the process terminates
-  is lost — no persistence, no replay on restart.
-- A webhook arriving while the queue is at capacity is rejected with a
-  fail-closed HTTP response; MDS's own notifier (in the companion change)
-  already treats any non-success response as "attempted, logged, dropped,"
-  so this is consistent end-to-end best-effort behavior, not a silent gap.
-- Duplicate accepted events (e.g. from an upstream retry) are not
-  deduplicated at the queue boundary — this is intentional, not an
-  oversight: existing downstream idempotency (`decide_entry_reconciliation`'s
-  `NoOp` path, `apply_first_fill`'s already-frozen-cycle check, and
-  `StrategyRuntimeOrchestrator`'s value-equality-gated `save`) already makes
-  reprocessing an identical committed bar a safe no-op, so adding a second
-  dedup mechanism at the queue would duplicate existing behavior for no
-  correctness benefit.
-- Shutdown deliberately waits for one already-current committed-bar event to
-  finish rather than interrupting it. Its network operations are bounded by
-  existing finite Engine/ABI timeouts, but its local work (catalog access,
-  mutex waits, repository operations) is given no new hard deadline by this
-  change — the worker introduces no forced interruption or hard shutdown
-  timeout. This is an accepted clean-shutdown tradeoff for Live V1, not a
-  claim that shutdown is proven never to hang.
+- No durability: an accepted-but-unprocessed event is lost on process
+  termination.
+- No dedup at the queue: downstream idempotency (reconciliation NoOp,
+  first-fill's already-frozen-cycle check, value-equality-gated save)
+  already makes reprocessing a duplicate committed bar a safe no-op.
+- No forced interruption or hard shutdown timeout: shutdown waits for one
+  already-current event to finish; its network calls are bounded by
+  existing outbound timeouts, its local work is not.
+- No cross-process coordination: this is a single-process, process-local
+  boundary, matching the existing Live V1 constraint already documented
+  for the keyed-mutex registry.
+- No Engine/ABI contract changes; no change to the first-fill HTTP
+  contract; no new worker-count setting.
 
 ## Capabilities
 
-### New Capabilities
-
-- `committed-bar-intake-queue` — bounded FIFO intake queue with exactly one
-  consumer worker, queue-full fail-closed behavior, and per-event failure
-  isolation for accepted committed-bar events.
-
-### Modified Capabilities
-
-- `http-closed-bar` — the webhook handler enqueues instead of scheduling a
-  `BackgroundTasks` unit; acceptance no longer implies an unbounded amount of
-  concurrently-scheduled background work; two new failure modes are
-  introduced alongside the existing not-ready and validation failure modes
-  — queue-full and intake-stopping (post-shutdown-start) — both returning
-  the existing `503` envelope but logged with distinct server-side reasons.
-- `runtime-production-composition` — the composition root gains ownership of
-  the intake queue and worker lifecycle, one new required configuration
-  field, and an explicit, non-configurable worker-count-of-one constraint.
+- New: `committed-bar-intake-queue`.
+- Modified: `http-closed-bar`, `runtime-production-composition`.
 
 ## Impact
 
-- Affected code: `adapters/http/app.py` (webhook handler), a new
-  `runtime/committed_bar_intake/` module (queue + worker), `config/model.py`
-  and `config/loader.py` (one new field), `bootstrap/application.py`
-  (composition wiring and lifespan).
+- Affected: `adapters/http/app.py`, new `runtime/committed_bar_intake/`
+  module, `config/model.py` / `config/loader.py`,
+  `bootstrap/application.py`.
 - Not affected: `utility/committed_bar/`, `runtime/orchestrator/`,
   `runtime/entry_reconciliation*/`, `runtime/abi_execution_event/`,
   `runtime/coordination/keyed_mutex.py`, `runtime/state/`,
   `infrastructure/strategy_engine/`, `infrastructure/abi/`.
-
-## Contractual dependency on `mds-runtime-committed-bar-webhook-v1`
-
-This change treats the webhook request body as already fixed by the
-existing, unmodified `http-closed-bar` contract: `instrument` (non-empty
-string), `timeframe` (non-empty string), `open_time_ms` (non-negative
-integer), extra fields ignored. The companion MDS change is written to
-produce exactly this shape and nothing more (no strategy/deployment/OHLCV
-fields). This change does not require the MDS companion change to land
-first: Runtime's queue-full and validation behavior are correct and
-independently testable against any caller sending a conforming request, and
-Runtime places no requirement on MDS's internal delivery mechanism beyond
-"at most one HTTP attempt per notification, no special headers or
-authentication beyond what the endpoint already accepts today."
+- Wire contract: the request body is `instrument`/`timeframe`/
+  `open_time_ms` (existing, unmodified `http-closed-bar` shape); this
+  change does not require the MDS companion change to land first.

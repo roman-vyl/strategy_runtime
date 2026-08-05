@@ -5,203 +5,94 @@ Strategy Runtime SHALL require `RUNTIME_STRATEGY_ENGINE_BASE_URL`,
 `RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS`, `RUNTIME_ABI_BASE_URL`,
 `RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS`,
 `RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS`, and
-`RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY` unconditionally for any `ready=True`
-result of `build_application`, and SHALL never return a partially
-constructed *ready* production graph. Two distinct failure stages exist:
-config loading/parsing (a missing required variable, a timeout string that
-cannot parse to `float`, or a queue-capacity string that cannot parse to a
-positive `int`) happens before any outbound HTTP client or the intake queue
-is constructed; adapter-constructor validation (a malformed/non-absolute/
-non-HTTP(S) URL, a non-finite timeout, a zero/negative timeout, or a
-zero/negative queue capacity) happens only during client/queue construction,
-after zero or more earlier components already exist. Constructing
-`AbiExecutionEventOrchestrator` and connecting its callable to
-`create_http_app(...)`, and constructing the committed-bar intake queue and
-worker and connecting them to `create_http_app(...)`, are all mandatory
-steps inside this same fail-closed boundary: a failure at any of these steps
-yields `ready=False` exactly as a failure in any earlier step already does.
+`RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY` unconditionally for any
+`ready=True` result of `build_application`, and SHALL never return a
+partially constructed *ready* production graph. Constructing
+`AbiExecutionEventOrchestrator` and the committed-bar intake queue/worker,
+and connecting both to `create_http_app(...)`, are mandatory steps inside
+the same fail-closed boundary as every earlier component.
 
 #### Scenario: Valid configuration constructs a ready graph
-- **WHEN** all six variables are present, each base URL is an absolute
-  `http`/`https` URL, each timeout is a finite positive number, and the
-  queue capacity is a positive integer
+- **WHEN** all six variables are present and valid (absolute `http`/
+  `https` URLs, finite positive timeouts, a positive integer queue
+  capacity)
 - **THEN** `build_application` constructs the complete production graph,
-  including `AbiExecutionEventOrchestrator`, its connected first-fill
-  callable, and the committed-bar intake queue and worker
-- **AND** the resulting application reports `ready=True`
+  including `AbiExecutionEventOrchestrator` and the committed-bar intake
+  queue and worker, and reports `ready=True`
 
-#### Scenario: A missing or unparsable field fails closed before any client exists
-- **WHEN** any of the six variables is missing, or a timeout or queue
-  -capacity variable cannot be parsed as its expected numeric type
-- **THEN** `build_application` constructs zero outbound HTTP clients, does
-  not construct `AbiExecutionEventOrchestrator`, and does not construct the
-  intake queue or worker
-- **AND** the resulting application reports `ready=False`, matching the
-  existing not-ready pattern already used for invalid `RuntimeConfig`
-
-#### Scenario: A first-fill wiring failure still fails closed
-- **WHEN** constructing `AbiExecutionEventOrchestrator` or connecting its
-  callable to `create_http_app(...)` fails, after zero or more outbound
-  HTTP clients already constructed successfully
-- **THEN** the composition lifecycle owner closes every outbound HTTP
-  client already constructed, exactly once each, as part of startup
-  rollback — before `build_application` returns the not-ready application
-- **AND** `build_application` returns a not-ready application instead of a
-  partially constructed production graph
-- **AND** no partially wired, `ready=True` application with a `None` or
-  disconnected first-fill callable is ever returned
-
-#### Scenario: An intake-boundary wiring failure still fails closed
-- **WHEN** constructing the `CommittedBarIntakeBoundary` or worker, or
-  connecting the boundary to `create_http_app(...)`, fails after zero or
-  more earlier components already constructed successfully
-- **THEN** the composition lifecycle owner closes or stops every component
-  already constructed, exactly once each, as part of startup rollback —
-  before `build_application` returns the not-ready application
-- **AND** `build_application` returns a not-ready application instead of a
-  partially constructed production graph
-- **AND** no partially wired, `ready=True` application with a `None` intake
-  boundary or an unstarted worker is ever returned
-
-#### Scenario: A later construction-time rejection still fails closed
-- **WHEN** one or more earlier outbound HTTP clients or the intake queue, in
-  the deterministic construction order, already constructed successfully,
-  and a later component's constructor rejects a successfully parsed but
-  semantically invalid field (non-`http`/`https` URL, `NaN`/infinite
-  timeout, zero/negative timeout, or zero/negative queue capacity)
+#### Scenario: A missing, unparsable, or later-rejected field fails closed
+- **WHEN** any required variable is missing or unparsable, or a later
+  component's constructor rejects a successfully parsed but semantically
+  invalid field (non-`http`/`https` URL, non-finite or non-positive
+  timeout, non-positive queue capacity)
 - **THEN** `build_application` closes or stops every component already
-  constructed before that rejection, via startup rollback
-- **AND** the resulting application reports `ready=False`
-- **AND** no partially usable production graph is ever returned as
-  `ready=True`
-
-#### Scenario: One ABI base URL serves two independently timed-out adapters
-- **WHEN** the production graph is constructed
-- **THEN** `HttpxAbiOpenPositionLookupAdapter` and the existing
-  `HttpxAbiEntryPackageAdapter` are both constructed from the same
-  `RUNTIME_ABI_BASE_URL`
-- **AND** each uses its own distinct timeout
-  (`RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS` and
-  `RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS`, respectively)
+  constructed, exactly once each, via startup rollback, and reports
+  `ready=False` — no partially wired `ready=True` application, with a
+  disconnected first-fill callable, a `None` intake boundary, or an
+  unstarted worker, is ever returned
 
 #### Scenario: No speculative reliability configuration is added
 - **WHEN** the configuration fields are validated
-- **THEN** no retry-count, circuit-breaker, or other speculative reliability
-  policy field is introduced
-- **AND** no worker-count configuration field is introduced for the intake
-  queue — its consumer count is fixed at exactly one and is not
-  configurable
+- **THEN** no retry-count, circuit-breaker, or other speculative
+  reliability field is introduced, and no worker-count field is
+  introduced for the intake queue
 
 ### Requirement: Non-durable Live V1 limitation is accepted, not open
 Strategy Runtime SHALL use exactly one
-`InMemoryStrategyInstanceRuntimeStateRepository` for `I4d`'s production
-graph and exactly one bounded, in-memory, non-persisted committed-bar
-intake queue, and SHALL treat the resulting non-durable behavior of both as
-an accepted Live V1 limitation rather than an unresolved task of this
-change.
+`InMemoryStrategyInstanceRuntimeStateRepository` and exactly one bounded,
+in-memory, non-persisted committed-bar intake queue for `I4d`'s
+production graph, and SHALL treat the resulting non-durable behavior of
+both as an accepted Live V1 limitation.
 
-#### Scenario: In-memory repository is the selected implementation
-- **WHEN** the production graph is constructed
-- **THEN** the shared state repository is
-  `InMemoryStrategyInstanceRuntimeStateRepository`
-- **AND** `infrastructure/runtime_state/sqlite_repository.py` remains an
-  unimplemented placeholder, not a partially completed component of this
-  change
-
-#### Scenario: A lost in-flight cycle is an accepted risk
-- **WHEN** Runtime terminates after acknowledging a webhook but before its
-  queued committed-bar cycle completes
-- **THEN** that in-flight cycle is lost with no persisted pending action,
-  replay, or recovery mechanism
-- **AND** this is documented as an accepted Live V1 limitation, matching the
-  existing single-process, single-worker, non-durable concurrency model
-
-#### Scenario: A queued-but-undequeued event is an equally accepted risk
-- **WHEN** Runtime terminates after accepting a webhook and enqueuing its
-  event, but before the intake worker dequeues it
-- **THEN** that event is lost with no persistence, replay, or recovery
-  mechanism, exactly like an in-flight cycle already lost after dequeue
-- **AND** no transactional outbox, durable queue, or event log is
-  introduced to close this gap in Live V1
+#### Scenario: In-flight and queued-but-undequeued events are an accepted risk
+- **WHEN** Runtime terminates after acknowledging a webhook but before
+  its queued committed-bar cycle completes, whether or not the worker
+  had already dequeued it
+- **THEN** that event is lost with no persisted pending action, replay,
+  or recovery mechanism, and this is documented as an accepted Live V1
+  limitation rather than an unresolved task of this change
 
 ## ADDED Requirements
 
 ### Requirement: Runtime composes exactly one committed-bar intake boundary and its single worker
-`strategy_runtime.bootstrap.application.build_application` SHALL construct,
-for every `ready=True` result, exactly one `CommittedBarIntakeBoundary` —
-the sole public object wrapping the bounded, process-local
-`queue.Queue[CommittedBarEvent]`, which is not itself exposed to any
-caller outside that boundary — and exactly one `CommittedBarIntakeWorker`,
-and SHALL connect the worker to the same, already-constructed
-`CommittedBarOrchestrator` instance used by the rest of the production
-graph — introducing no second orchestrator instance.
+`build_application` SHALL construct, for every `ready=True` result,
+exactly one `CommittedBarIntakeBoundary` and exactly one
+`CommittedBarIntakeWorker`, and SHALL connect the worker to the same,
+already-constructed `CommittedBarOrchestrator` instance used by the rest
+of the production graph — introducing no second orchestrator instance.
 
-#### Scenario: One boundary, one worker, wired to the existing orchestrator
+#### Scenario: One boundary, one worker, shared with the webhook handler
 - **WHEN** `build_application` constructs a ready application
-- **THEN** exactly one `CommittedBarIntakeBoundary` object and exactly one
-  `CommittedBarIntakeWorker` object are created
-- **AND** the worker calls `process(...)` on the same
-  `CommittedBarOrchestrator` instance already constructed for this
-  application, not a separately constructed one
-
-#### Scenario: The webhook handler and the worker share the same boundary object, never a raw queue
-- **WHEN** the production graph is constructed
-- **THEN** the exact `CommittedBarIntakeBoundary` object the closed-bar
-  webhook handler calls `put_nowait(...)` on is the exact
-  `CommittedBarIntakeBoundary` object the worker calls `get(...)`/
-  `task_done()` on
-- **AND** `create_http_app(...)` receives that same `CommittedBarIntakeBoundary`
-  object as its committed-bar intake parameter — never the underlying
-  `queue.Queue` directly, which this requirement and the
-  `committed-bar-intake-queue` capability's "Runtime bounds accepted
-  committed-bar events in one FIFO queue" requirement both keep encapsulated
-  inside the boundary
+- **THEN** exactly one `CommittedBarIntakeBoundary` and exactly one
+  `CommittedBarIntakeWorker` are created, the worker calls `process(...)`
+  on the same `CommittedBarOrchestrator` instance already constructed
+  for this application, and the closed-bar webhook handler and the
+  worker share that exact boundary object — `create_http_app(...)` never
+  receives the underlying queue directly
 
 ### Requirement: Committed-bar intake worker is started once and stopped exactly once by one lifecycle owner, in a fixed shutdown sequence
-The composition root SHALL be the single owner of the committed-bar intake
-worker's start/stop lifecycle, matching the existing ownership pattern
-already established for the four outbound HTTP clients, and SHALL execute
-shutdown as three ordered steps: stop accepting new events, then wait for
-the worker to stop, then close the outbound HTTP clients.
+The composition root SHALL be the single owner of the worker's start/stop
+lifecycle, matching the existing ownership pattern for the four outbound
+HTTP clients, and SHALL execute shutdown as three ordered steps: stop
+accepting new events, then wait for the worker to stop, then close the
+outbound HTTP clients.
 
-#### Scenario: Started during application startup
+#### Scenario: Started once at startup, stopped once at shutdown by the same owner
 - **WHEN** the production application's lifespan begins
 - **THEN** the intake worker is started exactly once, before the
-  application begins accepting requests that could enqueue into it in a
-  way that races its own startup
+  application begins accepting requests
+- **AND** when the application shuts down, that same lifecycle owner —
+  never an HTTP request handler, background thread, or orchestrator call
+  — stops the worker exactly once
 
-#### Scenario: Stopped during application shutdown, by the same owner
+#### Scenario: Stop-accepting first, then an event-loop-safe wait, then client close
 - **WHEN** the production application shuts down
-- **THEN** the same lifecycle owner responsible for closing the four
-  outbound HTTP clients also stops the intake worker, exactly once
-- **AND** no HTTP request handler, background thread, or orchestrator call
-  ever stops the worker itself
-
-#### Scenario: Shutdown stops accepting new events before waiting on the worker
-- **WHEN** the production application shuts down
-- **THEN** the lifecycle owner first calls `stop_accepting()` on the intake
-  boundary — synchronously, on the event-loop thread, since this operation
-  is a single lock acquisition and never blocks
-- **AND** only after that does it wait for the worker to stop
-
-#### Scenario: Waiting for the worker is offloaded so it does not block the event loop
-- **WHEN** the production application shuts down
-- **THEN** the lifecycle owner waits for the worker to stop via
-  `await asyncio.to_thread(intake_worker.stop_once)`, not by calling
-  `stop_once()` directly on the event-loop thread
-- **AND** other coroutines scheduled on the same event loop continue to run
-  while this wait is in progress
-
-#### Scenario: Worker stop happens strictly before outbound client close
-- **WHEN** the production application shuts down
-- **THEN** the lifecycle owner waits for the offloaded worker-stop to
-  complete — including letting any currently in-flight
-  `CommittedBarOrchestrator.process(...)` call finish rather than
-  interrupting it — strictly before closing any of the four outbound HTTP
-  clients
-- **AND** this ordering holds regardless of how long that wait takes: the
-  wait's network operations are bounded by the finite outbound timeouts
-  already enforced inside the in-flight call, but its local operations are
-  not bounded by any timeout this change introduces — the ordering
-  guarantee does not depend on, and is not undermined by, that absence of a
-  bound
+- **THEN** the lifecycle owner first calls `stop_accepting()`
+  synchronously on the event-loop thread (a single lock acquisition that
+  never blocks), then waits for the worker to stop via `await asyncio
+  .to_thread(intake_worker.stop_once)` — so other coroutines on the same
+  event loop keep running during that wait — and only closes the four
+  outbound HTTP clients after that offloaded call returns
+- **AND** this ordering holds regardless of how long the wait takes: its
+  network operations are bounded by existing outbound timeouts, but its
+  local operations are not bounded by any timeout this change introduces
