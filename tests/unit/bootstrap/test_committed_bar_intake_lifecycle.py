@@ -78,6 +78,38 @@ def _post(client: TestClient, open_time_ms: int) -> object:
     )
 
 
+def _start_shutdown_while_first_event_is_gated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[object, object, TestClient, _ProcessGate, threading.Event, threading.Thread]:
+    """Shared setup for the three tests below: build a ready app, accept one
+    webhook whose processing is gated open, start shutdown on a background
+    thread (via `client.__exit__`), and wait until the worker has committed
+    to STOPPING -- the point at which each test's own assertions diverge.
+    """
+    gate = _ProcessGate(gated_calls=1)
+    gate.install(monkeypatch)
+
+    app = build_application(_valid_environ(tmp_path))
+    worker = app.state.committed_bar_intake_worker
+    client = TestClient(app)
+    client.__enter__()
+
+    assert _post(client, 1).status_code == 200
+    assert gate.call_started.wait(timeout=2)
+
+    shutdown_done = threading.Event()
+
+    def _shutdown() -> None:
+        client.__exit__(None, None, None)
+        shutdown_done.set()
+
+    shutdown_thread = threading.Thread(target=_shutdown)
+    shutdown_thread.start()
+    assert _wait_until(lambda: worker.state == "STOPPING")
+
+    return app, worker, client, gate, shutdown_done, shutdown_thread
+
+
 # ---------------------------------------------------------------------------
 # Worker lifecycle: not started -> running -> stopped
 # ---------------------------------------------------------------------------
@@ -156,27 +188,10 @@ def test_shutdown_discards_pending_events_but_lets_the_current_one_finish(
 def test_shutdown_waits_for_the_in_flight_event_to_finish_before_returning(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    gate = _ProcessGate(gated_calls=1)
-    gate.install(monkeypatch)
-
-    app = build_application(_valid_environ(tmp_path))
-    worker = app.state.committed_bar_intake_worker
-    client = TestClient(app)
-    client.__enter__()
-
-    assert _post(client, 1).status_code == 200
-    assert gate.call_started.wait(timeout=2)
-
-    shutdown_done = threading.Event()
-
-    def _shutdown() -> None:
-        client.__exit__(None, None, None)
-        shutdown_done.set()
-
-    shutdown_thread = threading.Thread(target=_shutdown)
-    shutdown_thread.start()
+    _app, worker, _client, gate, shutdown_done, shutdown_thread = (
+        _start_shutdown_while_first_event_is_gated(tmp_path, monkeypatch)
+    )
     try:
-        assert _wait_until(lambda: worker.state == "STOPPING")
         # stop_once() must not have returned while the gate is still held.
         assert not shutdown_done.wait(timeout=0.2)
         gate.release.set()
@@ -193,27 +208,10 @@ def test_shutdown_waits_for_the_in_flight_event_to_finish_before_returning(
 def test_outbound_clients_close_only_after_the_worker_has_fully_stopped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    gate = _ProcessGate(gated_calls=1)
-    gate.install(monkeypatch)
-
-    app = build_application(_valid_environ(tmp_path))
-    worker = app.state.committed_bar_intake_worker
-    client = TestClient(app)
-    client.__enter__()
-
-    assert _post(client, 1).status_code == 200
-    assert gate.call_started.wait(timeout=2)
-
-    shutdown_done = threading.Event()
-
-    def _shutdown() -> None:
-        client.__exit__(None, None, None)
-        shutdown_done.set()
-
-    shutdown_thread = threading.Thread(target=_shutdown)
-    shutdown_thread.start()
+    app, _worker, _client, gate, shutdown_done, shutdown_thread = (
+        _start_shutdown_while_first_event_is_gated(tmp_path, monkeypatch)
+    )
     try:
-        assert _wait_until(lambda: worker.state == "STOPPING")
         # The worker thread may still be mid-process(...); clients must stay open.
         assert not shutdown_done.wait(timeout=0.2)
         assert all(not c._client.is_closed for c in app.state.outbound_http_clients)  # type: ignore[attr-defined]
@@ -230,27 +228,10 @@ def test_outbound_clients_close_only_after_the_worker_has_fully_stopped(
 def test_stop_accepting_takes_effect_immediately_regardless_of_in_flight_event(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    gate = _ProcessGate(gated_calls=1)
-    gate.install(monkeypatch)
-
-    app = build_application(_valid_environ(tmp_path))
-    worker = app.state.committed_bar_intake_worker
-    client = TestClient(app)
-    client.__enter__()
-
-    assert _post(client, 1).status_code == 200
-    assert gate.call_started.wait(timeout=2)
-
-    shutdown_done = threading.Event()
-
-    def _shutdown() -> None:
-        client.__exit__(None, None, None)
-        shutdown_done.set()
-
-    shutdown_thread = threading.Thread(target=_shutdown)
-    shutdown_thread.start()
+    _app, _worker, client, gate, _shutdown_done, shutdown_thread = (
+        _start_shutdown_while_first_event_is_gated(tmp_path, monkeypatch)
+    )
     try:
-        assert _wait_until(lambda: worker.state == "STOPPING")
         rejected = _post(client, 2)
         assert rejected.status_code == 503  # type: ignore[union-attr]
         assert rejected.json() == {"status": "not_ready"}  # type: ignore[union-attr]
