@@ -262,12 +262,29 @@
       same test as above: first-fill is proven blocked (zero
       `repository.get(...)` calls while the real cycle's Engine-projection
       step is gated) and, once unblocked, freezes exactly the trade cycle
-      the real cycle applied and saved.
+      the real cycle applied and saved. "Blocked" is proven by a definitive
+      per-key mutex-attempt signal (`_MutexAttemptSpy.attempt_event`, set
+      the instant first-fill's own call reaches `hold(...)`, distinguished
+      from the real cycle's own earlier attempt on the same key by
+      clearing the event first) plus a bounded re-checked poll that
+      `repository.get(...)` stays empty — not a single arbitrary
+      `time.sleep` assumed to be long enough for first-fill to have
+      reached the mutex.
 - [x] Test: a first-fill request for a *different* `strategy_instance_id`
       is not blocked while the intake worker holds another instance's real
       critical section —
       `test_different_instance_first_fill_completes_while_the_real_cycle_remains_blocked`,
-      same file.
+      same file. Also asserts the call completes in well under 2 seconds:
+      empirically verified (by temporarily forcing
+      `StrategyInstanceKeyedMutexRegistry` to hand out one shared lock for
+      every key) that without this bound, an accidentally-global mutex
+      would still make this test pass — just ~5s slower, via the fake
+      Engine-projection gate's own internal `wait(timeout=5)` fallback
+      unwinding instance-A's critical section by exception and releasing
+      the (bugged, shared) lock. The same elapsed-time bound and
+      definitive mutex-attempt signal are applied to the earlier
+      `_make_harness`- and `_GatedMutexHoldingDispatcher`-based same/
+      different-instance tests in the same file, for consistency.
 
 ## 8. Verification — idempotency and duplicates
 

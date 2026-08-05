@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 
 from fastapi.testclient import TestClient
@@ -111,15 +113,58 @@ def _url(sid: str) -> str:
     return f"/v1/strategy-instances/{sid}/trade-cycles/{_TRADE_CYCLE_ID}/first-fill"
 
 
-def _make_harness() -> tuple[TestClient, _RecordingRepository, StrategyInstanceKeyedMutexRegistry]:
+def _wait_until(predicate: object, *, timeout: float, interval: float = 0.01) -> bool:
+    """Bounded, actively-re-checked wait for a predicate to become true.
+
+    Not a proof-by-sleep: the loop only returns True once the predicate is
+    observed true, and returns False if it never becomes true within
+    `timeout` -- used to prove something has *not* happened within a
+    generous window, rather than assuming a fixed sleep was long enough.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():  # type: ignore[operator]
+            return True
+        time.sleep(interval)
+    return bool(predicate())  # type: ignore[operator]
+
+
+class _MutexAttemptSpy:
+    """Wrap a real `StrategyInstanceKeyedMutexRegistry`, exposing one
+    `threading.Event` per `strategy_instance_id` that fires the instant a
+    caller *starts* attempting `hold(strategy_instance_id)` -- before it is
+    known whether that attempt blocks on an already-held lock or acquires
+    it immediately. Delegates every acquisition to the real registry
+    unchanged; this only adds an observable "an attempt started" signal so
+    a test can wait for a concurrent caller to have genuinely reached the
+    mutex, instead of assuming an arbitrary sleep gave it enough time to.
+    """
+
+    def __init__(self, inner: StrategyInstanceKeyedMutexRegistry) -> None:
+        self._inner = inner
+        self._events: dict[str, threading.Event] = {}
+        self._events_lock = threading.Lock()
+
+    def attempt_event(self, strategy_instance_id: str) -> threading.Event:
+        with self._events_lock:
+            return self._events.setdefault(strategy_instance_id, threading.Event())
+
+    @contextmanager
+    def hold(self, strategy_instance_id: str) -> Iterator[None]:
+        self.attempt_event(strategy_instance_id).set()
+        with self._inner.hold(strategy_instance_id):
+            yield
+
+
+def _make_harness() -> tuple[TestClient, _RecordingRepository, _MutexAttemptSpy]:
     inner_repo = InMemoryStrategyInstanceRuntimeStateRepository()
     _seed(inner_repo, _SID_A)
     _seed(inner_repo, _SID_B)
     repo = _RecordingRepository(inner_repo)
-    registry = StrategyInstanceKeyedMutexRegistry()
+    registry = _MutexAttemptSpy(StrategyInstanceKeyedMutexRegistry())
     orchestrator = AbiExecutionEventOrchestrator(
         state_repository=repo,  # type: ignore[arg-type]
-        keyed_mutex_registry=registry,
+        keyed_mutex_registry=registry,  # type: ignore[arg-type]
     )
     app = create_http_app(
         ready=True,
@@ -152,6 +197,12 @@ def test_first_fill_path_waits_for_a_held_closed_bar_writer_then_loads_fresh_sta
     assert writer_holds.wait(timeout=2), "closed-bar writer never acquired the mutex"
     repo.get_calls.clear()  # drop the writer's own get(...) call from the count below
 
+    # The writer already attempted (and won) instance-A's mutex once,
+    # above -- reset the signal so the next time it fires can only be
+    # first-fill's own attempt, not a stale one from the writer.
+    attempt = registry.attempt_event(_SID_A)
+    attempt.clear()
+
     result: dict[str, object] = {}
 
     def do_put() -> None:
@@ -160,10 +211,17 @@ def test_first_fill_path_waits_for_a_held_closed_bar_writer_then_loads_fresh_sta
     put_thread = threading.Thread(target=do_put)
     put_thread.start()
 
-    # While the writer holds instance-A's mutex, the first-fill path must
-    # not have reached repo.get(...) for instance-A yet.
-    time.sleep(0.2)
-    assert repo.get_calls == []
+    # Wait for a definitive signal that first-fill's own call actually
+    # reached the mutex acquisition attempt -- not an arbitrary sleep
+    # assumed to be long enough for it to get there.
+    assert attempt.wait(timeout=2), "first-fill never attempted the mutex"
+
+    # It reached the attempt but must still be blocked: repo.get(...) is
+    # the very next statement once the mutex is acquired, so it staying
+    # empty over a bounded re-checked window -- not a single arbitrary
+    # sleep -- is what actually shows the mutex, not scheduling luck, is
+    # what's holding it back.
+    assert not _wait_until(lambda: repo.get_calls != [], timeout=0.5)
 
     release_writer.set()
     writer_thread.join(timeout=5)
@@ -196,10 +254,24 @@ def test_instance_b_first_fill_is_not_blocked_while_instance_a_mutex_is_held() -
     assert writer_holds.wait(timeout=2), "closed-bar writer never acquired the mutex"
 
     try:
+        started_at = time.monotonic()
         response = client.put(_url(_SID_B), json={"first_fill_at_ms": _FIRST_FILL_AT_MS})
+        elapsed = time.monotonic() - started_at
     finally:
         release_writer.set()
         writer_thread.join(timeout=5)
+
+    # A genuinely per-instance mutex lets this complete almost instantly.
+    # If the keyed mutex were accidentally global, this call would instead
+    # block until the writer's own `release_writer.wait(timeout=5)` times
+    # out on its own and the writer exits its critical section -- so a
+    # bound comfortably under 5s is what actually distinguishes "never
+    # blocked" from "eventually released by that timeout fallback," which
+    # the status code alone cannot.
+    assert elapsed < 2.0, (
+        f"instance-B first-fill took {elapsed:.2f}s -- looks like it was blocked on "
+        "instance-A's mutex and only unblocked via the 5s writer-timeout fallback"
+    )
 
     assert response.status_code == 200
     assert repo.get_calls == [_SID_B]
@@ -276,15 +348,16 @@ def _make_full_intake_harness(
     CommittedBarIntakeWorker,
     threading.Event,
     threading.Event,
+    _MutexAttemptSpy,
 ]:
     inner_repo = InMemoryStrategyInstanceRuntimeStateRepository()
     _seed(inner_repo, _SID_A)
     _seed(inner_repo, _SID_B)
     repo = _RecordingRepository(inner_repo)
-    registry = StrategyInstanceKeyedMutexRegistry()
+    registry = _MutexAttemptSpy(StrategyInstanceKeyedMutexRegistry())
     first_fill_orchestrator = AbiExecutionEventOrchestrator(
         state_repository=repo,  # type: ignore[arg-type]
-        keyed_mutex_registry=registry,
+        keyed_mutex_registry=registry,  # type: ignore[arg-type]
     )
 
     writer_holds = threading.Event()
@@ -293,7 +366,9 @@ def _make_full_intake_harness(
         deployment_catalog=_SingleDeploymentCatalog(),
         deployment_selector=_FixedTargetSelector(target_sid),
         strategy_cycle_dispatcher=_GatedMutexHoldingDispatcher(
-            registry, writer_holds, release_writer
+            registry,  # type: ignore[arg-type]
+            writer_holds,
+            release_writer,
         ),
         processing_journal=_NoOpJournal(),
     )
@@ -310,11 +385,11 @@ def _make_full_intake_harness(
         process_first_fill=first_fill_orchestrator.process,
     )
     client = TestClient(app, raise_server_exceptions=False)
-    return client, repo, worker, writer_holds, release_writer
+    return client, repo, worker, writer_holds, release_writer, registry
 
 
 def test_first_fill_waits_for_the_real_intake_worker_holding_the_same_instance_mutex() -> None:
-    client, repo, worker, writer_holds, release_writer = _make_full_intake_harness(_SID_A)
+    client, repo, worker, writer_holds, release_writer, registry = _make_full_intake_harness(_SID_A)
     try:
         response = client.post(
             "/v1/webhooks/closed-bar",
@@ -323,6 +398,12 @@ def test_first_fill_waits_for_the_real_intake_worker_holding_the_same_instance_m
         assert response.status_code == 200
         assert writer_holds.wait(timeout=2), "intake worker never acquired the mutex"
         repo.get_calls.clear()  # drop the dispatcher's own activity, if any
+
+        # The dispatcher already attempted (and won) this key's mutex once,
+        # above -- reset the signal so the next time it fires can only be
+        # first-fill's own attempt, not a stale one from the dispatcher.
+        attempt = registry.attempt_event(_SID_A)
+        attempt.clear()
 
         result: dict[str, object] = {}
 
@@ -334,10 +415,17 @@ def test_first_fill_waits_for_the_real_intake_worker_holding_the_same_instance_m
         put_thread = threading.Thread(target=do_put)
         put_thread.start()
 
-        # While the real intake worker holds instance-A's mutex, the
-        # first-fill path must not have reached repo.get(...) yet.
-        time.sleep(0.2)
-        assert repo.get_calls == []
+        # Wait for a definitive signal that first-fill's own call actually
+        # reached the mutex acquisition attempt -- not an arbitrary sleep
+        # assumed to be long enough for it to get there.
+        assert attempt.wait(timeout=2), "first-fill never attempted the mutex"
+
+        # It reached the attempt but must still be blocked: repo.get(...)
+        # is the very next statement once the mutex is acquired, so it
+        # staying empty over a bounded re-checked window -- not a single
+        # arbitrary sleep -- is what actually shows the mutex, not
+        # scheduling luck, is what's holding it back.
+        assert not _wait_until(lambda: repo.get_calls != [], timeout=0.5)
 
         release_writer.set()
         put_thread.join(timeout=5)
@@ -350,7 +438,9 @@ def test_first_fill_waits_for_the_real_intake_worker_holding_the_same_instance_m
 
 
 def test_instance_b_first_fill_is_not_blocked_by_the_real_intake_worker_on_instance_a() -> None:
-    client, repo, worker, writer_holds, release_writer = _make_full_intake_harness(_SID_A)
+    client, repo, worker, writer_holds, release_writer, _registry = _make_full_intake_harness(
+        _SID_A
+    )
     try:
         response = client.post(
             "/v1/webhooks/closed-bar",
@@ -359,11 +449,25 @@ def test_instance_b_first_fill_is_not_blocked_by_the_real_intake_worker_on_insta
         assert response.status_code == 200
         assert writer_holds.wait(timeout=2), "intake worker never acquired the mutex"
 
+        started_at = time.monotonic()
         put_response = client.put(_url(_SID_B), json={"first_fill_at_ms": _FIRST_FILL_AT_MS})
+        elapsed = time.monotonic() - started_at
     finally:
         release_writer.set()
         worker.stop_once()
 
+    # A genuinely per-instance mutex lets this complete almost instantly.
+    # If the keyed mutex were accidentally global, this call would instead
+    # block until the dispatcher's own `release_writer.wait(timeout=5)`
+    # fallback times out and unwinds instance-A's critical section by
+    # exception -- so a bound comfortably under 5s is what actually
+    # distinguishes "never blocked" from "eventually released by the
+    # dispatcher's own timeout fallback," which the status code alone
+    # cannot.
+    assert elapsed < 2.0, (
+        f"instance-B first-fill took {elapsed:.2f}s -- looks like it was blocked on "
+        "instance-A's mutex and only unblocked via the 5s gate-timeout fallback"
+    )
     assert put_response.status_code == 200
     assert repo.get_calls == [_SID_B]
 
@@ -462,14 +566,20 @@ class _FixedTargetSelectorWithDeployment:
 
 def _make_real_semantic_harness(
     target_sid: str,
-) -> tuple[TestClient, _RecordingRepository, CommittedBarIntakeWorker, _GatedUseCaseRouter]:
+) -> tuple[
+    TestClient,
+    _RecordingRepository,
+    CommittedBarIntakeWorker,
+    _GatedUseCaseRouter,
+    _MutexAttemptSpy,
+]:
     inner_repo = InMemoryStrategyInstanceRuntimeStateRepository()
     repo = _RecordingRepository(inner_repo)
-    registry = StrategyInstanceKeyedMutexRegistry()
+    registry = _MutexAttemptSpy(StrategyInstanceKeyedMutexRegistry())
 
     first_fill_orchestrator = AbiExecutionEventOrchestrator(
         state_repository=repo,  # type: ignore[arg-type]
-        keyed_mutex_registry=registry,
+        keyed_mutex_registry=registry,  # type: ignore[arg-type]
     )
 
     gated_router = _GatedUseCaseRouter(_desired_entry())
@@ -481,7 +591,7 @@ def _make_real_semantic_harness(
         state_repository=repo,  # type: ignore[arg-type]
         open_position_resolver=_FakeOpenPositionResolver(),
         use_case_router=gated_router,
-        keyed_mutex_registry=registry,
+        keyed_mutex_registry=registry,  # type: ignore[arg-type]
         entry_reconciliation_orchestrator=entry_reconciliation_orchestrator,
     )
 
@@ -513,7 +623,7 @@ def _make_real_semantic_harness(
         process_first_fill=first_fill_orchestrator.process,
     )
     client = TestClient(app, raise_server_exceptions=False)
-    return client, repo, worker, gated_router
+    return client, repo, worker, gated_router, registry
 
 
 def _post_closed_bar(client: TestClient) -> object:
@@ -526,7 +636,7 @@ def _post_closed_bar(client: TestClient) -> object:
 
 
 def test_first_fill_waits_for_the_real_strategy_runtime_orchestrator_critical_section() -> None:
-    client, repo, worker, gated_router = _make_real_semantic_harness(_SID_A)
+    client, repo, worker, gated_router, registry = _make_real_semantic_harness(_SID_A)
     result: dict[str, object] = {}
     try:
         response = _post_closed_bar(client)
@@ -534,6 +644,12 @@ def test_first_fill_waits_for_the_real_strategy_runtime_orchestrator_critical_se
         assert gated_router.call_started.wait(timeout=2), (
             "the real cycle never reached the gated Engine-projection call"
         )
+
+        # The real cycle already attempted (and won) instance-A's mutex
+        # once, above -- reset the signal so the next time it fires can
+        # only be first-fill's own attempt, not a stale one from the cycle.
+        attempt = registry.attempt_event(_SID_A)
+        attempt.clear()
 
         def do_put() -> None:
             result["response"] = client.put(
@@ -543,13 +659,21 @@ def test_first_fill_waits_for_the_real_strategy_runtime_orchestrator_critical_se
         put_thread = threading.Thread(target=do_put)
         put_thread.start()
 
+        # Wait for a definitive signal that first-fill's own call actually
+        # reached the mutex acquisition attempt -- not an arbitrary sleep
+        # assumed to be long enough for it to get there.
+        assert attempt.wait(timeout=2), "first-fill never attempted the mutex"
+
         # StrategyRuntimeOrchestrator's real critical section is open: state
         # has already been loaded and resolved, the Engine-projection call
         # is blocked mid-call, and reconciliation/save are still pending --
-        # all under the one real keyed mutex. first-fill for the same
-        # instance must not have reached repository.get(...) yet.
-        time.sleep(0.2)
-        assert repo.get_calls == []
+        # all under the one real keyed mutex. It reached the attempt but
+        # must still be blocked: repository.get(...) is the very next
+        # statement once the mutex is acquired, so it staying empty over a
+        # bounded re-checked window -- not a single arbitrary sleep -- is
+        # what actually shows the mutex, not scheduling luck, is what's
+        # holding it back.
+        assert not _wait_until(lambda: repo.get_calls != [], timeout=0.5)
 
         gated_router.release.set()
         put_thread.join(timeout=5)
@@ -575,7 +699,7 @@ def test_first_fill_waits_for_the_real_strategy_runtime_orchestrator_critical_se
 
 
 def test_different_instance_first_fill_completes_while_the_real_cycle_remains_blocked() -> None:
-    client, repo, worker, gated_router = _make_real_semantic_harness(_SID_A)
+    client, repo, worker, gated_router, _registry = _make_real_semantic_harness(_SID_A)
     _seed(repo, _SID_B)  # pre-existing, unrelated trade cycle for a different instance
     try:
         response = _post_closed_bar(client)
@@ -584,10 +708,24 @@ def test_different_instance_first_fill_completes_while_the_real_cycle_remains_bl
             "the real cycle never reached the gated Engine-projection call"
         )
 
+        started_at = time.monotonic()
         put_response = client.put(_url(_SID_B), json={"first_fill_at_ms": _FIRST_FILL_AT_MS})
+        elapsed = time.monotonic() - started_at
     finally:
         gated_router.release.set()
         worker.stop_once()
 
+    # A genuinely per-instance mutex lets this complete almost instantly.
+    # If the keyed mutex were accidentally global, this call would instead
+    # block for the length of _GatedUseCaseRouter.route()'s own internal
+    # `release.wait(timeout=5)` -- which only unblocks once that wait times
+    # out, asserts, and unwinds instance-A's critical section by exception
+    # -- so a bound comfortably under 5s is what actually distinguishes
+    # "never blocked" from "eventually released by the real cycle's own
+    # gate-timeout fallback," which the status code alone cannot.
+    assert elapsed < 2.0, (
+        f"instance-B first-fill took {elapsed:.2f}s -- looks like it was blocked on "
+        "instance-A's mutex and only unblocked via the 5s gate-timeout fallback"
+    )
     assert put_response.status_code == 200  # type: ignore[union-attr]
     assert repo.get_calls == [_SID_B]
