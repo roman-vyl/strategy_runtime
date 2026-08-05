@@ -51,17 +51,17 @@ yields `ready=False` exactly as a failure in any earlier step already does.
 - **AND** no partially wired, `ready=True` application with a `None` or
   disconnected first-fill callable is ever returned
 
-#### Scenario: An intake-queue wiring failure still fails closed
-- **WHEN** constructing the committed-bar intake queue or worker, or
-  connecting the queue to `create_http_app(...)`, fails after zero or more
-  earlier components already constructed successfully
+#### Scenario: An intake-boundary wiring failure still fails closed
+- **WHEN** constructing the `CommittedBarIntakeBoundary` or worker, or
+  connecting the boundary to `create_http_app(...)`, fails after zero or
+  more earlier components already constructed successfully
 - **THEN** the composition lifecycle owner closes or stops every component
   already constructed, exactly once each, as part of startup rollback —
   before `build_application` returns the not-ready application
 - **AND** `build_application` returns a not-ready application instead of a
   partially constructed production graph
 - **AND** no partially wired, `ready=True` application with a `None` intake
-  queue or an unstarted worker is ever returned
+  boundary or an unstarted worker is ever returned
 
 #### Scenario: A later construction-time rejection still fails closed
 - **WHEN** one or more earlier outbound HTTP clients or the intake queue, in
@@ -126,28 +126,36 @@ change.
 
 ## ADDED Requirements
 
-### Requirement: Runtime composes exactly one committed-bar intake queue and its single worker
+### Requirement: Runtime composes exactly one committed-bar intake boundary and its single worker
 `strategy_runtime.bootstrap.application.build_application` SHALL construct,
-for every `ready=True` result, exactly one bounded committed-bar intake
-queue and exactly one `CommittedBarIntakeWorker`, and SHALL connect the
-worker to the same, already-constructed `CommittedBarOrchestrator` instance
-used by the rest of the production graph — introducing no second
-orchestrator instance.
+for every `ready=True` result, exactly one `CommittedBarIntakeBoundary` —
+the sole public object wrapping the bounded, process-local
+`queue.Queue[CommittedBarEvent]`, which is not itself exposed to any
+caller outside that boundary — and exactly one `CommittedBarIntakeWorker`,
+and SHALL connect the worker to the same, already-constructed
+`CommittedBarOrchestrator` instance used by the rest of the production
+graph — introducing no second orchestrator instance.
 
-#### Scenario: One queue, one worker, wired to the existing orchestrator
+#### Scenario: One boundary, one worker, wired to the existing orchestrator
 - **WHEN** `build_application` constructs a ready application
-- **THEN** exactly one intake queue object and exactly one
+- **THEN** exactly one `CommittedBarIntakeBoundary` object and exactly one
   `CommittedBarIntakeWorker` object are created
 - **AND** the worker calls `process(...)` on the same
   `CommittedBarOrchestrator` instance already constructed for this
   application, not a separately constructed one
 
-#### Scenario: The webhook handler and the worker share the same queue object
+#### Scenario: The webhook handler and the worker share the same boundary object, never a raw queue
 - **WHEN** the production graph is constructed
-- **THEN** the exact queue object the closed-bar webhook handler enqueues
-  into is the exact queue object the worker consumes from
-- **AND** `create_http_app(...)` receives that same queue object as its
-  committed-bar intake parameter
+- **THEN** the exact `CommittedBarIntakeBoundary` object the closed-bar
+  webhook handler calls `put_nowait(...)` on is the exact
+  `CommittedBarIntakeBoundary` object the worker calls `get(...)`/
+  `task_done()` on
+- **AND** `create_http_app(...)` receives that same `CommittedBarIntakeBoundary`
+  object as its committed-bar intake parameter — never the underlying
+  `queue.Queue` directly, which this requirement and the
+  `committed-bar-intake-queue` capability's "Runtime bounds accepted
+  committed-bar events in one FIFO queue" requirement both keep encapsulated
+  inside the boundary
 
 ### Requirement: Committed-bar intake worker is started once and stopped exactly once by one lifecycle owner, in a fixed shutdown sequence
 The composition root SHALL be the single owner of the committed-bar intake
