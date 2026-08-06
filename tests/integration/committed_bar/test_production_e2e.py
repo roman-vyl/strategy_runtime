@@ -613,20 +613,24 @@ def test_legacy_pre_alignment_open_position_success_shape_is_no_longer_accepted(
         assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_failed"
 
 
-def test_open_trade_projection_remains_explicitly_unsupported(
+def test_open_trade_projection_reaches_engine_after_frozen_first_fill(
     tmp_path: Path, engine_server: FakeHttpServer, abi_server: FakeHttpServer
 ) -> None:
-    """position_open=true fails closed in the router itself, before any
-    Engine open-trade call -- see design.md "position_open=true fails
-    closed before Engine, with no field mapping". The fake Engine open-trade
-    route is still configured so a regression that starts calling it again
-    would be caught (request count would become nonzero)."""
+    """A positive ABI open-position lookup now freezes and saves the
+    first-fill context, then reaches Strategy Engine's open-trade endpoint.
+    The cycle still ends failed at the existing deferred post-projection
+    boundary (`OpenTradeProjectionUnsupportedError`) -- applying the
+    response is a later change -- but the frozen context survives that
+    failure, and Engine is genuinely called."""
     _set_engine_routes(
         engine_server, live_entry=_live_entry_present(), open_trade=_open_trade_success()
     )
     _set_abi_routes(
         abi_server,
-        open_position=_open_position_open(1720000000000, "100"),
+        # 1_720_000_200_000 is itself a 5m-candle boundary, at or after
+        # _desired_entry_wire()'s source_plan_bar_open_time_ms
+        # (1_720_000_000_000), so the first-fill freeze succeeds.
+        open_position=_open_position_open(1_720_000_200_000, "100"),
         entry_package=_entry_package_applied,
     )
     app = _build_app(
@@ -639,17 +643,21 @@ def test_open_trade_projection_remains_explicitly_unsupported(
         state_after_apply = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
         assert state_after_apply is not None
         assert state_after_apply.current_trade_cycle is not None
+        assert state_after_apply.current_trade_cycle.frozen_entry_context is None
 
         second = _post_closed_bar(client, 2)
         assert second.status_code == 200
 
         state_after_open_trade = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
-        assert state_after_open_trade == state_after_apply
+        assert state_after_open_trade is not None
+        assert state_after_open_trade.current_trade_cycle is not None
+        frozen = state_after_open_trade.current_trade_cycle.frozen_entry_context
+        assert frozen is not None
+        assert frozen.first_fill_at_ms == 1_720_000_200_000
 
         # Cycle 1: no current_trade_cycle, no ABI open-position call. Cycle
         # 2: current_trade_cycle exists, exactly one ABI open-position call,
-        # answered "open" -- and the router fails closed on that answer
-        # without ever reaching Strategy Engine's open-trade port.
+        # answered "open".
         open_position_requests = [r for r in abi_server.requests if "/open-position" in r.path]
         assert len(open_position_requests) == 1
 
@@ -657,7 +665,12 @@ def test_open_trade_projection_remains_explicitly_unsupported(
         assert len(entry_package_requests) == 1
 
         open_trade_requests = [r for r in engine_server.requests if r.path == _OPEN_TRADE_PATH]
-        assert open_trade_requests == []
+        assert len(open_trade_requests) == 1
+        open_trade_body = open_trade_requests[0].json()
+        assert open_trade_body["strategy_id"] == _STRATEGY_ID
+        assert open_trade_body["ticker"] == _TICKER
+        assert open_trade_body["base_timeframe"] == _TIMEFRAME
+        assert "average_entry_price" not in open_trade_body
 
         outcomes = _dispatch_outcomes(tmp_path / "journal" / "runtime.jsonl")
         assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_failed"

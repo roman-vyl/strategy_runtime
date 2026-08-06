@@ -15,6 +15,7 @@ from strategy_runtime.runtime.entry_reconciliation import (
 from strategy_runtime.runtime.entry_reconciliation_orchestrator.orchestrator import (
     EntryReconciliationOrchestrator,
 )
+from strategy_runtime.runtime.first_fill.errors import FirstFillInvariantError
 from strategy_runtime.runtime.open_position.models import (
     OpenPositionLookupResponse,
     PositionResolvedStrategyInstanceRuntimeState,
@@ -26,7 +27,11 @@ from strategy_runtime.runtime.orchestrator.errors import (
 )
 from strategy_runtime.runtime.orchestrator.orchestrator import StrategyRuntimeOrchestrator
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
-from strategy_runtime.runtime.recipes.position_management import DesiredProtection
+from strategy_runtime.runtime.recipes.position_management import (
+    CloseSignal,
+    DesiredProtection,
+    PositionManagementRecipe,
+)
 from strategy_runtime.runtime.routing.models import (
     LiveEntryProjectedStrategyInstance,
     OpenTradeProjectedStrategyInstance,
@@ -35,6 +40,7 @@ from strategy_runtime.runtime.routing.models import (
 from strategy_runtime.runtime.state.models import (
     AppliedEntryPackage,
     CurrentTradeCycle,
+    FrozenExecutedEntryContext,
     GetOrCreateStrategyInstanceRuntimeStateRequest,
     StrategyInstanceRuntimeState,
 )
@@ -109,14 +115,53 @@ def _resolved_state(
     *,
     position_open: bool,
     state: StrategyInstanceRuntimeState | None = None,
+    first_fill_at_ms: int = 950,
 ) -> PositionResolvedStrategyInstanceRuntimeState:
     target = state or _runtime_state()
     response = (
-        OpenPositionLookupResponse(True, 950, "100.5")
+        OpenPositionLookupResponse(True, first_fill_at_ms, "100.5")
         if position_open
         else OpenPositionLookupResponse(False)
     )
     return OpenPositionResolver(_Abi(response)).resolve(target)
+
+
+def _open_trade_state(*, frozen: bool, first_fill_at_ms: int = 950) -> StrategyInstanceRuntimeState:
+    """A runtime state with a current trade cycle, optionally already frozen.
+
+    ``first_fill_at_ms=300_950`` aligns to a non-zero 5m candle boundary
+    (300_000) that is not before ``_desired_entry()``'s
+    ``source_plan_bar_open_time_ms`` (900), so a fresh freeze through
+    ``apply_first_fill`` succeeds for that value.
+    """
+    cycle = CurrentTradeCycle(
+        "cycle-1",
+        AppliedEntryPackage(
+            applied_desired_entry=_desired_entry(),
+            calculated_quantity="0.1",
+        ),
+        frozen_entry_context=(
+            FrozenExecutedEntryContext(
+                desired_entry=_desired_entry(),
+                first_fill_at_ms=first_fill_at_ms,
+                entry_bar_open_time_ms=900,
+            )
+            if frozen
+            else None
+        ),
+    )
+    return replace(_runtime_state(), current_trade_cycle=cycle)
+
+
+def _open_trade_projection(
+    item: PositionResolvedStrategyInstance,
+) -> OpenTradeProjectedStrategyInstance:
+    recipe = PositionManagementRecipe(
+        desired_protection=DesiredProtection("99.5", None),
+        close_signal=CloseSignal(False),
+        diagnostics={},
+    )
+    return OpenTradeProjectedStrategyInstance(item, recipe)
 
 
 def _live_projection(
@@ -884,23 +929,13 @@ class _CountingReconciliation:
 
 class TestTypedBranchAndErrorBoundary:
     def test_open_trade_raises_without_reconciliation_or_save(self) -> None:
-        state = _runtime_state()
-        resolved = _resolved_state(
-            position_open=True,
-            state=replace(
-                state,
-                current_trade_cycle=CurrentTradeCycle(
-                    "cycle-1",
-                    AppliedEntryPackage(
-                        applied_desired_entry=_desired_entry(),
-                        calculated_quantity="0.1",
-                    ),
-                ),
-            ),
-        )
+        """A pre-frozen cycle is a freeze no-op; the unsupported boundary
+        still raises with no reconciliation and no additional save."""
+        state = _open_trade_state(frozen=True)
+        resolved = _resolved_state(position_open=True, state=state)
         unit = _processing_unit()
         item = PositionResolvedStrategyInstance(unit, resolved)
-        projection = OpenTradeProjectedStrategyInstance(item, DesiredProtection("99.5", None))
+        projection = _open_trade_projection(item)
         repo = _FakeRepository(state)
         ep = _FakeExecutionPort()
         entry_orch = EntryReconciliationOrchestrator(
@@ -922,23 +957,11 @@ class TestTypedBranchAndErrorBoundary:
         assert repo.save_calls == []
 
     def test_open_trade_cannot_produce_successful_dispatch(self) -> None:
-        state = _runtime_state()
-        resolved = _resolved_state(
-            position_open=True,
-            state=replace(
-                state,
-                current_trade_cycle=CurrentTradeCycle(
-                    "cycle-1",
-                    AppliedEntryPackage(
-                        applied_desired_entry=_desired_entry(),
-                        calculated_quantity="0.1",
-                    ),
-                ),
-            ),
-        )
+        state = _open_trade_state(frozen=True)
+        resolved = _resolved_state(position_open=True, state=state)
         unit = _processing_unit()
         item = PositionResolvedStrategyInstance(unit, resolved)
-        projection = OpenTradeProjectedStrategyInstance(item, DesiredProtection("99.5", None))
+        projection = _open_trade_projection(item)
         repo = _FakeRepository(state)
 
         orch = StrategyRuntimeOrchestrator(
@@ -954,6 +977,113 @@ class TestTypedBranchAndErrorBoundary:
 
         with pytest.raises(OpenTradeProjectionUnsupportedError):
             orch.dispatch(unit)
+
+    def test_open_trade_freezes_and_saves_before_routing(self) -> None:
+        """A changed first-fill freeze is saved and reaches the router before
+        Engine, and that save survives the still-unsupported boundary after
+        it (see strategy-runtime-orchestrator spec, "changed transition
+        result is saved and passed to router" / "freeze save is not undone
+        by a later failure")."""
+        state = _open_trade_state(frozen=False)
+        resolved = _resolved_state(position_open=True, state=state, first_fill_at_ms=300_950)
+        unit = _processing_unit()
+        repo = _FakeRepository(state)
+        router = MagicMock(route=MagicMock(side_effect=lambda item: _open_trade_projection(item)))
+
+        orch = StrategyRuntimeOrchestrator(
+            state_repository=repo,
+            open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
+            use_case_router=router,
+            keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
+                trade_cycle_id_factory=lambda: "tc-id",
+                execution_port=_FakeExecutionPort(),
+            ),
+        )
+
+        with pytest.raises(OpenTradeProjectionUnsupportedError):
+            orch.process(unit)
+
+        assert len(repo.save_calls) == 1
+        saved_cycle = repo.save_calls[0].current_trade_cycle
+        assert saved_cycle is not None
+        assert saved_cycle.frozen_entry_context is not None
+        assert saved_cycle.frozen_entry_context.first_fill_at_ms == 300_950
+
+        routed_item = router.route.call_args.args[0]
+        assert routed_item.resolved_state.runtime_state is repo.save_calls[0]
+
+    def test_open_trade_skips_save_when_already_frozen(self) -> None:
+        state = _open_trade_state(frozen=True, first_fill_at_ms=950)
+        resolved = _resolved_state(position_open=True, state=state, first_fill_at_ms=950)
+        unit = _processing_unit()
+        repo = _FakeRepository(state)
+        router = MagicMock(route=MagicMock(side_effect=lambda item: _open_trade_projection(item)))
+
+        orch = StrategyRuntimeOrchestrator(
+            state_repository=repo,
+            open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
+            use_case_router=router,
+            keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
+                trade_cycle_id_factory=lambda: "tc-id",
+                execution_port=_FakeExecutionPort(),
+            ),
+        )
+
+        with pytest.raises(OpenTradeProjectionUnsupportedError):
+            orch.process(unit)
+
+        assert repo.save_calls == []
+        routed_item = router.route.call_args.args[0]
+        assert routed_item.resolved_state.runtime_state is state
+
+    def test_open_trade_freeze_conflict_propagates_without_routing(self) -> None:
+        state = _open_trade_state(frozen=True, first_fill_at_ms=950)
+        resolved = _resolved_state(position_open=True, state=state, first_fill_at_ms=951)
+        unit = _processing_unit()
+        repo = _FakeRepository(state)
+        router = MagicMock()
+
+        orch = StrategyRuntimeOrchestrator(
+            state_repository=repo,
+            open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
+            use_case_router=router,
+            keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
+                trade_cycle_id_factory=lambda: "tc-id",
+                execution_port=_FakeExecutionPort(),
+            ),
+        )
+
+        with pytest.raises(FirstFillInvariantError):
+            orch.process(unit)
+
+        assert repo.save_calls == []
+        router.route.assert_not_called()
+
+    def test_closed_position_skips_first_fill_freeze(self) -> None:
+        """A mid-cycle instance not yet reported open by ABI never touches
+        the first-fill transition; live-entry routing proceeds unchanged."""
+        state = _open_trade_state(frozen=False)
+        resolved = _resolved_state(position_open=False, state=state)
+        unit = _processing_unit()
+        repo = _FakeRepository(state)
+        projection = LiveEntryProjectedStrategyInstance(
+            PositionResolvedStrategyInstance(unit, resolved), _desired_entry()
+        )
+
+        orch = StrategyRuntimeOrchestrator(
+            state_repository=repo,
+            open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
+            use_case_router=MagicMock(route=MagicMock(return_value=projection)),
+            keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            entry_reconciliation_orchestrator=MagicMock(execute=MagicMock(return_value=state)),
+        )
+
+        result = orch.process(unit)
+        assert result is state
+        assert repo.save_calls == []
 
     def test_unknown_projection_raises_without_reconciliation_or_save(self) -> None:
         state = _runtime_state()

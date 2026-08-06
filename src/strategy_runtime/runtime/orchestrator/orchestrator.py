@@ -1,8 +1,15 @@
 """Semantic Strategy Runtime orchestrator through final aggregate application."""
 
+from dataclasses import replace
+
 from strategy_runtime.runtime.coordination import StrategyInstanceKeyedMutexRegistry
 from strategy_runtime.runtime.entry_reconciliation_orchestrator import (
     EntryReconciliationOrchestrator,
+)
+from strategy_runtime.runtime.first_fill.errors import FirstFillInvariantError
+from strategy_runtime.runtime.first_fill.state_applier import apply_first_fill
+from strategy_runtime.runtime.open_position.models import (
+    PositionResolvedStrategyInstanceRuntimeState,
 )
 from strategy_runtime.runtime.open_position.ports import OpenPositionResolverPort
 from strategy_runtime.runtime.orchestrator.errors import (
@@ -58,6 +65,8 @@ class StrategyRuntimeOrchestrator:
                 )
             )
             resolved = self._open_position_resolver.resolve(state)
+            if resolved.position_open:
+                resolved = self._ensure_first_fill_frozen(resolved)
             projection = self._use_case_router.route(
                 PositionResolvedStrategyInstance(unit, resolved)
             )
@@ -80,3 +89,21 @@ class StrategyRuntimeOrchestrator:
     ) -> StrategyCycleDispatchOutcome:
         self.process(unit)
         return StrategyCycleDispatchOutcome.succeeded(unit.strategy_instance_id)
+
+    def _ensure_first_fill_frozen(
+        self, resolved: PositionResolvedStrategyInstanceRuntimeState
+    ) -> PositionResolvedStrategyInstanceRuntimeState:
+        state = resolved.runtime_state
+        current_cycle = state.current_trade_cycle
+        if current_cycle is None:
+            raise FirstFillInvariantError(
+                "apply_first_fill requires an existing current trade cycle"
+            )
+        assert resolved.first_fill_at_ms is not None
+        resulting_state = apply_first_fill(
+            state, current_cycle.trade_cycle_id, resolved.first_fill_at_ms
+        )
+        if resulting_state is state:
+            return resolved
+        saved_state = self._state_repository.save(resulting_state)
+        return replace(resolved, runtime_state=saved_state)

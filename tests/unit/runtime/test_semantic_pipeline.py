@@ -35,12 +35,14 @@ from strategy_runtime.runtime.routing.errors import (
 )
 from strategy_runtime.runtime.routing.models import (
     LiveEntryProjectedStrategyInstance,
+    OpenTradeProjectedStrategyInstance,
     PositionResolvedStrategyInstance,
 )
 from strategy_runtime.runtime.routing.router import StrategyUseCaseRouter
 from strategy_runtime.runtime.state.models import (
     AppliedEntryPackage,
     CurrentTradeCycle,
+    FrozenExecutedEntryContext,
     GetOrCreateStrategyInstanceRuntimeStateRequest,
     StrategyInstanceRuntimeState,
 )
@@ -187,6 +189,18 @@ def frozen_trade_state() -> StrategyInstanceRuntimeState:
     )
 
 
+def frozen_trade_state_with_context() -> StrategyInstanceRuntimeState:
+    state = frozen_trade_state()
+    cycle = state.current_trade_cycle
+    assert cycle is not None
+    frozen_context = FrozenExecutedEntryContext(
+        desired_entry=cycle.applied_entry_package.applied_desired_entry,
+        first_fill_at_ms=950,
+        entry_bar_open_time_ms=900,
+    )
+    return replace(state, current_trade_cycle=replace(cycle, frozen_entry_context=frozen_context))
+
+
 def router(
     *,
     live_engine: LiveEngine | None = None,
@@ -310,16 +324,17 @@ def test_router_preserves_no_desired_entry_without_side_arbitration() -> None:
     assert result.desired_entry is None
 
 
-def test_router_fails_closed_for_open_position_even_with_complete_context() -> None:
-    """position_open=true never reaches Engine in this change (temporary boundary).
+def test_router_fails_closed_for_open_position_without_frozen_context() -> None:
+    """Freezing the entry context is the orchestrator's job, not the router's.
 
-    first_fill_at_ms/average_entry_price stay ABI/Runtime execution facts and
-    are never mapped into a Strategy Engine request field; see design.md
-    "position_open=true fails closed before Engine, with no field mapping".
+    A router call bypassing that upstream freeze step must still fail
+    closed rather than fabricate a request from unfrozen facts.
     """
     live_engine = LiveEngine()
     open_engine = OpenEngine()
     state = frozen_trade_state()
+    assert state.current_trade_cycle is not None
+    assert state.current_trade_cycle.frozen_entry_context is None
     item = PositionResolvedStrategyInstance(
         processing_unit(),
         resolved_state(position_open=True, state=state),
@@ -330,6 +345,68 @@ def test_router_fails_closed_for_open_position_even_with_complete_context() -> N
 
     assert live_engine.requests == []
     assert open_engine.requests == []
+
+
+def test_router_routes_open_position_with_frozen_context() -> None:
+    live_engine = LiveEngine()
+    open_engine = OpenEngine()
+    state = frozen_trade_state_with_context()
+    assert state.current_trade_cycle is not None
+    frozen_context = state.current_trade_cycle.frozen_entry_context
+    assert frozen_context is not None
+    mismatched_deployment = DeploymentSpecification(
+        strategy_instance_id=state.strategy_instance_id,
+        enabled=True,
+        instrument="ETHUSDT.P",
+        base_timeframe="1m",
+        strategy_id="wrong_strategy",
+        raw_spec={"different": True},
+        source_path="/specs/other.json",
+    )
+    unit = StrategyBarProcessingUnit(
+        strategy_instance_id=state.strategy_instance_id,
+        deployment=mismatched_deployment,
+        committed_bar=CommittedBarEvent("BTCUSDT.P", "5m", 1000),
+    )
+    item = PositionResolvedStrategyInstance(
+        unit,
+        resolved_state(position_open=True, state=state),
+    )
+
+    result = router(live_engine=live_engine, open_engine=open_engine).route(item)
+
+    assert isinstance(result, OpenTradeProjectedStrategyInstance)
+    assert result.source is item
+    assert live_engine.requests == []
+    assert len(open_engine.requests) == 1
+    request = open_engine.requests[0]
+    assert request.strategy_id == state.strategy_id
+    assert request.raw_spec == state.registered_spec_snapshot.raw_spec
+    assert request.ticker == state.registered_spec_snapshot.instrument
+    assert request.base_timeframe == state.registered_spec_snapshot.base_timeframe
+    assert request.target_bar_open_time_ms == 1000
+    assert request.desired_entry is frozen_context.desired_entry
+    assert request.entry_bar_open_time_ms == frozen_context.entry_bar_open_time_ms
+    assert not hasattr(request, "average_entry_price")
+    recipe = result.position_management_recipe
+    assert recipe.desired_protection == DesiredProtection("99.5", None)
+    assert recipe.close_signal == CloseSignal(False)
+    assert dict(recipe.diagnostics) == {"phase": "protected", "bars_in_trade": 3}
+
+
+def test_router_propagates_typed_engine_transport_failures_for_open_trade() -> None:
+    error = StrategyEngineProjectionUnavailable("timeout")
+    state = frozen_trade_state_with_context()
+    item = PositionResolvedStrategyInstance(
+        processing_unit(),
+        resolved_state(position_open=True, state=state),
+    )
+    target_router = router(open_engine=OpenEngine(error=error))
+
+    with pytest.raises(StrategyEngineProjectionUnavailable) as raised:
+        target_router.route(item)
+
+    assert raised.value is error
 
 
 def test_open_trade_request_contract_rejects_executed_entry_price() -> None:
