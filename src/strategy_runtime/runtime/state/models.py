@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
+from strategy_runtime.runtime.recipes.position_management import DesiredProtection
 from strategy_runtime.shared.decimal_text import (
     is_exact_decimal_text,
     is_positive_exact_decimal_text,
@@ -62,6 +63,7 @@ class CurrentTradeCycle:
     trade_cycle_id: str
     applied_entry_package: AppliedEntryPackage
     frozen_entry_context: FrozenExecutedEntryContext | None = None
+    latest_confirmed_management_protection: DesiredProtection | None = None
 
     def __post_init__(self) -> None:
         if type(self.trade_cycle_id) is not str or len(self.trade_cycle_id) == 0:
@@ -73,6 +75,13 @@ class CurrentTradeCycle:
             and type(self.frozen_entry_context) is not FrozenExecutedEntryContext
         ):
             raise TypeError("frozen_entry_context must be FrozenExecutedEntryContext or None")
+        if (
+            self.latest_confirmed_management_protection is not None
+            and type(self.latest_confirmed_management_protection) is not DesiredProtection
+        ):
+            raise TypeError(
+                "latest_confirmed_management_protection must be DesiredProtection or None"
+            )
 
     @property
     def desired_entry_frozen(self) -> bool:

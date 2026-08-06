@@ -4,6 +4,7 @@ from typing import cast
 import pytest
 
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
+from strategy_runtime.runtime.recipes.position_management import DesiredProtection
 from strategy_runtime.runtime.state.models import (
     AppliedEntryPackage,
     CurrentTradeCycle,
@@ -59,9 +60,11 @@ def test_current_cycle_has_only_minimal_i2_fields_plus_frozen_context() -> None:
         "trade_cycle_id",
         "applied_entry_package",
         "frozen_entry_context",
+        "latest_confirmed_management_protection",
     )
     assert cycle.trade_cycle_id == " cycle-owned-by-runtime "
     assert cycle.frozen_entry_context is None
+    assert cycle.latest_confirmed_management_protection is None
     assert not hasattr(cycle, "phase")
     assert not hasattr(cycle, "filled_quantity")
     assert not hasattr(cycle, "remaining_quantity")
@@ -69,6 +72,23 @@ def test_current_cycle_has_only_minimal_i2_fields_plus_frozen_context() -> None:
     assert not hasattr(cycle, "fill_timestamp")
     assert not hasattr(cycle, "fill_ledger")
     assert not hasattr(cycle, "position_management_recipe")
+    assert not hasattr(cycle, "diagnostics")
+
+
+def test_current_cycle_accepts_and_rejects_latest_confirmed_management_protection() -> None:
+    protection = DesiredProtection("99", "103")
+    cycle = CurrentTradeCycle(
+        "cycle-1", applied_package(), latest_confirmed_management_protection=protection
+    )
+
+    assert cycle.latest_confirmed_management_protection is protection
+
+    with pytest.raises(TypeError, match="latest_confirmed_management_protection must be"):
+        CurrentTradeCycle(
+            "cycle-1",
+            applied_package(),
+            latest_confirmed_management_protection=cast("DesiredProtection", 1),
+        )
 
 
 def frozen_context(
