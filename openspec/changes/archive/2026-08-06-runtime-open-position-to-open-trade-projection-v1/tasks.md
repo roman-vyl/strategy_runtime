@@ -31,4 +31,4 @@
 
 ## 5. Follow-Up
 
-- [ ] 5.1 Sync affected specs and archive this change after approval.
+- [x] 5.1 Sync affected specs and archive this change after approval.

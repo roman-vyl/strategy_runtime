@@ -96,43 +96,45 @@ can enter projected Runtime state or future ABI reconciliation.
 - **THEN** Runtime rejects the desired entry as malformed
 - **AND** no desired entry can be sent to ABI reconciliation
 
-### Requirement: Open-trade routing fails closed before any Engine call
-The router SHALL NOT construct `OpenTradeProjectionRequest` and SHALL NOT
-call `StrategyEngineOpenTradePort.project_open_trade` when
-`resolved.position_open` is `true`. It SHALL raise the existing
-`OpenTradeContextUnavailable` unconditionally for this case, as a temporary
-fail-closed boundary pending a separate future decision on whether or how
-ABI-reported fill facts should reach Strategy Engine.
+### Requirement: Runtime routes an open position from frozen entry context
+For `resolved.position_open = true`, the router SHALL route from the
+current trade cycle's frozen entry context: build the open-trade request
+from the registered spec snapshot, the current committed bar, and that
+context (never from `unit.deployment`, never including
+`average_entry_price`), call `StrategyEngineOpenTradePort
+.project_open_trade(...)` exactly once, and return
+`OpenTradeProjectedStrategyInstance` wrapping the response unchanged. When
+no frozen entry context is present, it SHALL raise the existing
+`OpenTradeContextUnavailable` without calling either Engine port. Routing a
+closed position is unaffected.
 
-#### Scenario: Fail closed immediately for an open position
-- **WHEN** `resolved.position_open` is `true`
+#### Scenario: Route an open position with a frozen entry context
+- **WHEN** `resolved.position_open` is `true` and the current trade cycle's
+  `frozen_entry_context` is not null
+- **THEN** the request's `strategy_id` comes from
+  `resolved.runtime_state.strategy_id`, its `raw_spec`/`ticker`/
+  `base_timeframe` come from the registered spec snapshot,
+  `target_bar_open_time_ms` from the current committed bar, and
+  `desired_entry`/`entry_bar_open_time_ms` from the frozen context,
+  unchanged
+- **AND** the router calls `project_open_trade(...)` exactly once and does
+  not call live-entry projection
+- **AND** it returns `OpenTradeProjectedStrategyInstance` wrapping the
+  response's `desired_protection`, `close_signal`, and `diagnostics`
+  without interpreting them
+
+#### Scenario: Fail closed without a frozen entry context
+- **WHEN** `resolved.position_open` is `true` and the current trade cycle
+  is null or its `frozen_entry_context` is null
 - **THEN** the router raises `OpenTradeContextUnavailable(unit
-  .strategy_instance_id)` before evaluating the current trade cycle, its
-  frozen desired entry, or either fill fact
-- **AND** does not construct `OpenTradeProjectionRequest`
-- **AND** does not call `StrategyEngineOpenTradePort`
+  .strategy_instance_id)`
+- **AND** calls neither Engine port
 
-#### Scenario: No fill-fact value is read for Engine mapping
-- **WHEN** the router raises for `position_open=true`
-- **THEN** `resolved.first_fill_at_ms` and `resolved.average_entry_price`
-  are not read, copied, renamed, or otherwise made to reach any Strategy
-  Engine request field
-- **AND** no legacy field name (`entry_bar_open_time_ms`,
-  `executed_entry_price`) is synthesized anywhere in the router
-
-#### Scenario: Live-entry routing is unaffected
+#### Scenario: Closed-position routing is unchanged
 - **WHEN** `resolved.position_open` is `false`
 - **THEN** the router builds `LiveEntryProjectionRequest` and calls
   `StrategyEngineLiveEntryPort.project_live_entry(...)` exactly as before
   this change
-
-#### Scenario: The fail-closed failure propagates through the existing boundary
-- **WHEN** `OpenTradeContextUnavailable` is raised
-- **THEN** it propagates uncaught out of `StrategyRuntimeOrchestrator
-  .process(...)` exactly like any other router failure
-- **AND** `CommittedBarOrchestrator` converts it into the existing failed
-  `StrategyCycleDispatchOutcome`, journaled by `JsonlProcessingJournal` —
-  no new error-handling path is introduced
 
 ### Requirement: Position-management diagnostics are opaque and immutable
 The router SHALL preserve open-trade calculation objects without interpretation,
