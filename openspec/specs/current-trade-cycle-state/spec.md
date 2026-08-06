@@ -25,8 +25,14 @@ no acknowledged current trade cycle.
 
 ### Requirement: Current trade cycle has only the minimal I2 fields
 `CurrentTradeCycle` SHALL contain exactly one non-empty `trade_cycle_id`, one
-required `applied_entry_package: AppliedEntryPackage`, and one nullable
-`frozen_entry_context: FrozenExecutedEntryContext | null`.
+required `applied_entry_package: AppliedEntryPackage`, one nullable
+`frozen_entry_context: FrozenExecutedEntryContext | null`, and one nullable
+latest confirmed management protection:
+`latest_confirmed_management_protection: DesiredProtection | null`. Null
+means Runtime has not yet acknowledged any post-entry management change;
+the initial protection remains available from
+`frozen_entry_context.desired_entry` regardless. Runtime SHALL store only
+this single latest confirmed value, never a history.
 
 #### Scenario: Require an acknowledged applied package
 - **WHEN** `CurrentTradeCycle` is constructed
@@ -49,9 +55,25 @@ required `applied_entry_package: AppliedEntryPackage`, and one nullable
 #### Scenario: Exclude deferred execution state
 - **WHEN** a current cycle is modeled
 - **THEN** it contains no phase, filled quantity, remaining quantity,
-  average entry price, fill timestamp, fill ledger, or
-  position-management recipe anywhere on the cycle or on any non-null
-  `frozen_entry_context`
+  average entry price, fill timestamp, or fill ledger anywhere on the
+  cycle or on any non-null `frozen_entry_context`
+- **AND** it contains no protection history, pending execution state,
+  diagnostics, or full `PositionManagementRecipe` — only the single
+  nullable latest confirmed management protection
+
+#### Scenario: No management acknowledgement yet
+- **WHEN** a current trade cycle has never had a management protection
+  acknowledged
+- **THEN** its latest confirmed management protection is null
+- **AND** its initial protection is still readable from
+  `frozen_entry_context.desired_entry`
+
+#### Scenario: One replaceable acknowledged value
+- **WHEN** a current trade cycle's latest confirmed management protection
+  is set
+- **THEN** it holds exactly one `DesiredProtection` value
+- **AND** no prior acknowledged protection, pending change, or diagnostics
+  value is retained alongside it
 
 ### Requirement: Applied entry package is one indivisible nested value
 `AppliedEntryPackage` SHALL contain exactly `applied_desired_entry` and

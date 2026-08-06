@@ -23,4 +23,4 @@
   baseline resolution, diagnostics irrelevance, and invariant failures.
 - [x] 3.2 Full test suite, `ruff check`, `ruff format --check`, `mypy`,
   `openspec validate` for this change and `--all`, both `--strict`.
-- [ ] 3.3 Sync affected specs and archive this change after approval.
+- [x] 3.3 Sync affected specs and archive this change after approval.
