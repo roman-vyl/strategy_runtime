@@ -1,71 +1,41 @@
-## 1. Commands, Confirmations, and Errors
+## 1. Commands, Confirmations, and Port
 
-- [ ] 1.1 Add `ApplyProtectionCommand` (`strategy_instance_id`,
-  `trade_cycle_id`, `desired_protection`) and `ClosePositionCommand`
-  (`strategy_instance_id`, `trade_cycle_id`), each rejecting empty identity
-  fields and wrong-typed payloads.
-- [ ] 1.2 Add `ProtectionAppliedConfirmation` (`strategy_instance_id`,
-  `trade_cycle_id`, `confirmed_protection`) and `PositionClosedConfirmation`
-  (`strategy_instance_id`, `trade_cycle_id`), with the same validation.
-- [ ] 1.3 Add `PositionManagementExecutionInvariantError`, mirroring
-  `EntryReconciliationInvariantError` / `PositionManagementDecisionInvariantError`.
+- [ ] 1.1 Add `ApplyProtectionCommand` / `ClosePositionCommand` and
+  `ProtectionAppliedConfirmation` / `PositionClosedConfirmation` with their
+  minimal fields and validation; add
+  `PositionManagementExecutionInvariantError`.
+- [ ] 1.2 Define `PositionManagementExecutionPort` (`apply_protection`,
+  `close_position`), each taking only its command and documenting the
+  terminal-confirmation contract (verified applied protection / verified
+  zero remainder, not request acceptance). No implementation ships here.
 
-## 2. Execution Port Contract
+## 2. Confirmation-Application State Transition
 
-- [ ] 2.1 Define `PositionManagementExecutionPort` as a `Protocol` with
-  `apply_protection(command, source_state) -> ProtectionAppliedConfirmation`
-  and `close_position(command, source_state) -> PositionClosedConfirmation`.
-  No implementation of this port ships in this change.
+- [ ] 2.1 Implement a pure confirmation-application function for
+  `current-trade-cycle-state`: matching `ApplyProtection` confirmation
+  updates `latest_confirmed_management_protection`; matching `ClosePosition`
+  confirmation clears `current_trade_cycle`.
+- [ ] 2.2 Fail closed — raise `PositionManagementExecutionInvariantError`,
+  return no new state — on any decision/command/confirmation identity,
+  action-type, or protection-value mismatch.
 
-## 3. Confirmation-Application State Transition
+## 3. Orchestrator
 
-- [ ] 3.1 Implement a pure `apply_position_management_confirmation(state,
-  decision, sent_command, confirmation)` function analogous to
-  `apply_success_confirmation`.
-- [ ] 3.2 `ApplyProtection` + matching `ProtectionAppliedConfirmation`
-  replaces `current_trade_cycle.latest_confirmed_management_protection` with
-  the confirmed value; every other field of the cycle is preserved.
-- [ ] 3.3 `ClosePosition` + matching `PositionClosedConfirmation` sets
-  `current_trade_cycle` to null; every other field of
-  `StrategyInstanceRuntimeState` is preserved.
-- [ ] 3.4 Fail closed — raise `PositionManagementExecutionInvariantError` and
-  return no new state — on: wrong confirmation variant for the decision,
-  `strategy_instance_id` mismatch (command or confirmation) against
-  `source_state`, missing or trade-cycle-id-mismatched
-  `current_trade_cycle`, or (for `ApplyProtection`) a `confirmed_protection`
-  that differs from the decision's or the sent command's
-  `desired_protection`.
+- [ ] 3.1 Implement a pure command builder from a decision and
+  `source_state` (no command for `NoOp`).
+- [ ] 3.2 Implement `PositionManagementOrchestrator.execute(projection)`:
+  decide, return unchanged state for `NoOp`, otherwise call exactly the
+  matching port method once and apply its confirmation via the state
+  transition; let port exceptions propagate uncaught.
+- [ ] 3.3 Confirm the orchestrator acquires no mutex, does no
+  repository I/O, and retries nothing.
 
-## 4. Command Construction and Orchestrator
+## 4. Verification
 
-- [ ] 4.1 Implement a pure command builder that turns an `ApplyProtection` or
-  `ClosePosition` decision plus `source_state` into the matching command
-  (`strategy_instance_id` sourced from `source_state`); return no command for
-  `NoOp`.
-- [ ] 4.2 Implement `PositionManagementOrchestrator.execute(projection:
-  OpenTradeProjectedStrategyInstance) -> StrategyInstanceRuntimeState`:
-  extract `source_state`, call the existing `decide_position_management`,
-  return `source_state` unchanged for `NoOp`, otherwise build the command,
-  call exactly the matching port method, and apply the returned confirmation
-  through the state-transition function.
-- [ ] 4.3 Let any exception raised by the port propagate uncaught; the
-  orchestrator never returns a partially applied state.
-- [ ] 4.4 Confirm the orchestrator acquires no mutex, performs no repository
-  load/save, and performs no retry.
-
-## 5. Verification
-
-- [ ] 5.1 Unit tests for command/confirmation construction and validation
-  (empty identities, wrong types).
-- [ ] 5.2 Unit tests for the confirmation-application state transition:
-  matching apply, matching close, every fail-closed mismatch scenario from
-  `specs/position-management-orchestrator/spec.md`, and the
-  state-unmodified-on-failure invariant.
-- [ ] 5.3 Unit tests for `PositionManagementOrchestrator.execute` against a
-  fake `PositionManagementExecutionPort`: `NoOp` calls neither method,
-  `ApplyProtection` calls only `apply_protection` exactly once,
-  `ClosePosition` calls only `close_position` exactly once, and a port
-  exception propagates with no returned state.
-- [ ] 5.4 Full test suite, `ruff check`, `ruff format --check`, `mypy`,
-  `openspec validate` for this change and `--all`, both `--strict`.
-- [ ] 5.5 Sync affected specs and archive this change after approval.
+- [ ] 4.1 Unit tests for command/confirmation construction and validation.
+- [ ] 4.2 Unit tests for the confirmation-application transition: matching
+  apply, matching close, and each fail-closed mismatch.
+- [ ] 4.3 Unit tests for the orchestrator against a fake port: `NoOp`,
+  `ApplyProtection`, `ClosePosition`, and a propagated port failure.
+- [ ] 4.4 Full test suite, `ruff check`, `ruff format --check`, `mypy`,
+  `openspec validate --all --strict`; sync specs and archive after approval.
