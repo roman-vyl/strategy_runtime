@@ -23,7 +23,8 @@ closed position is unaffected.
 #### Scenario: Route an open position with a frozen entry context
 - **WHEN** `resolved.position_open` is `true` and the current trade cycle's
   `frozen_entry_context` is not null
-- **THEN** the request's `strategy_id`/`raw_spec`/`ticker`/
+- **THEN** the request's `strategy_id` comes from
+  `resolved.runtime_state.strategy_id`, its `raw_spec`/`ticker`/
   `base_timeframe` come from the registered spec snapshot,
   `target_bar_open_time_ms` from the current committed bar, and
   `desired_entry`/`entry_bar_open_time_ms` from the frozen context,
