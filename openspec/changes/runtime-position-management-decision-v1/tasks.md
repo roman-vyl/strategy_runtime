@@ -11,8 +11,8 @@
   management protection, else the frozen entry context's initial stop/take.
 - [ ] 2.2 Implement the pure decision function selecting one variant from a
   `PositionManagementRecipe` and the current trade cycle.
-- [ ] 2.3 Give an active close signal unconditional priority over any
-  protection difference in the same recipe.
+- [ ] 2.3 Give an active close signal unconditional priority, regardless
+  of whether protection in the same recipe is equal or differs.
 - [ ] 2.4 Compare protection by exact value equality, no float conversion.
 - [ ] 2.5 Raise a typed invariant error for a missing/unfrozen current
   trade cycle or a wrong-typed input; produce no decision in that case.

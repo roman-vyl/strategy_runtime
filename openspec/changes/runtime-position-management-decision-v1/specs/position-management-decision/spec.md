@@ -1,16 +1,16 @@
 ## ADDED Requirements
 
 ### Requirement: Select one position-management decision
-Runtime SHALL select exactly one closed payload-bearing decision from
-`NoOp`, `ApplyProtection`, and `ClosePosition`, given a
-`PositionManagementRecipe` and the current trade cycle's effective
-acknowledged protection. `close_signal.active = true` SHALL take priority
-over any protection difference in the same recipe, and `diagnostics` SHALL
-NOT influence the decision.
+Runtime SHALL select exactly one closed decision variant from `NoOp`,
+`ApplyProtection`, and `ClosePosition`, given a `PositionManagementRecipe`
+and the current trade cycle's effective acknowledged protection.
+`close_signal.active = true` SHALL take unconditional priority regardless
+of protection equality, and `diagnostics` SHALL NOT influence the
+decision.
 
-#### Scenario: Active close wins over a protection change
-- **WHEN** `close_signal.active` is `true` and `desired_protection` differs
-  from the effective acknowledged protection
+#### Scenario: Active close always wins, regardless of protection
+- **WHEN** `close_signal.active` is `true`, whether `desired_protection`
+  equals or differs from the effective acknowledged protection
 - **THEN** the decision is `ClosePosition`, carrying the trade cycle's
   `trade_cycle_id` and the recipe's `close_signal`
 - **AND** no `ApplyProtection` decision is produced for that recipe
