@@ -20,16 +20,37 @@ the same fail-closed boundary as every earlier component.
   including `AbiExecutionEventOrchestrator` and the committed-bar intake
   queue and worker, and reports `ready=True`
 
-#### Scenario: A missing, unparsable, or later-rejected field fails closed
-- **WHEN** any required variable is missing or unparsable, or a later
-  component's constructor rejects a successfully parsed but semantically
-  invalid field (non-`http`/`https` URL, non-finite or non-positive
-  timeout, non-positive queue capacity)
+#### Scenario: A missing or unparsable field fails closed before any client exists
+- **WHEN** any required variable is missing or unparsable
+- **THEN** `build_application` constructs zero outbound HTTP clients and
+  does not construct `AbiExecutionEventOrchestrator` or the intake
+  boundary/worker, and reports `ready=False`
+
+#### Scenario: A first-fill wiring failure still fails closed
+- **WHEN** constructing `AbiExecutionEventOrchestrator`, the intake
+  boundary/worker, or connecting either to `create_http_app(...)` fails,
+  after zero or more earlier components already constructed successfully
 - **THEN** `build_application` closes or stops every component already
   constructed, exactly once each, via startup rollback, and reports
   `ready=False` — no partially wired `ready=True` application, with a
   disconnected first-fill callable, a `None` intake boundary, or an
   unstarted worker, is ever returned
+
+#### Scenario: A later construction-time rejection still fails closed
+- **WHEN** a later component's constructor rejects a successfully parsed
+  but semantically invalid field (non-`http`/`https` URL, non-finite or
+  non-positive timeout, non-positive queue capacity), after one or more
+  earlier components already constructed successfully
+- **THEN** `build_application` closes every component already constructed
+  before that rejection, via startup rollback, and reports `ready=False`
+
+#### Scenario: One ABI base URL serves two independently timed-out adapters
+- **WHEN** the production graph is constructed
+- **THEN** `HttpxAbiOpenPositionLookupAdapter` and
+  `HttpxAbiEntryPackageAdapter` are both constructed from the same
+  `RUNTIME_ABI_BASE_URL`, each using its own distinct timeout
+  (`RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS` and
+  `RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS`, respectively)
 
 #### Scenario: No speculative reliability configuration is added
 - **WHEN** the configuration fields are validated
@@ -44,10 +65,18 @@ in-memory, non-persisted committed-bar intake queue for `I4d`'s
 production graph, and SHALL treat the resulting non-durable behavior of
 both as an accepted Live V1 limitation.
 
-#### Scenario: In-flight and queued-but-undequeued events are an accepted risk
+#### Scenario: In-memory repository is the selected implementation
+- **WHEN** the production graph is constructed
+- **THEN** the shared state repository is
+  `InMemoryStrategyInstanceRuntimeStateRepository`
+- **AND** `infrastructure/runtime_state/sqlite_repository.py` remains an
+  unimplemented placeholder, not a partially completed component of this
+  change
+
+#### Scenario: A lost in-flight cycle is an accepted risk
 - **WHEN** Runtime terminates after acknowledging a webhook but before
   its queued committed-bar cycle completes, whether or not the worker
-  had already dequeued it
+  had already dequeued it from the intake queue
 - **THEN** that event is lost with no persisted pending action, replay,
   or recovery mechanism, and this is documented as an accepted Live V1
   limitation rather than an unresolved task of this change

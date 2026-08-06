@@ -6,18 +6,22 @@ without waiting for later application processing. Acceptance means the
 event was placed into the bounded committed-bar intake queue, not that it
 was processed.
 
-#### Scenario: Return before queued processing completes
+#### Scenario: Return before background work completes
 - **WHEN** Runtime accepts a valid closed-bar notification
 - **THEN** Runtime enqueues the validated event into the bounded intake
   queue and returns the acknowledgement without waiting for the intake
   worker to dequeue or process it
 
-#### Scenario: Downstream outcome never changes the acknowledgement
-- **WHEN** queued processing later fails, or the queued event is never
-  processed before the process terminates or restarts
+#### Scenario: Downstream failure does not change acknowledgement
+- **WHEN** queued processing fails, or the queued event is never processed
+  before the process terminates or restarts
 - **THEN** the failure or loss remains internal to Runtime
 - **AND** the response already sent to the caller is not changed or
-  repeated, and does not assert that a strategy was discovered or
+  repeated
+
+#### Scenario: Acceptance does not imply trading success
+- **WHEN** Runtime returns `{"status":"accepted"}`
+- **THEN** the response does not assert that a strategy was discovered or
   evaluated, or that ABI or an exchange accepted or executed any action
 
 ### Requirement: Runtime reserves an internal trace hook for accepted notifications
@@ -25,12 +29,15 @@ Strategy Runtime SHALL generate one internal trace identifier for each
 accepted closed-bar notification and SHALL currently discard it without
 propagating it into queued processing or the HTTP response.
 
-#### Scenario: Create identity before queue handoff, expose nothing
+#### Scenario: Create identity before background handoff
 - **WHEN** a valid request passes readiness checks and is enqueued
 - **THEN** Runtime creates one `trace_id`, enqueues the validated
   `CommittedBarEvent` alone, and does not place `trace_id` in the queued
-  item, the orchestration object graph, the processing journal, or the
-  HTTP response
+  item, the orchestration object graph, or the processing journal
+
+#### Scenario: Do not expose flow identity to MDS
+- **WHEN** Runtime accepts a closed-bar notification
+- **THEN** the HTTP response does not contain `trace_id`
 
 #### Scenario: Rejected requests have no accepted flow
 - **WHEN** Runtime rejects a request before acceptance, for any reason
