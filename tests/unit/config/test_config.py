@@ -12,6 +12,7 @@ _REQUIRED_OUTBOUND_ENV = {
     "RUNTIME_ABI_BASE_URL": "http://abi.internal",
     "RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS": "5",
     "RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS": "5",
+    "RUNTIME_ABI_POSITION_MANAGEMENT_TIMEOUT_SECONDS": "5",
     "RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY": "256",
 }
 
@@ -48,6 +49,7 @@ def test_loads_required_outbound_fields() -> None:
     assert config.abi_base_url == "http://abi.internal"
     assert config.abi_open_position_timeout_seconds == 5.0
     assert config.abi_entry_package_timeout_seconds == 5.0
+    assert config.abi_position_management_timeout_seconds == 5.0
     assert config.committed_bar_queue_capacity == 256
 
 
@@ -59,6 +61,7 @@ def test_loads_required_outbound_fields() -> None:
         "RUNTIME_ABI_BASE_URL",
         "RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS",
         "RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS",
+        "RUNTIME_ABI_POSITION_MANAGEMENT_TIMEOUT_SECONDS",
         "RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY",
     ],
 )
@@ -75,6 +78,7 @@ def test_rejects_missing_required_outbound_field(missing: str) -> None:
         "RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS",
         "RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS",
         "RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS",
+        "RUNTIME_ABI_POSITION_MANAGEMENT_TIMEOUT_SECONDS",
     ],
 )
 def test_rejects_unparsable_outbound_timeout(name: str) -> None:
@@ -115,6 +119,7 @@ def test_runtime_config_post_init_rejects_non_positive_committed_bar_queue_capac
             abi_base_url="http://abi.internal",
             abi_open_position_timeout_seconds=5.0,
             abi_entry_package_timeout_seconds=5.0,
+            abi_position_management_timeout_seconds=5.0,
             committed_bar_queue_capacity=capacity,
         )
 
@@ -130,6 +135,7 @@ def test_runtime_config_post_init_rejects_bool_committed_bar_queue_capacity() ->
             abi_base_url="http://abi.internal",
             abi_open_position_timeout_seconds=5.0,
             abi_entry_package_timeout_seconds=5.0,
+            abi_position_management_timeout_seconds=5.0,
             committed_bar_queue_capacity=True,  # type: ignore[arg-type]
         )
 

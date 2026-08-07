@@ -26,6 +26,7 @@ def _valid_environ(tmp_path: Path) -> dict[str, str]:
         "RUNTIME_ABI_BASE_URL": "http://abi.invalid",
         "RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS": "5",
         "RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS": "5",
+        "RUNTIME_ABI_POSITION_MANAGEMENT_TIMEOUT_SECONDS": "5",
         "RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY": "256",
     }
 
@@ -137,7 +138,7 @@ def test_first_fill_wiring_adds_zero_outbound_http_clients(tmp_path: Path) -> No
     app = build_application(_valid_environ(tmp_path))
 
     assert app.state.ready is True
-    assert len(app.state.outbound_http_clients) == 4
+    assert len(app.state.outbound_http_clients) == 5
 
 
 def test_first_fill_wiring_does_not_change_existing_shutdown_lifecycle(
@@ -150,6 +151,7 @@ def test_first_fill_wiring_does_not_change_existing_shutdown_lifecycle(
         "HttpxStrategyEngineOpenTradeAdapter",
         "HttpxAbiOpenPositionLookupAdapter",
         "HttpxAbiEntryPackageAdapter",
+        "HttpxAbiPositionManagementAdapter",
     ):
         real = getattr(application_module, name)
 
@@ -172,7 +174,7 @@ def test_first_fill_wiring_does_not_change_existing_shutdown_lifecycle(
 
     app = build_application(_valid_environ(tmp_path))
     assert app.state.ready is True
-    assert len(close_call_counts) == 4
+    assert len(close_call_counts) == 5
 
     with TestClient(app):
         assert all(count == 0 for count in close_call_counts.values())
@@ -192,6 +194,9 @@ def test_forced_orchestrator_construction_failure_fails_closed(
     open_trade_instances = _count_constructions(monkeypatch, "HttpxStrategyEngineOpenTradeAdapter")
     open_position_instances = _count_constructions(monkeypatch, "HttpxAbiOpenPositionLookupAdapter")
     entry_package_instances = _count_constructions(monkeypatch, "HttpxAbiEntryPackageAdapter")
+    position_management_instances = _count_constructions(
+        monkeypatch, "HttpxAbiPositionManagementAdapter"
+    )
 
     def _raise_on_construction(**_kwargs: object) -> Any:
         raise RuntimeError("simulated AbiExecutionEventOrchestrator construction failure")
@@ -207,6 +212,7 @@ def test_forced_orchestrator_construction_failure_fails_closed(
         open_trade_instances,
         open_position_instances,
         entry_package_instances,
+        position_management_instances,
     ):
         assert len(instances) == 1
         assert instances[0]._client.is_closed

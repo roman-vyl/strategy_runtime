@@ -59,6 +59,12 @@ _OPEN_TRADE_PATH = "/v1/strategy-evaluations/open-trade"
 _ENTRY_PACKAGE_PATH_RE = re.compile(
     r"^/v1/strategy-instances/([^/]+)/trade-cycles/([^/]+)/entry-package$"
 )
+_PROTECTION_PATH_RE = re.compile(
+    r"^/v1/strategy-instances/([^/]+)/trade-cycles/([^/]+)/protection$"
+)
+_OPEN_POSITION_PATH_RE = re.compile(
+    r"^/v1/strategy-instances/([^/]+)/trade-cycles/([^/]+)/open-position$"
+)
 _UNREACHABLE_URL = "http://127.0.0.1:1"
 
 
@@ -96,6 +102,7 @@ def _build_app(
         "RUNTIME_ABI_BASE_URL": abi_base_url,
         "RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS": str(abi_open_position_timeout),
         "RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS": str(abi_entry_package_timeout),
+        "RUNTIME_ABI_POSITION_MANAGEMENT_TIMEOUT_SECONDS": "5",
         "RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY": "256",
     }
     return build_application(env)
@@ -249,12 +256,19 @@ def _engine_protocol_error() -> FakeResponse:
     return FakeResponse(200, {"unexpected": "shape"})
 
 
-def _open_trade_success() -> FakeResponse:
+def _open_trade_success(
+    *, stop_price: str = "90", take_price: str | None = "120", close_active: bool = False
+) -> FakeResponse:
     return FakeResponse(
         200,
         {
-            "desired_protection": {"stop_price": "90", "take_price": "120"},
-            "close_signal": {"active": False, "reason": None, "component_id": None, "layer": None},
+            "desired_protection": {"stop_price": stop_price, "take_price": take_price},
+            "close_signal": {
+                "active": close_active,
+                "reason": "strategy_exit" if close_active else None,
+                "component_id": "position_manager" if close_active else None,
+                "layer": "strategy" if close_active else None,
+            },
             "diagnostics": {},
         },
     )
@@ -285,6 +299,37 @@ def _entry_package_absent(request: RecordedRequest) -> FakeResponse:
     sid, cid = _parse_entry_package_path(request.path)
     return FakeResponse(
         200, {"strategy_instance_id": sid, "trade_cycle_id": cid, "status": "entry_package_absent"}
+    )
+
+
+def _protection_applied(request: RecordedRequest) -> FakeResponse:
+    match = _PROTECTION_PATH_RE.match(request.path)
+    assert match is not None, f"unexpected protection path: {request.path}"
+    sid, cid = unquote(match.group(1)), unquote(match.group(2))
+    body = request.json()
+    return FakeResponse(
+        200,
+        {
+            "strategy_instance_id": sid,
+            "trade_cycle_id": cid,
+            "status": "protection_applied",
+            "stop_price": body["stop_price"],
+            "take_price": body["take_price"],
+        },
+    )
+
+
+def _position_closed(request: RecordedRequest) -> FakeResponse:
+    match = _OPEN_POSITION_PATH_RE.match(request.path)
+    assert match is not None, f"unexpected close-position path: {request.path}"
+    sid, cid = unquote(match.group(1)), unquote(match.group(2))
+    return FakeResponse(
+        200,
+        {
+            "strategy_instance_id": sid,
+            "trade_cycle_id": cid,
+            "status": "trade_cycle_closed",
+        },
     )
 
 
@@ -342,16 +387,27 @@ def _set_abi_routes(
     *,
     open_position: object = None,
     entry_package: object = None,
+    protection: object = None,
+    close_position: object = None,
 ) -> None:
     routes: dict[str, object] = {}
-    if open_position is not None:
-        routes["/open-position"] = open_position
+    if open_position is not None or close_position is not None:
+
+        def _open_position_by_method(request: RecordedRequest) -> object:
+            target = close_position if request.method == "DELETE" else open_position
+            if target is None:
+                return FakeResponse(404, {"error": "not_found"})
+            return target(request) if callable(target) else target
+
+        routes["/open-position"] = _open_position_by_method
     if entry_package is not None:
         routes["/entry-package"] = entry_package
+    if protection is not None:
+        routes["/protection"] = protection
     server._handler = path_prefix_route(routes, not_found=FakeResponse(404, {"error": "not_found"}))
 
 
-# --- happy path / NO_OP / CANCEL / open-trade-unsupported --------------------
+# --- happy path / NO_OP / CANCEL / position management ----------------------
 
 
 def test_happy_path_applies_desired_entry_and_saves_current_trade_cycle(
@@ -613,15 +669,13 @@ def test_legacy_pre_alignment_open_position_success_shape_is_no_longer_accepted(
         assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_failed"
 
 
-def test_open_trade_projection_reaches_engine_after_frozen_first_fill(
+def test_open_trade_noop_succeeds_after_frozen_first_fill(
     tmp_path: Path, engine_server: FakeHttpServer, abi_server: FakeHttpServer
 ) -> None:
     """A positive ABI open-position lookup now freezes and saves the
     first-fill context, then reaches Strategy Engine's open-trade endpoint.
-    The cycle still ends failed at the existing deferred post-projection
-    boundary (`OpenTradeProjectionUnsupportedError`) -- applying the
-    response is a later change -- but the frozen context survives that
-    failure, and Engine is genuinely called."""
+    Equal desired protection produces a position-management NoOp, so no ABI
+    mutation is sent and the cycle completes successfully."""
     _set_engine_routes(
         engine_server, live_entry=_live_entry_present(), open_trade=_open_trade_success()
     )
@@ -663,6 +717,10 @@ def test_open_trade_projection_reaches_engine_after_frozen_first_fill(
 
         entry_package_requests = [r for r in abi_server.requests if "/entry-package" in r.path]
         assert len(entry_package_requests) == 1
+        position_management_requests = [
+            r for r in abi_server.requests if "/protection" in r.path or r.method == "DELETE"
+        ]
+        assert position_management_requests == []
 
         open_trade_requests = [r for r in engine_server.requests if r.path == _OPEN_TRADE_PATH]
         assert len(open_trade_requests) == 1
@@ -673,8 +731,142 @@ def test_open_trade_projection_reaches_engine_after_frozen_first_fill(
         assert "average_entry_price" not in open_trade_body
 
         outcomes = _dispatch_outcomes(tmp_path / "journal" / "runtime.jsonl")
-        assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_failed"
+        assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_succeeded"
         assert outcomes[-1]["strategy_instance_id"] == _STRATEGY_INSTANCE_ID
+
+
+def test_open_trade_apply_protection_saves_verified_confirmation(
+    tmp_path: Path, engine_server: FakeHttpServer, abi_server: FakeHttpServer
+) -> None:
+    _set_engine_routes(
+        engine_server,
+        live_entry=_live_entry_present(),
+        open_trade=_open_trade_success(stop_price="95", take_price="125"),
+    )
+    _set_abi_routes(
+        abi_server,
+        open_position=_open_position_open(1_720_000_200_000, "100"),
+        entry_package=_entry_package_applied,
+        protection=_protection_applied,
+    )
+    app = _build_app(
+        tmp_path, engine_base_url=engine_server.base_url, abi_base_url=abi_server.base_url
+    )
+    repository = app.state.state_repository
+    real_save = repository.save
+    save_calls: list[object] = []
+
+    def _recording_save(state: object) -> object:
+        save_calls.append(state)
+        return real_save(state)
+
+    repository.save = _recording_save
+
+    with TestClient(app) as client:
+        assert _post_closed_bar(client, 1).status_code == 200
+        save_calls.clear()
+        assert _post_closed_bar(client, 2).status_code == 200
+
+        state = repository.get(_STRATEGY_INSTANCE_ID)
+        assert state is not None
+        assert state.current_trade_cycle is not None
+        protection = state.current_trade_cycle.latest_confirmed_management_protection
+        assert protection is not None
+        assert protection.stop_price == "95"
+        assert protection.take_price == "125"
+        assert len(save_calls) == 2  # first-fill freeze, then post-projection replacement
+
+        requests = [r for r in abi_server.requests if "/protection" in r.path]
+        assert len(requests) == 1
+        assert requests[0].method == "PUT"
+        assert requests[0].json() == {"stop_price": "95", "take_price": "125"}
+
+        outcomes = _dispatch_outcomes(tmp_path / "journal" / "runtime.jsonl")
+        assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_succeeded"
+
+
+def test_open_trade_close_position_clears_cycle_after_verified_confirmation(
+    tmp_path: Path, engine_server: FakeHttpServer, abi_server: FakeHttpServer
+) -> None:
+    _set_engine_routes(
+        engine_server,
+        live_entry=_live_entry_present(),
+        open_trade=_open_trade_success(close_active=True),
+    )
+    _set_abi_routes(
+        abi_server,
+        open_position=_open_position_open(1_720_000_200_000, "100"),
+        entry_package=_entry_package_applied,
+        close_position=_position_closed,
+    )
+    app = _build_app(
+        tmp_path, engine_base_url=engine_server.base_url, abi_base_url=abi_server.base_url
+    )
+
+    with TestClient(app) as client:
+        assert _post_closed_bar(client, 1).status_code == 200
+        assert _post_closed_bar(client, 2).status_code == 200
+
+        state = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
+        assert state is not None
+        assert state.current_trade_cycle is None
+
+        requests = [r for r in abi_server.requests if r.method == "DELETE"]
+        assert len(requests) == 1
+        assert "/open-position" in requests[0].path
+
+        outcomes = _dispatch_outcomes(tmp_path / "journal" / "runtime.jsonl")
+        assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_succeeded"
+
+
+def test_position_management_failure_preserves_first_fill_freeze(
+    tmp_path: Path, engine_server: FakeHttpServer, abi_server: FakeHttpServer
+) -> None:
+    _set_engine_routes(
+        engine_server,
+        live_entry=_live_entry_present(),
+        open_trade=_open_trade_success(stop_price="95", take_price="125"),
+    )
+    _set_abi_routes(
+        abi_server,
+        open_position=_open_position_open(1_720_000_200_000, "100"),
+        entry_package=_entry_package_applied,
+        protection=DisconnectResponse(),
+    )
+    app = _build_app(
+        tmp_path, engine_base_url=engine_server.base_url, abi_base_url=abi_server.base_url
+    )
+    repository = app.state.state_repository
+    real_save = repository.save
+    save_calls: list[object] = []
+
+    def _recording_save(state: object) -> object:
+        save_calls.append(state)
+        return real_save(state)
+
+    repository.save = _recording_save
+
+    with TestClient(app) as client:
+        assert _post_closed_bar(client, 1).status_code == 200
+        save_calls.clear()
+        response = _post_closed_bar(client, 2)
+        assert response.status_code == 200
+        assert response.json() == {"status": "accepted"}
+
+        state = repository.get(_STRATEGY_INSTANCE_ID)
+        assert state is not None
+        assert state.current_trade_cycle is not None
+        frozen = state.current_trade_cycle.frozen_entry_context
+        assert frozen is not None
+        assert frozen.first_fill_at_ms == 1_720_000_200_000
+        assert state.current_trade_cycle.latest_confirmed_management_protection is None
+        assert len(save_calls) == 1  # first-fill freeze only; no post-projection save
+
+        requests = [r for r in abi_server.requests if "/protection" in r.path]
+        assert len(requests) == 1
+
+        outcomes = _dispatch_outcomes(tmp_path / "journal" / "runtime.jsonl")
+        assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_failed"
 
 
 # --- per-boundary failures ----------------------------------------------------

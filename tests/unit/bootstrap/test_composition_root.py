@@ -27,6 +27,7 @@ def _valid_environ(tmp_path: Path) -> dict[str, str]:
         "RUNTIME_ABI_BASE_URL": "http://abi.invalid",
         "RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS": "5",
         "RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS": "5",
+        "RUNTIME_ABI_POSITION_MANAGEMENT_TIMEOUT_SECONDS": "5",
         "RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY": "256",
     }
 
@@ -74,7 +75,7 @@ def _record_kwargs(monkeypatch: pytest.MonkeyPatch, name: str) -> dict[str, obje
 
 
 def test_outbound_http_clients_are_not_constructed_by_utility_dispatch_components() -> None:
-    """9.3: the four outbound HTTP clients are constructed only inside
+    """The five outbound HTTP clients are constructed only inside
     `build_application`'s composition step, never inside
     `CommittedBarOrchestrator` or `StrategyCycleHandoffBoundary`, and never
     per-request/per-cycle."""
@@ -84,6 +85,7 @@ def test_outbound_http_clients_are_not_constructed_by_utility_dispatch_component
         "HttpxStrategyEngineOpenTradeAdapter",
         "HttpxAbiOpenPositionLookupAdapter",
         "HttpxAbiEntryPackageAdapter",
+        "HttpxAbiPositionManagementAdapter",
     )
     for source_path in (
         Path("src/strategy_runtime/utility/committed_bar/orchestrator.py"),
@@ -101,13 +103,16 @@ def test_build_application_has_no_composition_override_parameter() -> None:
     assert forbidden_names.isdisjoint(parameters)
 
 
-def test_ready_application_constructs_all_four_outbound_clients_exactly_once(
+def test_ready_application_constructs_all_five_outbound_clients_exactly_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     live_entry_instances = _count_constructions(monkeypatch, "HttpxStrategyEngineLiveEntryAdapter")
     open_trade_instances = _count_constructions(monkeypatch, "HttpxStrategyEngineOpenTradeAdapter")
     open_position_instances = _count_constructions(monkeypatch, "HttpxAbiOpenPositionLookupAdapter")
     entry_package_instances = _count_constructions(monkeypatch, "HttpxAbiEntryPackageAdapter")
+    position_management_instances = _count_constructions(
+        monkeypatch, "HttpxAbiPositionManagementAdapter"
+    )
 
     app = build_application(_valid_environ(tmp_path))
 
@@ -116,15 +121,17 @@ def test_ready_application_constructs_all_four_outbound_clients_exactly_once(
     assert len(open_trade_instances) == 1
     assert len(open_position_instances) == 1
     assert len(entry_package_instances) == 1
+    assert len(position_management_instances) == 1
     assert app.state.outbound_http_clients == (
         live_entry_instances[0],
         open_trade_instances[0],
         open_position_instances[0],
         entry_package_instances[0],
+        position_management_instances[0],
     )
 
 
-def test_two_build_application_calls_each_construct_their_own_four_clients(
+def test_two_build_application_calls_each_construct_their_own_five_clients(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     live_entry_instances = _count_constructions(monkeypatch, "HttpxStrategyEngineLiveEntryAdapter")
@@ -144,6 +151,9 @@ def test_shares_single_repository_and_mutex_registry_instance(
     )
     mutex_instances = _count_constructions(monkeypatch, "StrategyInstanceKeyedMutexRegistry")
     orchestrator_kwargs = _record_kwargs(monkeypatch, "StrategyRuntimeOrchestrator")
+    position_management_instances = _count_constructions(
+        monkeypatch, "PositionManagementOrchestrator"
+    )
 
     app = build_application(_valid_environ(tmp_path))
 
@@ -151,6 +161,9 @@ def test_shares_single_repository_and_mutex_registry_instance(
     assert len(mutex_instances) == 1
     assert orchestrator_kwargs["state_repository"] is repository_instances[0]
     assert orchestrator_kwargs["keyed_mutex_registry"] is mutex_instances[0]
+    assert (
+        orchestrator_kwargs["position_management_orchestrator"] is position_management_instances[0]
+    )
     assert app.state.state_repository is repository_instances[0]
     assert app.state.keyed_mutex_registry is mutex_instances[0]
 
@@ -162,10 +175,14 @@ def test_startup_rollback_closes_already_constructed_clients_and_fails_closed(
     open_trade_instances = _count_constructions(monkeypatch, "HttpxStrategyEngineOpenTradeAdapter")
     open_position_instances = _count_constructions(monkeypatch, "HttpxAbiOpenPositionLookupAdapter")
 
-    def _raise_on_construction(**_kwargs: object) -> Any:
-        raise ValueError("simulated invalid ABI entry-package configuration")
+    entry_package_instances = _count_constructions(monkeypatch, "HttpxAbiEntryPackageAdapter")
 
-    monkeypatch.setattr(application_module, "HttpxAbiEntryPackageAdapter", _raise_on_construction)
+    def _raise_on_construction(**_kwargs: object) -> Any:
+        raise ValueError("simulated invalid ABI position-management configuration")
+
+    monkeypatch.setattr(
+        application_module, "HttpxAbiPositionManagementAdapter", _raise_on_construction
+    )
 
     app = build_application(_valid_environ(tmp_path))
 
@@ -173,12 +190,14 @@ def test_startup_rollback_closes_already_constructed_clients_and_fails_closed(
     assert len(live_entry_instances) == 1
     assert len(open_trade_instances) == 1
     assert len(open_position_instances) == 1
+    assert len(entry_package_instances) == 1
     assert live_entry_instances[0]._client.is_closed
     assert open_trade_instances[0]._client.is_closed
     assert open_position_instances[0]._client.is_closed
+    assert entry_package_instances[0]._client.is_closed
 
 
-def test_shutdown_closes_all_four_clients_exactly_once(
+def test_shutdown_closes_all_five_clients_exactly_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     close_call_counts: dict[int, int] = {}
@@ -188,6 +207,7 @@ def test_shutdown_closes_all_four_clients_exactly_once(
         "HttpxStrategyEngineOpenTradeAdapter",
         "HttpxAbiOpenPositionLookupAdapter",
         "HttpxAbiEntryPackageAdapter",
+        "HttpxAbiPositionManagementAdapter",
     ):
         real = getattr(application_module, name)
 
@@ -210,7 +230,7 @@ def test_shutdown_closes_all_four_clients_exactly_once(
 
     app = build_application(_valid_environ(tmp_path))
     assert app.state.ready is True
-    assert len(close_call_counts) == 4
+    assert len(close_call_counts) == 5
 
     with TestClient(app):
         assert all(count == 0 for count in close_call_counts.values())
@@ -234,6 +254,7 @@ def test_lifecycle_owner_close_all_once_is_idempotent_when_called_directly(
         "HttpxStrategyEngineOpenTradeAdapter",
         "HttpxAbiOpenPositionLookupAdapter",
         "HttpxAbiEntryPackageAdapter",
+        "HttpxAbiPositionManagementAdapter",
     ):
         real = getattr(application_module, name)
 
@@ -262,15 +283,15 @@ def test_lifecycle_owner_close_all_once_is_idempotent_when_called_directly(
     lifecycle.close_all_once()
     lifecycle.close_all_once()
 
-    assert len(close_call_counts) == 4
+    assert len(close_call_counts) == 5
     assert all(count == 1 for count in close_call_counts.values())
 
 
-def test_startup_rollback_covers_construction_after_all_four_clients_exist(
+def test_startup_rollback_covers_construction_after_all_five_clients_exist(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The rollback boundary extends past the four HTTP clients: a failure
-    inside `create_http_app(ready=True, ...)` itself -- after all four
+    """The rollback boundary extends past the five HTTP clients: a failure
+    inside `create_http_app(ready=True, ...)` itself -- after all five
     clients, the semantic graph, and the thin sink already exist -- still
     triggers rollback and returns `ready=False`, never a partially assembled
     `ready=True` application."""
@@ -278,6 +299,9 @@ def test_startup_rollback_covers_construction_after_all_four_clients_exist(
     open_trade_instances = _count_constructions(monkeypatch, "HttpxStrategyEngineOpenTradeAdapter")
     open_position_instances = _count_constructions(monkeypatch, "HttpxAbiOpenPositionLookupAdapter")
     entry_package_instances = _count_constructions(monkeypatch, "HttpxAbiEntryPackageAdapter")
+    position_management_instances = _count_constructions(
+        monkeypatch, "HttpxAbiPositionManagementAdapter"
+    )
 
     real_create_http_app = application_module.create_http_app
 
@@ -296,9 +320,32 @@ def test_startup_rollback_covers_construction_after_all_four_clients_exist(
         open_trade_instances,
         open_position_instances,
         entry_package_instances,
+        position_management_instances,
     ):
         assert len(instances) == 1
         assert instances[0]._client.is_closed
+
+
+def test_missing_position_management_timeout_fails_before_any_client_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = _valid_environ(tmp_path)
+    del env["RUNTIME_ABI_POSITION_MANAGEMENT_TIMEOUT_SECONDS"]
+    construction_counts = [
+        _count_constructions(monkeypatch, name)
+        for name in (
+            "HttpxStrategyEngineLiveEntryAdapter",
+            "HttpxStrategyEngineOpenTradeAdapter",
+            "HttpxAbiOpenPositionLookupAdapter",
+            "HttpxAbiEntryPackageAdapter",
+            "HttpxAbiPositionManagementAdapter",
+        )
+    ]
+
+    app = build_application(env)
+
+    assert app.state.ready is False
+    assert all(instances == [] for instances in construction_counts)
 
 
 def test_default_sink_dispatches_into_the_real_strategy_runtime_orchestrator(

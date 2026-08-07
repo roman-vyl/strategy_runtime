@@ -1,8 +1,4 @@
-"""Future semantic runtime orchestration errors."""
-
-
-class OpenTradeProjectionUnsupportedError(Exception):
-    """Projection variant not yet supported in closed-bar orchestration."""
+"""Semantic runtime orchestration errors."""
 
 
 class UnknownStrategyProjectionError(Exception):

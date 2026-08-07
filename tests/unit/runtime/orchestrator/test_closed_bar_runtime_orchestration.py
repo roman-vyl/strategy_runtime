@@ -21,11 +21,17 @@ from strategy_runtime.runtime.open_position.models import (
     PositionResolvedStrategyInstanceRuntimeState,
 )
 from strategy_runtime.runtime.open_position.resolver import OpenPositionResolver
-from strategy_runtime.runtime.orchestrator.errors import (
-    OpenTradeProjectionUnsupportedError,
-    UnknownStrategyProjectionError,
-)
+from strategy_runtime.runtime.orchestrator.errors import UnknownStrategyProjectionError
 from strategy_runtime.runtime.orchestrator.orchestrator import StrategyRuntimeOrchestrator
+from strategy_runtime.runtime.position_management_execution.models import (
+    ApplyProtectionCommand,
+    ClosePositionCommand,
+    PositionClosedConfirmation,
+    ProtectionAppliedConfirmation,
+)
+from strategy_runtime.runtime.position_management_orchestrator import (
+    PositionManagementOrchestrator,
+)
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
 from strategy_runtime.runtime.recipes.position_management import (
     CloseSignal,
@@ -155,10 +161,13 @@ def _open_trade_state(*, frozen: bool, first_fill_at_ms: int = 950) -> StrategyI
 
 def _open_trade_projection(
     item: PositionResolvedStrategyInstance,
+    *,
+    desired_protection: DesiredProtection | None = None,
+    close_active: bool = False,
 ) -> OpenTradeProjectedStrategyInstance:
     recipe = PositionManagementRecipe(
-        desired_protection=DesiredProtection("99.5", None),
-        close_signal=CloseSignal(False),
+        desired_protection=desired_protection or DesiredProtection("99", "103"),
+        close_signal=CloseSignal(close_active),
         diagnostics={},
     )
     return OpenTradeProjectedStrategyInstance(item, recipe)
@@ -194,6 +203,35 @@ class _FakeExecutionPort:
             applied_desired_entry=command.desired_entry,
             calculated_quantity=self.calculated_quantity,
         )
+
+
+class _FakePositionManagementExecutionPort:
+    def __init__(
+        self,
+        *,
+        protection_confirmation: ProtectionAppliedConfirmation | None = None,
+        close_confirmation: PositionClosedConfirmation | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.protection_confirmation = protection_confirmation
+        self.close_confirmation = close_confirmation
+        self.error = error
+        self.apply_calls: list[ApplyProtectionCommand] = []
+        self.close_calls: list[ClosePositionCommand] = []
+
+    def apply_protection(self, command: ApplyProtectionCommand) -> ProtectionAppliedConfirmation:
+        self.apply_calls.append(command)
+        if self.error is not None:
+            raise self.error
+        assert self.protection_confirmation is not None
+        return self.protection_confirmation
+
+    def close_position(self, command: ClosePositionCommand) -> PositionClosedConfirmation:
+        self.close_calls.append(command)
+        if self.error is not None:
+            raise self.error
+        assert self.close_confirmation is not None
+        return self.close_confirmation
 
 
 class _FakeRepository:
@@ -413,6 +451,7 @@ class TestSequencingAndPersistence:
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value=projected)),
             keyed_mutex_registry=registry,
+            position_management_orchestrator=MagicMock(),
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_FakeExecutionPort(),
@@ -444,6 +483,7 @@ class TestSequencingAndPersistence:
             open_position_resolver=resolver,
             use_case_router=router,
             keyed_mutex_registry=registry,
+            position_management_orchestrator=MagicMock(),
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=execution_port,
@@ -488,6 +528,7 @@ class TestSequencingAndPersistence:
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value=projected)),
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=MagicMock(),
             entry_reconciliation_orchestrator=entry_orch,
         )
 
@@ -511,6 +552,7 @@ class TestSequencingAndPersistence:
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value=projected)),
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=MagicMock(),
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_FakeExecutionPort(),
@@ -536,6 +578,7 @@ class TestSequencingAndPersistence:
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value=projected)),
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=MagicMock(),
             entry_reconciliation_orchestrator=MagicMock(
                 execute=MagicMock(return_value=different_but_equal)
             ),
@@ -568,6 +611,7 @@ class TestSequencingAndPersistence:
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value=projected)),
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=MagicMock(),
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_ApplyExecutionPort(),
@@ -595,6 +639,7 @@ class TestSequencingAndPersistence:
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value=projected)),
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=MagicMock(),
             entry_reconciliation_orchestrator=MagicMock(
                 execute=MagicMock(return_value=different_but_equal)
             ),
@@ -630,6 +675,7 @@ class TestSequencingAndPersistence:
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value=projected)),
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=MagicMock(),
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_ApplyExecutionPort(),
@@ -666,6 +712,7 @@ class TestSequencingAndPersistence:
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value=projected)),
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=MagicMock(),
             entry_reconciliation_orchestrator=_SingleArgumentReconciliation(),
         )
 
@@ -701,6 +748,7 @@ class TestConcurrencyAndRelease:
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value=projected)),
             keyed_mutex_registry=real,
+            position_management_orchestrator=MagicMock(),
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_FakeExecutionPort(),
@@ -734,6 +782,7 @@ class TestConcurrencyAndRelease:
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value=projected)),
             keyed_mutex_registry=real,
+            position_management_orchestrator=MagicMock(),
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_ApplyExecutionPort(),
@@ -752,7 +801,7 @@ class TestConcurrencyAndRelease:
             (lambda: RuntimeError("router failed"), "router"),
             (lambda: RuntimeError("reconciliation failed"), "reconciliation"),
             (lambda: RuntimeError("save failed"), "save"),
-            (lambda: OpenTradeProjectionUnsupportedError(), "open_trade"),
+            (lambda: RuntimeError("position management failed"), "position_management"),
             (lambda: UnknownStrategyProjectionError(), "unknown"),
         ],
     )
@@ -766,10 +815,8 @@ class TestConcurrencyAndRelease:
         resolved = _resolved_state(position_open=False, state=state)
         item = PositionResolvedStrategyInstance(unit, resolved)
 
-        if error_label == "open_trade":
-            projection: Any = OpenTradeProjectedStrategyInstance(
-                item, DesiredProtection("99.5", None)
-            )
+        if error_label == "position_management":
+            projection: Any = _open_trade_projection(item)
         elif error_label == "unknown":
             projection = "not-a-valid-projection"
         else:
@@ -801,12 +848,16 @@ class TestConcurrencyAndRelease:
             trade_cycle_id_factory=lambda: "tc-id",
             execution_port=ep,
         )
+        position_management_orchestrator = MagicMock()
+        if error_label == "position_management":
+            position_management_orchestrator.execute.side_effect = error
 
         orch = StrategyRuntimeOrchestrator(
             state_repository=repo,
             open_position_resolver=resolver,
             use_case_router=use_case_router,
             keyed_mutex_registry=real,
+            position_management_orchestrator=position_management_orchestrator,
             entry_reconciliation_orchestrator=entry_orch,
         )
 
@@ -928,115 +979,140 @@ class _CountingReconciliation:
 
 
 class TestTypedBranchAndErrorBoundary:
-    def test_open_trade_raises_without_reconciliation_or_save(self) -> None:
-        """A pre-frozen cycle is a freeze no-op; the unsupported boundary
-        still raises with no reconciliation and no additional save."""
+    def test_open_trade_noop_returns_source_without_post_projection_save(self) -> None:
         state = _open_trade_state(frozen=True)
         resolved = _resolved_state(position_open=True, state=state)
         unit = _processing_unit()
         item = PositionResolvedStrategyInstance(unit, resolved)
         projection = _open_trade_projection(item)
         repo = _FakeRepository(state)
-        ep = _FakeExecutionPort()
-        entry_orch = EntryReconciliationOrchestrator(
-            trade_cycle_id_factory=lambda: "tc-id",
-            execution_port=ep,
-        )
+        port = _FakePositionManagementExecutionPort()
+        position_orch = PositionManagementOrchestrator(port)
+        real_execute = position_orch.execute
+        received: list[OpenTradeProjectedStrategyInstance] = []
+
+        def _tracked_execute(
+            exact_projection: OpenTradeProjectedStrategyInstance,
+        ) -> StrategyInstanceRuntimeState:
+            received.append(exact_projection)
+            return real_execute(exact_projection)
+
+        position_orch.execute = _tracked_execute  # type: ignore[method-assign]
 
         orch = StrategyRuntimeOrchestrator(
             state_repository=repo,
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value=projection)),
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
-            entry_reconciliation_orchestrator=entry_orch,
+            position_management_orchestrator=position_orch,
+            entry_reconciliation_orchestrator=MagicMock(),
         )
 
-        with pytest.raises(OpenTradeProjectionUnsupportedError):
-            orch.process(unit)
-        assert ep.calls == []
+        result = orch.process(unit)
+
+        assert result is state
+        assert received == [projection]
+        assert port.apply_calls == []
+        assert port.close_calls == []
         assert repo.save_calls == []
 
-    def test_open_trade_cannot_produce_successful_dispatch(self) -> None:
+    def test_open_trade_apply_protection_saves_confirmed_replacement_once(self) -> None:
         state = _open_trade_state(frozen=True)
         resolved = _resolved_state(position_open=True, state=state)
         unit = _processing_unit()
         item = PositionResolvedStrategyInstance(unit, resolved)
-        projection = _open_trade_projection(item)
+        desired_protection = DesiredProtection("98", "103")
+        projection = _open_trade_projection(item, desired_protection=desired_protection)
         repo = _FakeRepository(state)
+        port = _FakePositionManagementExecutionPort(
+            protection_confirmation=ProtectionAppliedConfirmation(
+                _SID, "cycle-1", desired_protection
+            )
+        )
 
         orch = StrategyRuntimeOrchestrator(
             state_repository=repo,
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value=projection)),
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
-            entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
-                trade_cycle_id_factory=lambda: "tc-id",
-                execution_port=_FakeExecutionPort(),
-            ),
+            position_management_orchestrator=PositionManagementOrchestrator(port),
+            entry_reconciliation_orchestrator=MagicMock(),
         )
 
-        with pytest.raises(OpenTradeProjectionUnsupportedError):
-            orch.dispatch(unit)
+        result = orch.process(unit)
 
-    def test_open_trade_freezes_and_saves_before_routing(self) -> None:
-        """A changed first-fill freeze is saved and reaches the router before
-        Engine, and that save survives the still-unsupported boundary after
-        it (see strategy-runtime-orchestrator spec, "changed transition
-        result is saved and passed to router" / "freeze save is not undone
-        by a later failure")."""
+        assert len(port.apply_calls) == 1
+        assert port.close_calls == []
+        assert len(repo.save_calls) == 1
+        assert result is repo.save_calls[0]
+        assert result.current_trade_cycle is not None
+        assert (
+            result.current_trade_cycle.latest_confirmed_management_protection == desired_protection
+        )
+
+    def test_open_trade_close_position_saves_cleared_cycle_once(self) -> None:
+        state = _open_trade_state(frozen=True)
+        resolved = _resolved_state(position_open=True, state=state)
+        unit = _processing_unit()
+        item = PositionResolvedStrategyInstance(unit, resolved)
+        projection = _open_trade_projection(item, close_active=True)
+        repo = _FakeRepository(state)
+        port = _FakePositionManagementExecutionPort(
+            close_confirmation=PositionClosedConfirmation(_SID, "cycle-1")
+        )
+
+        orch = StrategyRuntimeOrchestrator(
+            state_repository=repo,
+            open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
+            use_case_router=MagicMock(route=MagicMock(return_value=projection)),
+            keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=PositionManagementOrchestrator(port),
+            entry_reconciliation_orchestrator=MagicMock(),
+        )
+
+        result = orch.process(unit)
+
+        assert port.apply_calls == []
+        assert len(port.close_calls) == 1
+        assert len(repo.save_calls) == 1
+        assert result is repo.save_calls[0]
+        assert result.current_trade_cycle is None
+
+    def test_position_management_failure_preserves_first_fill_freeze_only(self) -> None:
         state = _open_trade_state(frozen=False)
         resolved = _resolved_state(position_open=True, state=state, first_fill_at_ms=300_950)
         unit = _processing_unit()
         repo = _FakeRepository(state)
-        router = MagicMock(route=MagicMock(side_effect=lambda item: _open_trade_projection(item)))
+        router = MagicMock(
+            route=MagicMock(
+                side_effect=lambda item: _open_trade_projection(item, close_active=True)
+            )
+        )
+        error = RuntimeError("position-management execution failed")
+        port = _FakePositionManagementExecutionPort(error=error)
 
         orch = StrategyRuntimeOrchestrator(
             state_repository=repo,
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=router,
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
-            entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
-                trade_cycle_id_factory=lambda: "tc-id",
-                execution_port=_FakeExecutionPort(),
-            ),
+            position_management_orchestrator=PositionManagementOrchestrator(port),
+            entry_reconciliation_orchestrator=MagicMock(),
         )
 
-        with pytest.raises(OpenTradeProjectionUnsupportedError):
+        with pytest.raises(RuntimeError) as raised:
             orch.process(unit)
 
+        assert raised.value is error
+        assert len(port.close_calls) == 1
         assert len(repo.save_calls) == 1
-        saved_cycle = repo.save_calls[0].current_trade_cycle
-        assert saved_cycle is not None
-        assert saved_cycle.frozen_entry_context is not None
-        assert saved_cycle.frozen_entry_context.first_fill_at_ms == 300_950
-
+        frozen_state = repo.save_calls[0]
+        assert repo._state is frozen_state
+        assert frozen_state.current_trade_cycle is not None
+        assert frozen_state.current_trade_cycle.frozen_entry_context is not None
+        assert frozen_state.current_trade_cycle.frozen_entry_context.first_fill_at_ms == 300_950
         routed_item = router.route.call_args.args[0]
-        assert routed_item.resolved_state.runtime_state is repo.save_calls[0]
-
-    def test_open_trade_skips_save_when_already_frozen(self) -> None:
-        state = _open_trade_state(frozen=True, first_fill_at_ms=950)
-        resolved = _resolved_state(position_open=True, state=state, first_fill_at_ms=950)
-        unit = _processing_unit()
-        repo = _FakeRepository(state)
-        router = MagicMock(route=MagicMock(side_effect=lambda item: _open_trade_projection(item)))
-
-        orch = StrategyRuntimeOrchestrator(
-            state_repository=repo,
-            open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
-            use_case_router=router,
-            keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
-            entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
-                trade_cycle_id_factory=lambda: "tc-id",
-                execution_port=_FakeExecutionPort(),
-            ),
-        )
-
-        with pytest.raises(OpenTradeProjectionUnsupportedError):
-            orch.process(unit)
-
-        assert repo.save_calls == []
-        routed_item = router.route.call_args.args[0]
-        assert routed_item.resolved_state.runtime_state is state
+        assert routed_item.resolved_state.runtime_state is frozen_state
 
     def test_open_trade_freeze_conflict_propagates_without_routing(self) -> None:
         state = _open_trade_state(frozen=True, first_fill_at_ms=950)
@@ -1050,6 +1126,7 @@ class TestTypedBranchAndErrorBoundary:
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=router,
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=MagicMock(),
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_FakeExecutionPort(),
@@ -1078,6 +1155,7 @@ class TestTypedBranchAndErrorBoundary:
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value=projection)),
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=MagicMock(),
             entry_reconciliation_orchestrator=MagicMock(execute=MagicMock(return_value=state)),
         )
 
@@ -1097,6 +1175,7 @@ class TestTypedBranchAndErrorBoundary:
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value="unknown-type")),
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=MagicMock(),
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=ep,
@@ -1123,6 +1202,7 @@ class TestTypedBranchAndErrorBoundary:
             open_position_resolver=resolver,
             use_case_router=router,
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=MagicMock(),
             entry_reconciliation_orchestrator=reconciliation,
         )
 
@@ -1149,6 +1229,7 @@ class TestTypedBranchAndErrorBoundary:
             open_position_resolver=resolver,
             use_case_router=router,
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=MagicMock(),
             entry_reconciliation_orchestrator=reconciliation,
         )
 
@@ -1176,6 +1257,7 @@ class TestTypedBranchAndErrorBoundary:
             open_position_resolver=resolver,
             use_case_router=router,
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=MagicMock(),
             entry_reconciliation_orchestrator=reconciliation,
         )
 
@@ -1203,6 +1285,7 @@ class TestTypedBranchAndErrorBoundary:
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value=projected)),
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=MagicMock(),
             entry_reconciliation_orchestrator=reconciliation,
         )
 
@@ -1238,6 +1321,7 @@ class TestTypedBranchAndErrorBoundary:
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value=projected)),
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=MagicMock(),
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_ApplyExecutionPort(),
@@ -1263,6 +1347,7 @@ class TestTypedBranchAndErrorBoundary:
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value=projected)),
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=MagicMock(),
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_FakeExecutionPort(),
@@ -1285,6 +1370,7 @@ class TestTypedBranchAndErrorBoundary:
             open_position_resolver=MagicMock(),
             use_case_router=MagicMock(),
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=MagicMock(),
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_FakeExecutionPort(),
@@ -1354,6 +1440,7 @@ class TestProcessReturnsFinalState:
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value=projected)),
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=MagicMock(),
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_FakeExecutionPort(),
@@ -1378,6 +1465,7 @@ class TestProcessReturnsFinalState:
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value=projected)),
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=MagicMock(),
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_FakeExecutionPort(),

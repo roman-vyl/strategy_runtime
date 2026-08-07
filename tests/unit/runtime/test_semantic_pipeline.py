@@ -1,5 +1,6 @@
 from dataclasses import replace
 from typing import Literal
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -578,6 +579,7 @@ def test_semantic_orchestrator_calls_each_scalar_stage_once_and_applies_live_ent
                 },
             )(),
         ),
+        position_management_orchestrator=MagicMock(),
     )
 
     result = orchestrator.process(item.processing_unit)

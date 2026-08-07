@@ -12,6 +12,9 @@ from strategy_runtime.adapters.http.app import create_http_app
 from strategy_runtime.config.loader import load_runtime_config
 from strategy_runtime.config.startup import prepare_journal_path, prepare_specs_path
 from strategy_runtime.infrastructure.abi import HttpxAbiOpenPositionLookupAdapter
+from strategy_runtime.infrastructure.abi.http_position_management import (
+    HttpxAbiPositionManagementAdapter,
+)
 from strategy_runtime.infrastructure.strategy_engine import (
     HttpxStrategyEngineLiveEntryAdapter,
     HttpxStrategyEngineOpenTradeAdapter,
@@ -34,6 +37,9 @@ from strategy_runtime.runtime.entry_reconciliation_orchestrator import (
 )
 from strategy_runtime.runtime.open_position.resolver import OpenPositionResolver
 from strategy_runtime.runtime.orchestrator.orchestrator import StrategyRuntimeOrchestrator
+from strategy_runtime.runtime.position_management_orchestrator import (
+    PositionManagementOrchestrator,
+)
 from strategy_runtime.runtime.routing.router import StrategyUseCaseRouter
 from strategy_runtime.runtime.state.identity import new_trade_cycle_id
 from strategy_runtime.runtime.state.models import StrategyInstanceRuntimeState
@@ -59,7 +65,7 @@ class _ClosableOutboundClient(Protocol):
 
 
 class _OutboundHttpClientLifecycle:
-    """Single owner of the four outbound HTTP clients' `close()` lifecycle.
+    """Single owner of the five outbound HTTP clients' `close()` lifecycle.
 
     One ordered collection, one idempotent close-all operation: the first
     `close_all_once()` call closes every added client at most once each; any
@@ -102,7 +108,7 @@ def build_application(
 
     A `ready=True` result always has the complete graph constructed: the
     utility contour, the shared state repository and keyed-mutex registry,
-    all four outbound HTTP clients, and the semantic core wired as the
+    all five outbound HTTP clients, and the semantic core wired as the
     production `StrategyCycleHandoffBoundary` sink. There is no parameter
     that returns a partial or utility-only ready result.
 
@@ -156,6 +162,12 @@ def build_application(
                 timeout_seconds=config.abi_entry_package_timeout_seconds,
             )
         )
+        position_management_client = lifecycle.add(
+            HttpxAbiPositionManagementAdapter(
+                base_url=config.abi_base_url,
+                timeout_seconds=config.abi_position_management_timeout_seconds,
+            )
+        )
 
         open_position_resolver = OpenPositionResolver(open_position_client)
         use_case_router = StrategyUseCaseRouter(
@@ -169,12 +181,16 @@ def build_application(
             new_trade_cycle_id,
             entry_execution_bridge,
         )
+        position_management_orchestrator = PositionManagementOrchestrator(
+            execution_port=position_management_client
+        )
         strategy_runtime_orchestrator = StrategyRuntimeOrchestrator(
             state_repository=state_repository,
             open_position_resolver=open_position_resolver,
             use_case_router=use_case_router,
             keyed_mutex_registry=keyed_mutex_registry,
             entry_reconciliation_orchestrator=entry_reconciliation_orchestrator,
+            position_management_orchestrator=position_management_orchestrator,
         )
         abi_execution_event_orchestrator = AbiExecutionEventOrchestrator(
             state_repository=state_repository,

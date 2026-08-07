@@ -25,6 +25,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
+from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
 
@@ -442,6 +443,7 @@ def _make_real_semantic_harness(
         use_case_router=gated_router,
         keyed_mutex_registry=registry,  # type: ignore[arg-type]
         entry_reconciliation_orchestrator=entry_reconciliation_orchestrator,
+        position_management_orchestrator=MagicMock(),
     )
 
     def process_strategy_cycle(

@@ -32,6 +32,9 @@ def load_runtime_config(environ: Mapping[str, str] | None = None) -> RuntimeConf
     abi_entry_package_timeout_seconds = _require_float(
         values, "RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS"
     )
+    abi_position_management_timeout_seconds = _require_float(
+        values, "RUNTIME_ABI_POSITION_MANAGEMENT_TIMEOUT_SECONDS"
+    )
     committed_bar_queue_capacity = _require_int(values, "RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY")
 
     return RuntimeConfig(
@@ -45,6 +48,7 @@ def load_runtime_config(environ: Mapping[str, str] | None = None) -> RuntimeConf
         abi_base_url=abi_base_url,
         abi_open_position_timeout_seconds=abi_open_position_timeout_seconds,
         abi_entry_package_timeout_seconds=abi_entry_package_timeout_seconds,
+        abi_position_management_timeout_seconds=abi_position_management_timeout_seconds,
         committed_bar_queue_capacity=committed_bar_queue_capacity,
     )
 

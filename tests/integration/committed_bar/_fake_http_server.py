@@ -93,6 +93,9 @@ class FakeHttpServer:
             def do_PUT(self) -> None:  # noqa: N802
                 self._dispatch()
 
+            def do_DELETE(self) -> None:  # noqa: N802
+                self._dispatch()
+
             def log_message(self, log_format: str, *args: object) -> None:
                 return
 

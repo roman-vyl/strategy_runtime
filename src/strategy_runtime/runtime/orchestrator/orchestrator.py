@@ -12,9 +12,9 @@ from strategy_runtime.runtime.open_position.models import (
     PositionResolvedStrategyInstanceRuntimeState,
 )
 from strategy_runtime.runtime.open_position.ports import OpenPositionResolverPort
-from strategy_runtime.runtime.orchestrator.errors import (
-    OpenTradeProjectionUnsupportedError,
-    UnknownStrategyProjectionError,
+from strategy_runtime.runtime.orchestrator.errors import UnknownStrategyProjectionError
+from strategy_runtime.runtime.position_management_orchestrator import (
+    PositionManagementOrchestrator,
 )
 from strategy_runtime.runtime.routing.models import (
     LiveEntryProjectedStrategyInstance,
@@ -43,12 +43,14 @@ class StrategyRuntimeOrchestrator:
         use_case_router: StrategyUseCaseRouterPort,
         keyed_mutex_registry: StrategyInstanceKeyedMutexRegistry,
         entry_reconciliation_orchestrator: EntryReconciliationOrchestrator,
+        position_management_orchestrator: PositionManagementOrchestrator,
     ) -> None:
         self._state_repository = state_repository
         self._open_position_resolver = open_position_resolver
         self._use_case_router = use_case_router
         self._keyed_mutex_registry = keyed_mutex_registry
         self._entry_reconciliation_orchestrator = entry_reconciliation_orchestrator
+        self._position_management_orchestrator = position_management_orchestrator
 
     def process(
         self, unit: StrategyBarProcessingUnit[DeploymentSpecification]
@@ -80,7 +82,12 @@ class StrategyRuntimeOrchestrator:
                 return saved_state
 
             if type(projection) is OpenTradeProjectedStrategyInstance:
-                raise OpenTradeProjectionUnsupportedError
+                source_state = projection.source.resolved_state.runtime_state
+                resulting_state = self._position_management_orchestrator.execute(projection)
+                if resulting_state == source_state:
+                    return resulting_state
+                saved_state = self._state_repository.save(resulting_state)
+                return saved_state
 
             raise UnknownStrategyProjectionError
 

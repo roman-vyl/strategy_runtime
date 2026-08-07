@@ -18,6 +18,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 from typing import Any
+from unittest.mock import MagicMock
 
 from strategy_runtime.runtime.coordination import StrategyInstanceKeyedMutexRegistry
 from strategy_runtime.runtime.entry_reconciliation import EntryAppliedConfirmation
@@ -259,6 +260,7 @@ def _run_same_instance_pair() -> _SameInstancePairResult:
             trade_cycle_id_factory=lambda: "tc-id",
             execution_port=execution_port,
         ),
+        position_management_orchestrator=MagicMock(),
     )
 
     results: list[StrategyInstanceRuntimeState] = []
@@ -398,6 +400,7 @@ class TestDifferentInstanceOverlap:
                     trade_cycle_id_factory=lambda: "tc-id",
                     execution_port=_UnusedExecutionPort(),
                 ),
+                position_management_orchestrator=MagicMock(),
             )
             return orch, unit
 

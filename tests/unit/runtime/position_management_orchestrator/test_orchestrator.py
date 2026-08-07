@@ -250,3 +250,10 @@ def test_execute_signature_takes_only_the_projection() -> None:
         "self",
         "projection",
     )
+
+
+def test_constructor_receives_execution_port_but_no_repository_or_mutex() -> None:
+    assert tuple(signature(PositionManagementOrchestrator.__init__).parameters) == (
+        "self",
+        "execution_port",
+    )
