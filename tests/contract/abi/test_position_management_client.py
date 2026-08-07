@@ -208,6 +208,52 @@ def test_close_response_mismatching_the_sent_command_fails_closed(
         close_position(fake, make_close_command())
 
 
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda body: body.update({"stop_price": "99000.0"}),
+        lambda body: body.update({"stop_price": "99000e0"}),
+        lambda body: body.update({"stop_price": "099000"}),
+        lambda body: body.update({"take_price": "103000.00"}),
+    ],
+)
+def test_protection_response_is_compared_as_raw_wire_text_not_normalized_value(
+    mutate: Callable[[dict[str, object]], object],
+) -> None:
+    """A numeric-equivalent but differently formatted wire value must not be
+    silently normalized into a match: ABI is expected to echo back the exact
+    accepted Runtime value, so any other formatting is a protocol
+    contradiction."""
+    body = protection_applied_body()
+    mutate(body)
+    fake = FakeAbi(lambda _: json_response(200, body))
+
+    with pytest.raises(PositionManagementExecutionProtocolError):
+        apply_protection(fake, make_protection_command())
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda body: body.update({"stop_price": "0"}),
+        lambda body: body.update({"stop_price": "-99000"}),
+        lambda body: body.update({"stop_price": "not-a-number"}),
+        lambda body: body.update({"stop_price": ""}),
+        lambda body: body.update({"take_price": "0"}),
+        lambda body: body.update({"take_price": "-1"}),
+    ],
+)
+def test_protection_response_rejects_non_positive_exact_decimal_wire_text(
+    mutate: Callable[[dict[str, object]], object],
+) -> None:
+    body = protection_applied_body()
+    mutate(body)
+    fake = FakeAbi(lambda _: json_response(200, body))
+
+    with pytest.raises(PositionManagementExecutionProtocolError):
+        apply_protection(fake, make_protection_command())
+
+
 # -- documented public errors share one shape --------------------------------
 
 
@@ -241,6 +287,24 @@ def test_apply_protection_documented_public_errors_share_one_type(
         assert list(caught.details) == [{"path": "/stop_price", "message": "bad"}]  # type: ignore[arg-type]
     else:
         assert caught.details is None
+
+
+def test_validation_details_allow_empty_path_and_message() -> None:
+    """The authoritative `ValidationDetail` schema declares `path`/`message`
+    as plain strings with no `minLength` (unlike the envelope's own
+    `error.message`, which does require `minLength: 1`) — exact decoding
+    must not silently narrow the published contract."""
+    error = {
+        "code": "validation_failed",
+        "message": "rejected",
+        "details": [{"path": "", "message": ""}],
+    }
+    fake = FakeAbi(lambda _: json_response(422, {"error": error}))
+
+    with pytest.raises(PositionManagementExecutionPublicError) as raised:
+        apply_protection(fake, make_protection_command())
+
+    assert list(raised.value.details) == [{"path": "", "message": ""}]  # type: ignore[arg-type]
 
 
 def test_apply_protection_position_not_open_is_an_ordinary_public_error() -> None:

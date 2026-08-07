@@ -44,10 +44,16 @@ def test_authoritative_abi_openapi_matches_runtime_apply_protection_contract() -
     }
     assert set(operation["responses"]) == {"200", "400", "415", "422", "500"}
 
+    price_format = {"type": "string", "format": "positive-exact-decimal"}
+    nullable_price_format = {"oneOf": [price_format, {"type": "null"}]}
+
     request_schema = operation["requestBody"]["content"]["application/json"]["schema"]
     assert request_schema == {"$ref": "#/components/schemas/ProtectionRequest"}
-    assert schemas["ProtectionRequest"]["additionalProperties"] is False
-    assert set(schemas["ProtectionRequest"]["required"]) == {"stop_price", "take_price"}
+    request = schemas["ProtectionRequest"]
+    assert request["additionalProperties"] is False
+    assert set(request["required"]) == {"stop_price", "take_price"}
+    assert request["properties"]["stop_price"] == price_format
+    assert request["properties"]["take_price"] == nullable_price_format
 
     success_schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
     assert success_schema == {"$ref": "#/components/schemas/ProtectionAppliedResponse"}
@@ -61,6 +67,8 @@ def test_authoritative_abi_openapi_matches_runtime_apply_protection_contract() -
         "take_price",
     }
     assert success["properties"]["status"] == {"const": "protection_applied"}
+    assert success["properties"]["stop_price"] == price_format
+    assert success["properties"]["take_price"] == nullable_price_format
 
     error_schema = operation["responses"]["422"]["content"]["application/json"]["schema"]
     assert error_schema == {"$ref": "#/components/schemas/ProtectionBusinessError"}
@@ -76,15 +84,33 @@ def test_authoritative_abi_openapi_matches_runtime_apply_protection_contract() -
         "const": "position_not_open"
     }
 
+    validation_detail = schemas["ValidationDetail"]
+    assert validation_detail["additionalProperties"] is False
+    assert set(validation_detail["required"]) == {"path", "message"}
+    assert validation_detail["properties"] == {
+        "path": {"type": "string"},
+        "message": {"type": "string"},
+    }
+
     assert operation["responses"]["400"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/MalformedJsonError"
+    }
+    malformed_json_schema = resolve_schema_ref(schemas, schemas["MalformedJsonError"])
+    assert resolve_error_schema(malformed_json_schema)["properties"]["code"] == {
+        "const": "malformed_json"
     }
     assert operation["responses"]["415"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/UnsupportedMediaTypeError"
     }
+    assert resolve_error_schema(schemas["UnsupportedMediaTypeError"])["properties"]["code"] == {
+        "const": "unsupported_media_type"
+    }
 
     internal_error_schema = operation["responses"]["500"]["content"]["application/json"]["schema"]
     assert internal_error_schema == {"$ref": "#/components/schemas/InternalError"}
+    assert resolve_error_schema(schemas["InternalError"])["properties"]["code"] == {
+        "const": "internal_error"
+    }
 
 
 def test_authoritative_abi_openapi_matches_runtime_close_position_contract() -> None:
@@ -115,6 +141,12 @@ def test_authoritative_abi_openapi_matches_runtime_close_position_contract() -> 
             {"$ref": "#/components/schemas/UnknownTradeCycleBindingError"},
             {"$ref": "#/components/schemas/UnsupportedExchangeScopeError"},
         ]
+    }
+
+    internal_error_schema = operation["responses"]["500"]["content"]["application/json"]["schema"]
+    assert internal_error_schema == {"$ref": "#/components/schemas/InternalError"}
+    assert resolve_error_schema(schemas["InternalError"])["properties"]["code"] == {
+        "const": "internal_error"
     }
 
 
@@ -258,3 +290,11 @@ def resolve_error_schema(schema: dict[str, Any]) -> dict[str, Any]:
     assert schema["additionalProperties"] is False
     assert schema["required"] == ["error"]
     return schema["properties"]["error"]
+
+
+def resolve_schema_ref(schemas: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
+    ref = schema.get("$ref")
+    if ref is None:
+        return schema
+    name = ref.removeprefix("#/components/schemas/")
+    return resolve_schema_ref(schemas, schemas[name])

@@ -76,3 +76,35 @@
   appended), two new `infrastructure/abi/` modules, and the two new
   contract test files — no production wiring, orchestrator, state, or
   existing capability spec touched.
+
+## 6. Correction pass (review feedback)
+
+- [x] 6.1 Fixed a contract blocker: the protection success codec compared
+  `confirmed_protection` after both sides passed through
+  `DesiredProtection`'s `normalize_decimal_text`, so a numeric-equivalent
+  but differently formatted wire value (e.g. `"99000.0"` vs the sent
+  `"99000"`) was silently accepted instead of failing closed. The codec
+  now validates each raw wire string against the ABI
+  positive-exact-decimal grammar, compares the raw strings/null directly
+  against the sent command's values, and only constructs
+  `DesiredProtection`/`ProtectionAppliedConfirmation` after that match
+  succeeds.
+- [x] 6.2 Loosened `error.details[].path`/`.message` decoding from
+  non-empty to plain-string, matching the authoritative `ValidationDetail`
+  schema (no `minLength`, unlike the envelope's own `error.message`,
+  which does require `minLength: 1`).
+- [x] 6.3 Strengthened the cross-repository OpenAPI conformance test to
+  assert the exact `code` `const` for `malformed_json`,
+  `unsupported_media_type`, and `internal_error` (previously only the
+  schema `$ref` was checked), the full `stop_price`/`take_price`
+  type+format schemas on both `ProtectionRequest` and
+  `ProtectionAppliedResponse`, and the authoritative `ValidationDetail`
+  schema shape.
+- [x] 6.4 Added regression tests: numeric-equivalent-but-differently-
+  formatted wire values are rejected; non-positive/malformed wire decimal
+  text is rejected; empty `path`/`message` in validation details is
+  accepted.
+- [x] 6.5 Full verification re-run: `ruff check`/`ruff format --check`,
+  `mypy` (strict, repository-wide), `python -m compileall`, and the full
+  `pytest` suite (sibling `abi_executor_bot` checked out) — 1022 passed
+  (11 new tests over the prior apply pass), `git diff --check` clean.

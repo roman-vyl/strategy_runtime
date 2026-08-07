@@ -15,6 +15,7 @@ from strategy_runtime.runtime.position_management_execution.models import (
     ProtectionAppliedConfirmation,
 )
 from strategy_runtime.runtime.recipes.position_management import DesiredProtection
+from strategy_runtime.shared.decimal_text import is_positive_exact_decimal_text
 from strategy_runtime.utility.deployment_catalog.models import FrozenJsonValue, freeze_json
 
 _PROTECTION_SUCCESS_FIELDS = frozenset(
@@ -98,30 +99,31 @@ def _decode_protection_success(
         body = _closed_object(payload, _PROTECTION_SUCCESS_FIELDS, "success response")
         if body["status"] != "protection_applied":
             raise ValueError("success status is not protection_applied")
-        confirmation = ProtectionAppliedConfirmation(
-            strategy_instance_id=_non_empty_string(
-                body["strategy_instance_id"], "strategy_instance_id"
-            ),
-            trade_cycle_id=_non_empty_string(body["trade_cycle_id"], "trade_cycle_id"),
-            confirmed_protection=DesiredProtection(
-                stop_price=_string(body["stop_price"], "stop_price"),
-                take_price=_optional_string(body["take_price"], "take_price"),
-            ),
+        strategy_instance_id = _non_empty_string(
+            body["strategy_instance_id"], "strategy_instance_id"
         )
+        trade_cycle_id = _non_empty_string(body["trade_cycle_id"], "trade_cycle_id")
+        stop_price = _positive_exact_decimal_string(body["stop_price"], "stop_price")
+        take_price = _optional_positive_exact_decimal_string(body["take_price"], "take_price")
     except (KeyError, TypeError, ValueError) as exc:
         raise PositionManagementExecutionProtocolError(
             f"invalid ABI protection success response: {exc}"
         ) from exc
 
     if (
-        confirmation.strategy_instance_id != command.strategy_instance_id
-        or confirmation.trade_cycle_id != command.trade_cycle_id
-        or confirmation.confirmed_protection != command.desired_protection
+        strategy_instance_id != command.strategy_instance_id
+        or trade_cycle_id != command.trade_cycle_id
+        or stop_price != command.desired_protection.stop_price
+        or take_price != command.desired_protection.take_price
     ):
         raise PositionManagementExecutionProtocolError(
             "ABI protection success response does not match the sent command"
         )
-    return confirmation
+    return ProtectionAppliedConfirmation(
+        strategy_instance_id=strategy_instance_id,
+        trade_cycle_id=trade_cycle_id,
+        confirmed_protection=DesiredProtection(stop_price=stop_price, take_price=take_price),
+    )
 
 
 def _decode_close_success(
@@ -186,8 +188,8 @@ def _decode_validation_details(value: object) -> FrozenJsonValue:
     items = cast("list[object]", value)
     for item in items:
         detail = _closed_object(item, _VALIDATION_DETAIL_FIELDS, "error.details item")
-        _non_empty_string(detail["path"], "error.details[].path")
-        _non_empty_string(detail["message"], "error.details[].message")
+        _string(detail["path"], "error.details[].path")
+        _string(detail["message"], "error.details[].message")
     return freeze_json(items)
 
 
@@ -288,10 +290,17 @@ def _string(value: object, name: str) -> str:
     return value
 
 
-def _optional_string(value: object, name: str) -> str | None:
+def _positive_exact_decimal_string(value: object, name: str) -> str:
+    text = _string(value, name)
+    if not is_positive_exact_decimal_text(text):
+        raise ValueError(f"{name} must be positive exact-decimal text")
+    return text
+
+
+def _optional_positive_exact_decimal_string(value: object, name: str) -> str | None:
     if value is None:
         return None
-    return _string(value, name)
+    return _positive_exact_decimal_string(value, name)
 
 
 def _non_empty_string(value: object, name: str) -> str:
