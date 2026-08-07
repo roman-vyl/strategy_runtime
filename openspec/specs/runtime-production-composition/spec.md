@@ -3,32 +3,42 @@
 ## Purpose
 Define the production composition of the complete strategy runtime application graph, including the utility contour, semantic core, and all outbound HTTP adapters, with configuration requirements and lifecycle ownership.
 ## Requirements
-### Requirement: Runtime composes exactly one production live-entry graph
+### Requirement: Runtime composes exactly one complete production graph
 `strategy_runtime.bootstrap.application.build_application` SHALL construct,
 for every `ready=True` result, the complete production graph from the
 existing utility contour through the existing semantic core and existing
-outbound adapters to the existing `AbiEntryPackagePort` HTTP client, using
-only components already implemented and tested in isolation by prior
-changes, and SHALL additionally construct exactly one
-`AbiExecutionEventOrchestrator` and connect it to `create_http_app(...)` as
-the first-fill application callable. There is no caller-supplied override
-that replaces any part of this graph, and no construction path returns
+outbound adapters to the existing `AbiEntryPackagePort` and
+`PositionManagementExecutionPort` HTTP clients, using only components
+already implemented and tested in isolation by prior changes, and SHALL
+additionally construct exactly one `AbiExecutionEventOrchestrator` and
+connect it to `create_http_app(...)` as the first-fill application
+callable. `StrategyRuntimeOrchestrator`'s constructor is the one component
+this change itself extends, to accept `position_management_orchestrator`;
+every other component in the graph is consumed exactly as already
+implemented, with no redesign. There is no caller-supplied override that
+replaces any part of this graph, and no construction path returns
 `ready=True` with only part of it.
 
 #### Scenario: Compose the existing components, not new ones
 - **WHEN** `build_application` constructs a ready application
 - **THEN** it constructs `OpenPositionResolver`, `StrategyUseCaseRouter`,
-  `EntryReconciliationOrchestrator`, `StrategyRuntimeOrchestrator`, and
+  `EntryReconciliationOrchestrator`, `PositionManagementOrchestrator`, and
   `AbiExecutionEventOrchestrator` from their existing, unmodified
-  constructors
+  constructors, and constructs `StrategyRuntimeOrchestrator` from its
+  constructor as extended by this change to additionally accept
+  `position_management_orchestrator`
 - **AND** it constructs `HttpxStrategyEngineLiveEntryAdapter`,
   `HttpxStrategyEngineOpenTradeAdapter`, `HttpxAbiOpenPositionLookupAdapter`,
-  and the existing `HttpxAbiEntryPackageAdapter` from their existing,
-  unmodified constructors
+  `HttpxAbiEntryPackageAdapter`, and `HttpxAbiPositionManagementAdapter`
+  from their existing, unmodified constructors
+- **AND** `PositionManagementOrchestrator` and
+  `HttpxAbiPositionManagementAdapter` are consumed exactly as already
+  ratified, with no redesign of either
 - **AND** it introduces no new top-level orchestrator, reconciliation
   component, or outbound adapter class beyond the already-shipped
-  `AbiExecutionEventOrchestrator`
-- **AND** it introduces no new outbound HTTP client
+  `AbiExecutionEventOrchestrator` and `PositionManagementOrchestrator`
+- **AND** it introduces no new outbound HTTP client beyond the
+  already-shipped `HttpxAbiPositionManagementAdapter`
 
 #### Scenario: Attach the semantic core through a thin production sink, unconditionally
 - **WHEN** `build_application` constructs a ready application
@@ -63,7 +73,7 @@ that replaces any part of this graph, and no construction path returns
   override, and no equivalent parameter that could replace the production
   sink, replace the production first-fill callable, skip constructing the
   semantic graph, skip constructing `AbiExecutionEventOrchestrator`, or
-  skip constructing any of the four outbound HTTP clients
+  skip constructing any of the five outbound HTTP clients
 - **AND** every `ready=True` application it returns has the complete graph
   constructed — there is no alternative utility-only `ready=True` result
 
@@ -118,31 +128,31 @@ pass the same two instances into both the one constructed
   `AbiExecutionEventOrchestrator`'s own use
 
 ### Requirement: Outbound HTTP clients are constructed once and closed exactly once by one lifecycle owner
-The composition root SHALL be the single owner of the four production HTTP
+The composition root SHALL be the single owner of the five production HTTP
 clients (`HttpxStrategyEngineLiveEntryAdapter`,
 `HttpxStrategyEngineOpenTradeAdapter`, `HttpxAbiOpenPositionLookupAdapter`,
-`HttpxAbiEntryPackageAdapter`): each SHALL be constructed exactly once during
-`build_application`, reused across every background committed-bar cycle for
-the application's life, and closed exactly once by that same lifecycle owner
-— either during startup rollback (if construction fails partway) or during
-application shutdown (if construction succeeded) — and never by any other
-caller.
+`HttpxAbiEntryPackageAdapter`, `HttpxAbiPositionManagementAdapter`): each
+SHALL be constructed exactly once during `build_application`, reused across
+every background committed-bar cycle for the application's life, and closed
+exactly once by that same lifecycle owner — either during startup rollback
+(if construction fails partway) or during application shutdown (if
+construction succeeded) — and never by any other caller.
 
 #### Scenario: Construct once, reuse across cycles
 - **WHEN** the composed application processes multiple committed-bar cycles,
   across one or many strategy instances
-- **THEN** the same four HTTP client instances handle every outbound call
+- **THEN** the same five HTTP client instances handle every outbound call
 - **AND** no HTTP client is constructed per request or per background cycle
 
 #### Scenario: Close every owned client exactly once on shutdown
 - **WHEN** the application shuts down after a successful ready construction
-- **THEN** each of the four owned HTTP clients is closed exactly once, by the
+- **THEN** each of the five owned HTTP clients is closed exactly once, by the
   composition lifecycle owner
 - **AND** no owned client is left open
 
 #### Scenario: Startup rollback closes what was built, not shutdown
-- **WHEN** constructing the four HTTP clients fails partway (a later client's
-  configuration is rejected after one or more earlier clients already
+- **WHEN** constructing the five HTTP clients fails partway (a later
+  client's configuration is rejected after one or more earlier clients
   constructed successfully)
 - **THEN** the composition lifecycle owner closes every client already
   constructed, exactly once each, as part of startup rollback — before
@@ -157,9 +167,9 @@ caller.
   adapter call completes, whether successfully or with a failure
 - **THEN** none of an HTTP request handler, a background committed-bar cycle,
   `StrategyRuntimeOrchestrator`, `OpenPositionResolver`,
-  `StrategyUseCaseRouter`, `EntryReconciliationOrchestrator`, an outbound
-  adapter itself, or any other caller calls `close()` on any of the four
-  owned clients
+  `StrategyUseCaseRouter`, `EntryReconciliationOrchestrator`,
+  `PositionManagementOrchestrator`, an outbound adapter itself, or any other
+  caller calls `close()` on any of the five owned clients
 - **AND** only the composition lifecycle owner calls `close()`, and only
   during startup rollback or application shutdown
 
@@ -167,7 +177,8 @@ caller.
 Strategy Runtime SHALL require `RUNTIME_STRATEGY_ENGINE_BASE_URL`,
 `RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS`, `RUNTIME_ABI_BASE_URL`,
 `RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS`,
-`RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS`, and
+`RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS`,
+`RUNTIME_ABI_POSITION_MANAGEMENT_TIMEOUT_SECONDS`, and
 `RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY` unconditionally for any
 `ready=True` result of `build_application`, and SHALL never return a
 partially constructed *ready* production graph. Constructing
@@ -176,7 +187,7 @@ and connecting both to `create_http_app(...)`, are mandatory steps inside
 the same fail-closed boundary as every earlier component.
 
 #### Scenario: Valid configuration constructs a ready graph
-- **WHEN** all six variables are present and valid (absolute `http`/
+- **WHEN** all seven variables are present and valid (absolute `http`/
   `https` URLs, finite positive timeouts, a positive integer queue
   capacity)
 - **THEN** `build_application` constructs the complete production graph,
@@ -207,13 +218,14 @@ the same fail-closed boundary as every earlier component.
 - **THEN** `build_application` closes every component already constructed
   before that rejection, via startup rollback, and reports `ready=False`
 
-#### Scenario: One ABI base URL serves two independently timed-out adapters
+#### Scenario: One ABI base URL serves three independently timed-out adapters
 - **WHEN** the production graph is constructed
-- **THEN** `HttpxAbiOpenPositionLookupAdapter` and
-  `HttpxAbiEntryPackageAdapter` are both constructed from the same
+- **THEN** `HttpxAbiOpenPositionLookupAdapter`, `HttpxAbiEntryPackageAdapter`,
+  and `HttpxAbiPositionManagementAdapter` are all constructed from the same
   `RUNTIME_ABI_BASE_URL`, each using its own distinct timeout
-  (`RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS` and
-  `RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS`, respectively)
+  (`RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS`,
+  `RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS`, and
+  `RUNTIME_ABI_POSITION_MANAGEMENT_TIMEOUT_SECONDS`, respectively)
 
 #### Scenario: No speculative reliability configuration is added
 - **WHEN** the configuration fields are validated
@@ -222,19 +234,21 @@ the same fail-closed boundary as every earlier component.
   introduced for the intake queue
 
 ### Requirement: Two acknowledgement boundaries remain distinct
-Strategy Runtime SHALL treat the MDS webhook acknowledgement and the ABI
-entry-package acknowledgement as two independent confirmation boundaries, and
-SHALL NOT let a downstream outcome change the already-sent HTTP response or
-let the HTTP acknowledgement authorize any state mutation.
+Strategy Runtime SHALL treat the MDS webhook acknowledgement and any ABI
+execution acknowledgement (entry-package, protection, or close) as two
+independent confirmation boundaries, and SHALL NOT let a downstream outcome
+change the already-sent HTTP response or let the HTTP acknowledgement
+authorize any state mutation.
 
 #### Scenario: HTTP acknowledgement authorizes nothing beyond acceptance
 - **WHEN** Runtime returns `200 {"status":"accepted"}` for a valid, ready
   webhook request
 - **THEN** that response does not assert that Strategy Engine projected
-  successfully, that ABI acknowledged an entry package, that Runtime state was
-  saved, or that an exchange order was placed, amended, or filled
+  successfully, that ABI acknowledged an entry package or a
+  protection/close request, that Runtime state was saved, or that an
+  exchange order was placed, amended, or filled
 
-#### Scenario: Only ABI acknowledgement authorizes state application
+#### Scenario: Only ABI acknowledgement authorizes entry-reconciliation state application
 - **WHEN** `EntryReconciliationOrchestrator` holds a command-bearing decision
   (`Apply`, `Replace`, or `Cancel`)
 - **THEN** it applies the reconciliation result and allows
@@ -243,6 +257,16 @@ let the HTTP acknowledgement authorize any state mutation.
   -execution bridge
 - **AND** no unconfirmed outcome from Strategy Engine, ABI open-position
   lookup, or ABI entry-package produces a save
+
+#### Scenario: Only ABI acknowledgement authorizes position-management state application
+- **WHEN** `PositionManagementOrchestrator` holds a command-bearing decision
+  (`ApplyProtection` or `ClosePosition`)
+- **THEN** it applies the decision and allows `StrategyRuntimeOrchestrator`
+  to save replacement state only after receiving a verified
+  `ProtectionAppliedConfirmation` or `PositionClosedConfirmation` from
+  `PositionManagementExecutionPort`
+- **AND** no unconfirmed outcome from ABI protection or close produces a
+  save
 
 #### Scenario: Downstream failure is recorded, not surfaced over HTTP
 - **WHEN** any outbound call inside the background critical section fails
@@ -294,7 +318,7 @@ of the production graph — introducing no second orchestrator instance.
 
 ### Requirement: Committed-bar intake worker is started once and stopped exactly once by one lifecycle owner, in a fixed shutdown sequence
 The composition root SHALL be the single owner of the worker's start/stop
-lifecycle, matching the existing ownership pattern for the four outbound
+lifecycle, matching the existing ownership pattern for the five outbound
 HTTP clients, and SHALL execute shutdown as three ordered steps: stop
 accepting new events, then wait for the worker to stop, then close the
 outbound HTTP clients.
@@ -313,7 +337,7 @@ outbound HTTP clients.
   synchronously on the event-loop thread (a single lock acquisition that
   never blocks), then waits for the worker to stop via `await asyncio
   .to_thread(intake_worker.stop_once)` — so other coroutines on the same
-  event loop keep running during that wait — and only closes the four
+  event loop keep running during that wait — and only closes the five
   outbound HTTP clients after that offloaded call returns
 - **AND** this ordering holds regardless of how long the wait takes: its
   network operations are bounded by existing outbound timeouts, but its
