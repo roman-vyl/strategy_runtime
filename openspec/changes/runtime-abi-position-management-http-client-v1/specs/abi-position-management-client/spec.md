@@ -39,71 +39,65 @@ close response's `strategy_instance_id` and `trade_cycle_id` exactly match
 the sent `ClosePositionCommand`. Any other `200` body is a protocol failure,
 never a confirmation.
 
-#### Scenario: Matching protection response yields a confirmation
-- **WHEN** ABI returns `200 protection_applied` with identifiers,
-  `stop_price`, and `take_price` equal to the sent command
-- **THEN** `apply_protection` returns `ProtectionAppliedConfirmation`
-  carrying that same protection
+#### Scenario: Protection response is checked field-by-field before confirming
+- **WHEN** ABI returns `200 protection_applied`
+- **THEN** `apply_protection` returns `ProtectionAppliedConfirmation` only
+  if identifiers, `stop_price`, and `take_price` all equal the sent
+  command
+- **AND** otherwise raises a protocol failure and returns no confirmation
 
-#### Scenario: Mismatched protection response is rejected
-- **WHEN** ABI returns `200 protection_applied` but any identifier,
-  `stop_price`, or `take_price` differs from the sent command
-- **THEN** `apply_protection` raises a protocol failure
-- **AND** does not return a confirmation
+#### Scenario: Close response is checked field-by-field before confirming
+- **WHEN** ABI returns `200 trade_cycle_closed`
+- **THEN** `close_position` returns `PositionClosedConfirmation` only if
+  both identifiers equal the sent command
+- **AND** otherwise raises a protocol failure and returns no confirmation
 
-#### Scenario: Matching close response yields a confirmation
-- **WHEN** ABI returns `200 trade_cycle_closed` with identifiers equal to
-  the sent command
-- **THEN** `close_position` returns `PositionClosedConfirmation`
+### Requirement: Every documented public ABI rejection carries one shared typed shape
+The adapter SHALL represent every documented `apply_protection` or
+`close_position` business rejection — `400 malformed_json`, `415
+unsupported_media_type`, `422 validation_failed`, `422
+unknown_trade_cycle_binding`, `422 unsupported_exchange_scope`, and, for
+`apply_protection` only, `422 position_not_open` — as one shared typed
+public-error result carrying the response's status code, error code,
+message, and (only for `validation_failed`) its `details` array. It SHALL
+NOT introduce a separate error type per code. `position_not_open` SHALL
+receive exactly this same shared treatment, with no external-close,
+reconciliation, or position-lifecycle handling derived from it. A
+status/code combination not documented for the operation being called —
+including one valid for the other operation — is a protocol failure, not
+a public-error result.
 
-#### Scenario: Mismatched close response is rejected
-- **WHEN** ABI returns `200 trade_cycle_closed` but either identifier
-  differs from the sent command
-- **THEN** `close_position` raises a protocol failure
-- **AND** does not return a confirmation
-
-### Requirement: Documented public ABI errors are surfaced as typed execution errors
-The adapter SHALL decode only the documented HTTP status and error-code
-combinations for each operation and raise a distinct typed error per code,
-preserving the ABI `message` and, for `validation_failed`, the `details`
-array. `apply_protection` SHALL recognize `400 malformed_json`, `415
-unsupported_media_type`, and `422` with `validation_failed`,
-`unknown_trade_cycle_binding`, `unsupported_exchange_scope`, or
-`position_not_open`. `close_position` SHALL recognize `422` with
-`validation_failed`, `unknown_trade_cycle_binding`, or
-`unsupported_exchange_scope`. Any status/code combination not documented
-for that operation is a protocol failure, never a typed public error.
-
-#### Scenario: Each documented status/code pair maps to its own typed error
-- **WHEN** ABI returns a documented status and error code for the
-  operation being called
-- **THEN** the adapter raises the typed error corresponding to that exact
-  code
-- **AND** preserves the response `message`, and `details` when the code is
-  `validation_failed`
-
-#### Scenario: position_not_open remains an ordinary execution error
-- **WHEN** `apply_protection` receives `422 position_not_open`
-- **THEN** the adapter raises the same kind of typed public-error result it
-  raises for any other documented `apply_protection` business rejection
-- **AND** no external-close, reconciliation, or position-lifecycle handling
-  is derived from it
+#### Scenario: A documented rejection carries its status, code, and message
+- **WHEN** ABI returns a documented status/code pair for the operation
+  being called
+- **THEN** the adapter raises the shared public-error result carrying that
+  exact status code, code, and message
+- **AND** carries `details` only when the code is `validation_failed`
 
 #### Scenario: An undocumented status/code combination is a protocol failure
 - **WHEN** ABI returns a status or error code not documented for the
-  operation being called — including a status/code pairing valid for the
-  other operation but not this one
-- **THEN** the adapter raises a protocol failure
-- **AND** does not raise a typed public error or return a confirmation
+  operation being called
+- **THEN** the adapter raises a protocol failure, not a public-error result
 
-### Requirement: Internal ABI failure is a distinct typed error
-The adapter SHALL treat `500 internal_error` as a distinct typed failure
-separate from every documented public error and from a protocol failure.
+### Requirement: Timeout, network failure, and internal ABI failure share one unavailable classification, with timeout and network distinguished
+The adapter SHALL classify a request timeout, any other transport failure
+preventing a response, and `500 internal_error` all as ABI being
+unavailable — distinct from a public-error result and from a protocol
+failure — while still distinguishing a timeout from a non-timeout
+transport failure from each other.
 
-#### Scenario: 500 internal_error is classified distinctly
+#### Scenario: Timeout and non-timeout transport failure are distinguished
+- **WHEN** a request to either operation exceeds its configured timeout,
+  versus when DNS, connection, TLS, or another non-timeout transport
+  failure prevents a response
+- **THEN** the adapter raises its respective distinct unavailable outcome
+  in each case, and no confirmation is returned in either case
+
+#### Scenario: 500 internal_error is unavailable, not a public error
 - **WHEN** ABI returns `500` with error code `internal_error`
-- **THEN** the adapter raises the internal-error failure
-- **AND** does not classify it as a public business error or a protocol
+- **THEN** the adapter raises the same unavailable classification used for
+  a transport failure
+- **AND** does not classify it as a public-error result or a protocol
   failure
 
 ### Requirement: Malformed or undocumented responses fail closed as one protocol-failure class
@@ -121,22 +115,6 @@ or a typed public/internal error.
 - **THEN** the adapter raises a protocol failure
 - **AND** returns no confirmation and no other typed error for that
   response
-
-### Requirement: Timeout and non-timeout network failure are distinct
-The adapter SHALL raise a distinct typed timeout failure when the request
-does not complete within its configured timeout, and a distinct typed
-network failure for any other transport failure that prevents a response,
-without returning a confirmation in either case.
-
-#### Scenario: Timeout is classified separately from other network failures
-- **WHEN** a request to either operation exceeds its configured timeout
-- **THEN** the adapter raises the typed timeout failure
-
-#### Scenario: A non-timeout transport failure is classified separately from timeout
-- **WHEN** DNS, connection, TLS, or another non-timeout transport failure
-  prevents a response
-- **THEN** the adapter raises the typed network failure, not the timeout
-  failure
 
 ### Requirement: Each call is one bounded, non-retried attempt under one shared timeout
 The adapter SHALL use one shared, finite, positive timeout for both
@@ -161,15 +139,11 @@ The implementation SHALL be verified against the authoritative
 request/response schemas, and every documented status/error-code
 combination for each operation.
 
-#### Scenario: Conformance verification confirms the implemented contract
+#### Scenario: Conformance verification runs outside the production path
 - **WHEN** conformance verification runs against the authoritative
   `abi-position-management-api-v1` document
 - **THEN** it confirms the exact methods, routes, closed request/response
-  schemas, and status/error-code combinations this capability implements
-- **AND** verification fails if the authoritative document is missing or
-  incompatible
-
-#### Scenario: Verification is not a production runtime dependency
-- **WHEN** the adapter is built or invoked in production
-- **THEN** it does not load the sibling repository or its OpenAPI document
-  at runtime
+  schemas, and status/error-code combinations this capability implements,
+  and fails if the authoritative document is missing or incompatible
+- **AND** the production adapter itself never loads the sibling repository
+  or its OpenAPI document at runtime

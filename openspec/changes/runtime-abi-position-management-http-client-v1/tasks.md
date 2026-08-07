@@ -1,10 +1,13 @@
 ## 1. Typed Errors and Codec
 
-- [ ] 1.1 Add typed failures for: each documented public error code per
-  operation (including `position_not_open` as an ordinary typed public
-  error, not a special case), `internal_error`, protocol failure, timeout,
-  and network failure — following the existing
-  `runtime/open_position/errors.py` shape.
+- [ ] 1.1 Add the compact typed-error hierarchy mirroring
+  `runtime/open_position/errors.py`: a base execution error; an
+  `Unavailable` family used directly for `500 internal_error` and
+  subclassed for timeout and network failure; a `ProtocolError`; and one
+  `PublicError` (not a class per code) carrying `status_code`, `code`,
+  `message`, and optional `details`, used for every documented public
+  rejection including `position_not_open` (an ordinary rejection, no
+  special case).
 - [ ] 1.2 Add a strict codec module decoding the `protection` `PUT` and
   `open-position` `DELETE` responses against
   `abi-position-management-api-v1.json`'s exact schemas: closed success
@@ -26,8 +29,9 @@
 - [ ] 2.4 Percent-encode `strategy_instance_id`/`trade_cycle_id` path
   segments using the same helper/approach as the existing ABI open-position
   adapter, including dot-only segments.
-- [ ] 2.5 Map `httpx` timeout/transport exceptions to the typed timeout/
-  network failures; route all other responses through the codec.
+- [ ] 2.5 Map `httpx` timeout/transport exceptions to the `Unavailable`
+  timeout/network-failure subclasses; route all other responses through
+  the codec.
 
 ## 3. Contract Tests
 
