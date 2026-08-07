@@ -209,20 +209,25 @@ or construction of a failed dispatch outcome.
 #### Scenario: Propagate Engine projection failure
 - **WHEN** the use-case router or selected Strategy Engine projection raises
 - **THEN** that exception propagates
-- **AND** the nested application operation and repository save are not
-  invoked
+- **AND** the nested application operation and the post-projection
+  repository save are not invoked
+- **AND** an already-completed first-fill freeze save, if the position was
+  open, is not reverted, repeated, or treated as satisfying the
+  post-projection save
 
 #### Scenario: Propagate reconciliation failure
 - **WHEN** `EntryReconciliationOrchestrator.execute(projection)` raises
 - **THEN** that exception propagates
-- **AND** repository `save(...)` is not invoked
+- **AND** the post-projection repository `save(...)` is not invoked
 - **AND** reconciliation is not retried or replaced by a fallback
 
 #### Scenario: Propagate position-management failure
 - **WHEN** `PositionManagementOrchestrator.execute(projection)` raises
 - **THEN** that exception propagates
-- **AND** repository `save(...)` is not invoked
+- **AND** the post-projection repository `save(...)` is not invoked
 - **AND** position management is not retried or replaced by a fallback
+- **AND** an already-completed first-fill freeze save is not reverted or
+  repeated by this failure
 
 #### Scenario: Propagate save failure
 - **WHEN** repository `save(...)` raises for a value-different replacement
@@ -231,11 +236,16 @@ or construction of a failed dispatch outcome.
   successful return
 
 #### Scenario: Persist no partial replacement on error
-- **WHEN** any error occurs before repository save
-- **THEN** repository `save(...)` has zero calls for that invocation
+- **WHEN** the use-case router, selected Strategy Engine projection, the
+  nested application operation, or the post-projection repository save
+  raises
+- **THEN** no post-projection repository `save(...)` call occurs for that
+  invocation, beyond any first-fill freeze save that already completed
+  before routing
 - **AND** no partial nested-operation aggregate is persisted
-- **AND** a deterministic initial aggregate created by `get_or_create(...)`, if
-  any, is not treated as a partially applied nested-operation transition
+- **AND** neither a deterministic initial aggregate created by
+  `get_or_create(...)` nor an already-completed first-fill freeze save is
+  treated as a partially applied nested-operation transition
 
 #### Scenario: Rely on atomic repository rejection
 - **WHEN** the repository rejects a complete replacement during `save(...)`

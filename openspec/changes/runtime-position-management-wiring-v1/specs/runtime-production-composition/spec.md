@@ -1,6 +1,20 @@
-## MODIFIED Requirements
+## REMOVED Requirements
 
 ### Requirement: Runtime composes exactly one production live-entry graph
+**Reason**: The name "production live-entry graph" predates open-trade
+support. After this wiring change the same graph composes and executes
+both the live-entry and open-trade (position-management) branches, so a
+name that privileges the live-entry branch alone no longer describes what
+is built.
+**Migration**: See the new "Runtime composes exactly one complete
+production graph" requirement below, which carries the identical
+graph-composition contract — including the fifth outbound HTTP client and
+`StrategyRuntimeOrchestrator`'s constructor extension — under a
+branch-neutral name.
+
+## ADDED Requirements
+
+### Requirement: Runtime composes exactly one complete production graph
 `strategy_runtime.bootstrap.application.build_application` SHALL construct,
 for every `ready=True` result, the complete production graph from the
 existing utility contour through the existing semantic core and existing
@@ -9,20 +23,28 @@ outbound adapters to the existing `AbiEntryPackagePort` and
 already implemented and tested in isolation by prior changes, and SHALL
 additionally construct exactly one `AbiExecutionEventOrchestrator` and
 connect it to `create_http_app(...)` as the first-fill application
-callable. There is no caller-supplied override that replaces any part of
-this graph, and no construction path returns `ready=True` with only part
-of it.
+callable. `StrategyRuntimeOrchestrator`'s constructor is the one component
+this change itself extends, to accept `position_management_orchestrator`;
+every other component in the graph is consumed exactly as already
+implemented, with no redesign. There is no caller-supplied override that
+replaces any part of this graph, and no construction path returns
+`ready=True` with only part of it.
 
 #### Scenario: Compose the existing components, not new ones
 - **WHEN** `build_application` constructs a ready application
 - **THEN** it constructs `OpenPositionResolver`, `StrategyUseCaseRouter`,
-  `EntryReconciliationOrchestrator`, `PositionManagementOrchestrator`,
-  `StrategyRuntimeOrchestrator`, and `AbiExecutionEventOrchestrator` from
-  their existing, unmodified constructors
+  `EntryReconciliationOrchestrator`, `PositionManagementOrchestrator`, and
+  `AbiExecutionEventOrchestrator` from their existing, unmodified
+  constructors, and constructs `StrategyRuntimeOrchestrator` from its
+  constructor as extended by this change to additionally accept
+  `position_management_orchestrator`
 - **AND** it constructs `HttpxStrategyEngineLiveEntryAdapter`,
   `HttpxStrategyEngineOpenTradeAdapter`, `HttpxAbiOpenPositionLookupAdapter`,
   `HttpxAbiEntryPackageAdapter`, and `HttpxAbiPositionManagementAdapter`
   from their existing, unmodified constructors
+- **AND** `PositionManagementOrchestrator` and
+  `HttpxAbiPositionManagementAdapter` are consumed exactly as already
+  ratified, with no redesign of either
 - **AND** it introduces no new top-level orchestrator, reconciliation
   component, or outbound adapter class beyond the already-shipped
   `AbiExecutionEventOrchestrator` and `PositionManagementOrchestrator`
@@ -65,6 +87,8 @@ of it.
   skip constructing any of the five outbound HTTP clients
 - **AND** every `ready=True` application it returns has the complete graph
   constructed — there is no alternative utility-only `ready=True` result
+
+## MODIFIED Requirements
 
 ### Requirement: Outbound HTTP clients are constructed once and closed exactly once by one lifecycle owner
 The composition root SHALL be the single owner of the five production HTTP
@@ -171,6 +195,33 @@ the same fail-closed boundary as every earlier component.
 - **THEN** no retry-count, circuit-breaker, or other speculative
   reliability field is introduced, and no worker-count field is
   introduced for the intake queue
+
+### Requirement: Committed-bar intake worker is started once and stopped exactly once by one lifecycle owner, in a fixed shutdown sequence
+The composition root SHALL be the single owner of the worker's start/stop
+lifecycle, matching the existing ownership pattern for the five outbound
+HTTP clients, and SHALL execute shutdown as three ordered steps: stop
+accepting new events, then wait for the worker to stop, then close the
+outbound HTTP clients.
+
+#### Scenario: Started once at startup, stopped once at shutdown by the same owner
+- **WHEN** the production application's lifespan begins
+- **THEN** the intake worker is started exactly once, before the
+  application begins accepting requests
+- **AND** when the application shuts down, that same lifecycle owner —
+  never an HTTP request handler, background thread, or orchestrator call
+  — stops the worker exactly once
+
+#### Scenario: Stop-accepting first, then an event-loop-safe wait, then client close
+- **WHEN** the production application shuts down
+- **THEN** the lifecycle owner first calls `stop_accepting()`
+  synchronously on the event-loop thread (a single lock acquisition that
+  never blocks), then waits for the worker to stop via `await asyncio
+  .to_thread(intake_worker.stop_once)` — so other coroutines on the same
+  event loop keep running during that wait — and only closes the five
+  outbound HTTP clients after that offloaded call returns
+- **AND** this ordering holds regardless of how long the wait takes: its
+  network operations are bounded by existing outbound timeouts, but its
+  local operations are not bounded by any timeout this change introduces
 
 ### Requirement: Two acknowledgement boundaries remain distinct
 Strategy Runtime SHALL treat the MDS webhook acknowledgement and any ABI

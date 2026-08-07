@@ -42,16 +42,36 @@
   `position_management_orchestrator`.
 - [ ] 4.2 Replace the existing `OpenTradeProjectionUnsupportedError`
   assertions in `tests/unit/runtime/orchestrator/
-  test_closed_bar_runtime_orchestration.py` and
-  `tests/integration/committed_bar/test_production_e2e.py` with
-  assertions matching the live-entry branch's existing coverage shape:
-  `NoOp` returns unchanged state with no save; a command-bearing decision
-  saves exactly once after a verified confirmation; a nested-operation
-  failure propagates without a save; the nested orchestrator receives no
-  repository or mutex.
-- [ ] 4.3 Update `tests/unit/bootstrap/test_composition_root.py`'s "four
+  test_closed_bar_runtime_orchestration.py` with per-decision coverage of
+  the wired open-trade branch, mirroring the live-entry branch's existing
+  coverage shape:
+  - `NoOp` (no protection/close signal): `process(...)` returns the
+    unchanged source state; repository `save(...)` is not called beyond
+    any already-completed first-fill freeze save.
+  - `ApplyProtection`: `PositionManagementOrchestrator.execute(...)`
+    returns a state carrying a verified `ProtectionAppliedConfirmation`;
+    that state is saved exactly once; the saved state is returned.
+  - `ClosePosition`: same shape as `ApplyProtection`, with a verified
+    `PositionClosedConfirmation` clearing `current_trade_cycle`.
+  - A `PositionManagementOrchestrator.execute(...)` failure (standing in
+    for any `PositionManagementExecutionError` from the execution port)
+    propagates out of `process(...)` with no post-projection save, while
+    an already-completed first-fill freeze save from earlier in the same
+    invocation is preserved, not reverted or repeated — the direct
+    regression test for the corrected "Persist no partial replacement on
+    error" / "Propagate position-management failure" scenarios.
+  - The nested `PositionManagementOrchestrator` receives no repository or
+    mutex (construction-signature check, mirroring the existing
+    `EntryReconciliationOrchestrator` check).
+- [ ] 4.3 Update `tests/integration/committed_bar/test_production_e2e.py`
+  to exercise the now-wired open-trade branch end to end for at least one
+  `NoOp`, one `ApplyProtection`, and one `ClosePosition` cycle, including
+  the freeze-persists-through-later-failure case from 4.2 at the
+  production-composition level.
+- [ ] 4.4 Update `tests/unit/bootstrap/test_composition_root.py`'s "four
   clients" assertions (construction count, shutdown-close count, startup
-  rollback, `RUNTIME_ABI_POSITION_MANAGEMENT_TIMEOUT_SECONDS` gating) to
+  rollback, `RUNTIME_ABI_POSITION_MANAGEMENT_TIMEOUT_SECONDS` gating, and
+  the intake-worker shutdown-sequence test's client-count assertion) to
   five, mirroring the existing per-client test shape for each of the
   other four.
 
