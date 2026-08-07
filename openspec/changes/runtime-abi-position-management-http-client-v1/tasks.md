@@ -1,6 +1,6 @@
 ## 1. Typed Errors and Codec
 
-- [ ] 1.1 Add the compact typed-error hierarchy mirroring
+- [x] 1.1 Add the compact typed-error hierarchy mirroring
   `runtime/open_position/errors.py`: a base execution error; an
   `Unavailable` family used directly for `500 internal_error` and
   subclassed for timeout and network failure; a `ProtocolError`; and one
@@ -8,43 +8,43 @@
   `message`, and optional `details`, used for every documented public
   rejection including `position_not_open` (an ordinary rejection, no
   special case).
-- [ ] 1.2 Add a strict codec module decoding the `protection` `PUT` and
+- [x] 1.2 Add a strict codec module decoding the `protection` `PUT` and
   `open-position` `DELETE` responses against
   `abi-position-management-api-v1.json`'s exact schemas: closed success
   objects, closed error envelopes per documented status/code, UTF-8 JSON
   content-type validation, no unknown/duplicate fields.
-- [ ] 1.3 Reject any response whose success body does not exactly match
+- [x] 1.3 Reject any response whose success body does not exactly match
   the sent command's identifiers and (for protection) `stop_price`/
   `take_price` as a protocol failure, not a confirmation.
 
 ## 2. HTTP Adapter
 
-- [ ] 2.1 Implement one adapter providing `PositionManagementExecutionPort`,
+- [x] 2.1 Implement one adapter providing `PositionManagementExecutionPort`,
   mirroring `HttpxAbiOpenPositionLookupAdapter`'s construction shape: one
   shared finite positive `timeout_seconds`, redirects disabled, zero
   transport retries.
-- [ ] 2.2 `apply_protection`: `PUT .../protection` with a closed
+- [x] 2.2 `apply_protection`: `PUT .../protection` with a closed
   `{stop_price, take_price}` JSON body built from `desired_protection`.
-- [ ] 2.3 `close_position`: `DELETE .../open-position` with no body.
-- [ ] 2.4 Percent-encode `strategy_instance_id`/`trade_cycle_id` path
+- [x] 2.3 `close_position`: `DELETE .../open-position` with no body.
+- [x] 2.4 Percent-encode `strategy_instance_id`/`trade_cycle_id` path
   segments using the same helper/approach as the existing ABI open-position
   adapter, including dot-only segments.
-- [ ] 2.5 Map `httpx` timeout/transport exceptions to the `Unavailable`
+- [x] 2.5 Map `httpx` timeout/transport exceptions to the `Unavailable`
   timeout/network-failure subclasses; route all other responses through
   the codec.
 
 ## 3. Contract Tests
 
-- [ ] 3.1 Add a fake-ABI adapter test suite covering: successful matching
+- [x] 3.1 Add a fake-ABI adapter test suite covering: successful matching
   responses for both operations; mismatched-identifier and
   mismatched-protection-value responses; every documented public error
   code per operation (including `position_not_open`); `500 internal_error`;
   malformed/undocumented responses (bad JSON, bad content-type, wrong
   fields, undocumented status, redirect) collapsed under the
   protocol-failure requirement; timeout; network failure.
-- [ ] 3.2 Assert exactly one HTTP attempt per call and no retry on any
+- [x] 3.2 Assert exactly one HTTP attempt per call and no retry on any
   failure path.
-- [ ] 3.3 Add a cross-repository OpenAPI conformance test against
+- [x] 3.3 Add a cross-repository OpenAPI conformance test against
   `abi-position-management-api-v1.json`, mirroring the existing
   `test_open_position_openapi.py` pattern (sibling-checkout resolution,
   actionable error if the sibling is absent).
@@ -59,3 +59,20 @@
   under
   `openspec/changes/runtime-abi-position-management-http-client-v1/` were
   added.
+
+## 5. Verification (this apply pass)
+
+- [x] 5.1 `ruff check` and `ruff format --check` over the new/modified
+  source and test files — pass.
+- [x] 5.2 `mypy` (strict, repository-wide) — passes, no issues.
+- [x] 5.3 `python -m compileall` over `src` and `tests` — passes.
+- [x] 5.4 Full `pytest` run (sibling `abi_executor_bot` checked out next
+  to this repository) — 1011 passed, including 54 new tests in
+  `tests/contract/abi/test_position_management_client.py` and
+  `tests/contract/abi/test_position_management_openapi.py`.
+- [x] 5.5 `git diff --check` — clean.
+- [x] 5.6 Diff reviewed: limited to
+  `runtime/position_management_execution/errors.py` (new error classes
+  appended), two new `infrastructure/abi/` modules, and the two new
+  contract test files — no production wiring, orchestrator, state, or
+  existing capability spec touched.
