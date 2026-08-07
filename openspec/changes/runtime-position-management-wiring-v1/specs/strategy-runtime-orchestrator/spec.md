@@ -156,21 +156,26 @@ mapping-shape, attribute-presence, or class-name dispatch.
 For either branch, `StrategyRuntimeOrchestrator` SHALL compare the selected
 nested operation's resulting aggregate with
 `projection.source.resolved_state.runtime_state` using the existing immutable
-aggregate value equality and SHALL save only a value-different replacement.
-This rule applies identically whether the nested operation was
-`EntryReconciliationOrchestrator.execute(...)` or
-`PositionManagementOrchestrator.execute(...)`.
+aggregate value equality and SHALL issue a post-projection repository
+`save(...)` only for a value-different replacement. This rule governs only
+the post-projection save decision; it applies identically whether the
+nested operation was `EntryReconciliationOrchestrator.execute(...)` or
+`PositionManagementOrchestrator.execute(...)`, and it is independent of
+whether an earlier first-fill freeze save already completed in the same
+invocation.
 
-#### Scenario: Logical NoOp performs no save
+#### Scenario: Logical NoOp performs no post-projection save
 - **WHEN** the selected nested operation returns an aggregate value-equal to
   the projection's embedded source aggregate
-- **THEN** repository `save(...)` is not called
+- **THEN** no post-projection repository `save(...)` is called
 - **AND** `process(...)` returns the value-equivalent final aggregate
+- **AND** an already-completed first-fill freeze save for this invocation,
+  if any, remains in effect — a post-projection `NoOp` never reverts it
 
 #### Scenario: Object allocation does not imply transition
 - **WHEN** the selected nested operation returns a different Python object
   that is value-equal to the projection's embedded source aggregate
-- **THEN** repository `save(...)` is not called
+- **THEN** no post-projection repository `save(...)` is called
 - **AND** the orchestrator does not use `resulting_state is not source_state` as
   a change test
 
@@ -179,13 +184,19 @@ This rule applies identically whether the nested operation was
   `StrategyInstanceRuntimeState` that is value-different from the embedded
   source aggregate
 - **THEN** the orchestrator passes that complete replacement aggregate to
-  repository `save(...)` exactly once
+  repository `save(...)` exactly once as the post-projection save
 - **AND** calls no partial-field repository operation
 - **AND** returns the exact `StrategyInstanceRuntimeState` returned by
   repository `save(...)`, not the pre-save input aggregate
+- **AND** the invocation's total repository `save(...)` call count is one if
+  no first-fill freeze save preceded it, or two if a first-fill freeze save
+  already completed earlier in the same invocation — the post-projection
+  save is always exactly one of those calls, never a substitute for or a
+  repetition of the freeze save
 
 #### Scenario: Use no redundant change result
-- **WHEN** the orchestrator decides whether persistence is required
+- **WHEN** the orchestrator decides whether a post-projection save is
+  required
 - **THEN** it uses the existing `StrategyInstanceRuntimeState` value equality
 - **AND** does not introduce a new result DTO solely to carry `changed: bool`
 
@@ -230,18 +241,23 @@ or construction of a failed dispatch outcome.
   repeated by this failure
 
 #### Scenario: Propagate save failure
-- **WHEN** repository `save(...)` raises for a value-different replacement
-- **THEN** that exception propagates after exactly one save attempt
+- **WHEN** the post-projection repository `save(...)` raises for a
+  value-different replacement
+- **THEN** that exception propagates after exactly one post-projection save
+  attempt
 - **AND** the orchestrator performs no retry, compensating write, fallback, or
   successful return
+- **AND** an already-completed first-fill freeze save earlier in the same
+  invocation, if any, already succeeded and is unaffected by this failure
 
 #### Scenario: Persist no partial replacement on error
 - **WHEN** the use-case router, selected Strategy Engine projection, the
   nested application operation, or the post-projection repository save
   raises
 - **THEN** no post-projection repository `save(...)` call occurs for that
-  invocation, beyond any first-fill freeze save that already completed
-  before routing
+  invocation
+- **AND** an already-completed first-fill freeze save from earlier in the
+  same invocation, if any, is unaffected — neither repeated nor reverted
 - **AND** no partial nested-operation aggregate is persisted
 - **AND** neither a deterministic initial aggregate created by
   `get_or_create(...)` nor an already-completed first-fill freeze save is

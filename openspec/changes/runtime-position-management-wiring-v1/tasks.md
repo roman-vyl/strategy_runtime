@@ -49,10 +49,14 @@
     unchanged source state; repository `save(...)` is not called beyond
     any already-completed first-fill freeze save.
   - `ApplyProtection`: `PositionManagementOrchestrator.execute(...)`
-    returns a state carrying a verified `ProtectionAppliedConfirmation`;
-    that state is saved exactly once; the saved state is returned.
-  - `ClosePosition`: same shape as `ApplyProtection`, with a verified
-    `PositionClosedConfirmation` clearing `current_trade_cycle`.
+    verifies the execution port's `ProtectionAppliedConfirmation` and
+    applies it, returning a state whose `current_trade_cycle.
+    latest_confirmed_management_protection` reflects the confirmed
+    protection; that state is saved exactly once; the saved state is
+    returned.
+  - `ClosePosition`: same shape as `ApplyProtection`, but the execution
+    port's verified `PositionClosedConfirmation` is applied by clearing
+    `current_trade_cycle` to `None`.
   - A `PositionManagementOrchestrator.execute(...)` failure (standing in
     for any `PositionManagementExecutionError` from the execution port)
     propagates out of `process(...)` with no post-projection save, while
