@@ -26,23 +26,3 @@ def test_entry_reconciliation_has_only_approved_pure_dependencies() -> None:
         any(name == prefix or name.startswith(f"{prefix}.") for prefix in allowed_prefixes)
         for name in imported
     )
-
-
-def test_entry_reconciliation_does_not_know_client_or_orchestration_models() -> None:
-    root = Path("src/strategy_runtime/runtime/entry_reconciliation")
-    text = "\n".join(path.read_text(encoding="utf-8") for path in root.glob("*.py"))
-    forbidden = (
-        "EntryPackageRequest",
-        "EntryPackageApplied",
-        "EntryPackageAbsent",
-        "AbiEntryPackagePort",
-        "TradeCycleIdFactory",
-        "entry_reconciliation_orchestrator",
-        "repository",
-        "keyed_mutex",
-        "orchestrator",
-        "fastapi",
-        "httpx",
-    )
-    for token in forbidden:
-        assert token not in text

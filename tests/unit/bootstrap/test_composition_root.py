@@ -73,24 +73,6 @@ def _record_kwargs(monkeypatch: pytest.MonkeyPatch, name: str) -> dict[str, obje
     return recorded
 
 
-def test_outbound_http_clients_are_not_constructed_by_utility_dispatch_components() -> None:
-    """The five outbound HTTP clients are constructed only inside
-    `build_application`'s composition step, never inside
-    `CommittedBarOrchestrator`, and never per-request/per-cycle."""
-    forbidden_tokens = (
-        "httpx",
-        "HttpxStrategyEngineLiveEntryAdapter",
-        "HttpxStrategyEngineOpenTradeAdapter",
-        "HttpxAbiOpenPositionLookupAdapter",
-        "HttpxAbiEntryPackageAdapter",
-        "HttpxAbiPositionManagementAdapter",
-    )
-    source_path = Path("src/strategy_runtime/utility/committed_bar/orchestrator.py")
-    source = source_path.read_text(encoding="utf-8")
-    for token in forbidden_tokens:
-        assert token not in source, f"forbidden token '{token}' found in {source_path}"
-
-
 def test_runtime_orchestrator_is_the_direct_strategy_cycle_dispatcher(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

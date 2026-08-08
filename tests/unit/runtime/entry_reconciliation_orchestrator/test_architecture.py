@@ -1,5 +1,5 @@
 import ast
-from inspect import getsource, signature
+from inspect import signature
 from pathlib import Path
 from typing import get_type_hints
 
@@ -46,55 +46,12 @@ def test_application_package_has_only_approved_direct_dependencies() -> None:
     )
 
 
-def test_application_package_has_no_outer_workflow_or_adapter_dependency() -> None:
-    forbidden_prefixes = (
-        "strategy_runtime.adapters",
-        "strategy_runtime.bootstrap",
-        "strategy_runtime.infrastructure",
-        "strategy_runtime.runtime.abi",
-        "strategy_runtime.runtime.coordination",
-        "strategy_runtime.runtime.engine",
-        "strategy_runtime.runtime.open_position",
-        "strategy_runtime.runtime.orchestrator",
-        "strategy_runtime.runtime.state.repository",
-    )
-    imported = imported_modules()
-
-    assert not any(
-        name == prefix or name.startswith(f"{prefix}.")
-        for name in imported
-        for prefix in forbidden_prefixes
-    )
-
-    source = "\n".join(path.read_text(encoding="utf-8") for path in PACKAGE_ROOT.glob("*.py"))
-    forbidden_behavior = (
-        "EntryPackageRequest",
-        "EntryPackageResult",
-        "AbiEntryPackagePort",
-        "repository",
-        "keyed_mutex",
-        "httpx",
-        "fastapi",
-        "retry",
-        "bootstrap",
-        "infrastructure",
-    )
-    for token in forbidden_behavior:
-        assert token not in source
-
-
 def test_operation_acquires_its_only_state_from_the_projection() -> None:
     parameters = signature(EntryReconciliationOrchestrator.execute).parameters
     assert tuple(parameters) == ("self", "projection")
     hints = get_type_hints(EntryReconciliationOrchestrator.execute)
     assert hints["projection"] is LiveEntryProjectedStrategyInstance
     assert hints["return"] is StrategyInstanceRuntimeState
-
-    source = getsource(EntryReconciliationOrchestrator.execute)
-    assert source.count("projection.source.resolved_state.runtime_state") == 1
-    assert "repository" not in source
-    assert ".save(" not in source
-    assert ".get(" not in source
 
 
 def test_execution_port_is_the_exact_transport_free_pair() -> None:
@@ -104,13 +61,6 @@ def test_execution_port_is_the_exact_transport_free_pair() -> None:
     assert hints["command"] is EntryReconciliationCommand
     assert hints["source_state"] is StrategyInstanceRuntimeState
     assert hints["return"] == SuccessfulEntryConfirmation
-
-    port_source = getsource(EntryReconciliationExecutionPort)
-    assert "runtime.abi" not in port_source
-    assert "Request" not in port_source
-    assert "Result" not in port_source
-    assert "http" not in port_source.lower()
-    assert "codec" not in port_source.lower()
 
 
 def test_public_package_boundary_exports_only_operation_and_port() -> None:

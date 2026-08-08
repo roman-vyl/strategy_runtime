@@ -1,6 +1,6 @@
 """Scope guardrails for the HTTP adapter layer.
 
-Static source checks proving `adapters/http/app.py` has no direct route to
+Import-graph checks prove `adapters/http/app.py` has no direct route to
 Runtime state -- no repository, no mutex registry, no domain transition --
 beyond the single injected `process_first_fill` callable. Complements the
 behavioral capturing-callable tests in
@@ -9,16 +9,29 @@ behavioral capturing-callable tests in
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
-_APP_SOURCE = Path("src/strategy_runtime/adapters/http/app.py").read_text(encoding="utf-8")
+APP = Path("src/strategy_runtime/adapters/http/app.py")
 
 
 def test_http_app_has_no_direct_repository_mutex_or_domain_transition_access() -> None:
-    forbidden_tokens = (
-        "StrategyInstanceRuntimeStateRepository",
-        "StrategyInstanceKeyedMutexRegistry",
-        "apply_first_fill",
+    tree = ast.parse(APP.read_text(encoding="utf-8"), filename=str(APP))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+
+    forbidden_prefixes = (
+        "strategy_runtime.infrastructure",
+        "strategy_runtime.runtime.coordination",
+        "strategy_runtime.runtime.first_fill.state_applier",
+        "strategy_runtime.runtime.state.repository",
     )
-    for token in forbidden_tokens:
-        assert token not in _APP_SOURCE, f"forbidden token '{token}' found in adapters/http/app.py"
+    assert not any(
+        name == prefix or name.startswith(f"{prefix}.")
+        for name in imported
+        for prefix in forbidden_prefixes
+    )

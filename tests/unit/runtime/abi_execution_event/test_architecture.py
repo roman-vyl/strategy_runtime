@@ -1,49 +1,45 @@
-"""Scope guardrails for AbiExecutionEventOrchestrator.
-
-Static source checks proving the capability's "no new business logic, no
-Engine/ABI/sibling-orchestrator collaborator" boundary, complementing the
-behavioral tests in test_orchestrator.py.
-"""
+"""Final V1 dependency guardrail for AbiExecutionEventOrchestrator."""
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
-_ORCHESTRATOR_SOURCE = Path(
-    "src/strategy_runtime/runtime/abi_execution_event/orchestrator.py"
-).read_text(encoding="utf-8")
+ORCHESTRATOR = Path("src/strategy_runtime/runtime/abi_execution_event/orchestrator.py")
 
 
-def test_orchestrator_delegates_to_the_existing_domain_transition_and_error() -> None:
-    assert "apply_first_fill" in _ORCHESTRATOR_SOURCE
-    assert "StrategyInstanceStateNotFound" in _ORCHESTRATOR_SOURCE
-    assert "StrategyInstanceKeyedMutexRegistry" in _ORCHESTRATOR_SOURCE
-    assert "StrategyInstanceRuntimeStateRepository" in _ORCHESTRATOR_SOURCE
+def _imported_modules() -> set[str]:
+    tree = ast.parse(ORCHESTRATOR.read_text(encoding="utf-8"), filename=str(ORCHESTRATOR))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+    return imported
 
 
-def test_orchestrator_introduces_no_normalization_or_new_business_logic() -> None:
-    forbidden_tokens = (
-        "align_first_fill_to_entry_bar",
-        "FrozenExecutedEntryContext",
-        "get_or_create",
-        "base_timeframe",
-    )
-    for token in forbidden_tokens:
-        assert token not in _ORCHESTRATOR_SOURCE, (
-            f"forbidden token '{token}' found in AbiExecutionEventOrchestrator"
-        )
+def test_orchestrator_depends_on_first_fill_transition_but_no_sibling_workflow() -> None:
+    imported = _imported_modules()
+    assert "strategy_runtime.runtime.first_fill.state_applier" in imported
 
-
-def test_orchestrator_has_no_engine_abi_or_sibling_orchestrator_collaborator() -> None:
-    forbidden_tokens = (
-        "StrategyRuntimeOrchestrator",
-        "EntryReconciliationOrchestrator",
-        "StrategyEngine",
+    forbidden_prefixes = (
         "httpx",
-        "OpenPositionResolver",
-        "StrategyUseCaseRouter",
+        "strategy_runtime.adapters",
+        "strategy_runtime.bootstrap",
+        "strategy_runtime.config",
+        "strategy_runtime.infrastructure",
+        "strategy_runtime.runtime.abi",
+        "strategy_runtime.runtime.engine",
+        "strategy_runtime.runtime.entry_reconciliation",
+        "strategy_runtime.runtime.first_fill.alignment",
+        "strategy_runtime.runtime.open_position",
+        "strategy_runtime.runtime.orchestrator",
+        "strategy_runtime.runtime.position_management",
+        "strategy_runtime.runtime.routing",
     )
-    for token in forbidden_tokens:
-        assert token not in _ORCHESTRATOR_SOURCE, (
-            f"forbidden token '{token}' found in AbiExecutionEventOrchestrator"
-        )
+    assert not any(
+        name == prefix or name.startswith(f"{prefix}.")
+        for name in imported
+        for prefix in forbidden_prefixes
+    )

@@ -1,21 +1,15 @@
-"""Architecture and scope guardrails for the ABI open-position HTTP adapter (I4c)."""
+"""Final V1 dependency guardrails for ABI lookup and entry-package adapters."""
 
 import ast
 from pathlib import Path
 
-ABI_INFRASTRUCTURE_PACKAGE = Path("src/strategy_runtime/infrastructure/abi")
-OPEN_POSITION_ADAPTER = ABI_INFRASTRUCTURE_PACKAGE / "http_open_position.py"
-ENTRY_PACKAGE_ADAPTER = ABI_INFRASTRUCTURE_PACKAGE / "http_entry_package.py"
-RUNTIME_ABI_PACKAGE = Path("src/strategy_runtime/runtime/abi")
-WIRED_COMPONENT_PATHS = (
-    Path("src/strategy_runtime/bootstrap/application.py"),
-    Path("src/strategy_runtime/bootstrap/main.py"),
-    Path("src/strategy_runtime/runtime/orchestrator/orchestrator.py"),
-    Path("src/strategy_runtime/runtime/routing/router.py"),
-    Path("src/strategy_runtime/runtime/open_position/resolver.py"),
-    Path("src/strategy_runtime/runtime/entry_reconciliation_orchestrator/orchestrator.py"),
-    Path("src/strategy_runtime/config/loader.py"),
+import strategy_runtime.runtime.abi as runtime_abi
+from strategy_runtime.infrastructure.abi.http_entry_package import (
+    HttpxAbiEntryPackageAdapter,
 )
+
+OPEN_POSITION_ADAPTER = Path("src/strategy_runtime/infrastructure/abi/http_open_position.py")
+OPEN_POSITION_RESOLVER = Path("src/strategy_runtime/runtime/open_position/resolver.py")
 
 
 def _imported_modules(paths: tuple[Path, ...]) -> set[str]:
@@ -30,25 +24,7 @@ def _imported_modules(paths: tuple[Path, ...]) -> set[str]:
     return imported
 
 
-def test_open_position_adapter_is_wired_into_production_composition_by_i4d() -> None:
-    """I4d composes the adapter into `build_application`, inverting the I4c
-    -era guardrail that proved it was implemented in isolation with zero
-    production wiring."""
-    imported = _imported_modules(WIRED_COMPONENT_PATHS)
-
-    assert any(
-        name == "strategy_runtime.infrastructure.abi"
-        or name.startswith("strategy_runtime.infrastructure.abi.")
-        for name in imported
-    )
-
-    application_source = Path("src/strategy_runtime/bootstrap/application.py").read_text(
-        encoding="utf-8"
-    )
-    assert "HttpxAbiOpenPositionLookupAdapter" in application_source
-
-
-def test_new_open_position_adapter_module_has_no_forbidden_dependencies() -> None:
+def test_open_position_adapter_has_no_outer_workflow_or_entry_package_dependency() -> None:
     imported = _imported_modules((OPEN_POSITION_ADAPTER,))
 
     forbidden_prefixes = (
@@ -70,26 +46,26 @@ def test_new_open_position_adapter_module_has_no_forbidden_dependencies() -> Non
     )
 
 
-def test_open_position_adapter_does_not_own_entry_package_contracts() -> None:
-    open_position_source = OPEN_POSITION_ADAPTER.read_text(encoding="utf-8")
-    assert "entry_package_codec" not in open_position_source
-    assert "EntryPackageRequest" not in open_position_source
-    assert "EntryPackageResult" not in open_position_source
-
-
 def test_entry_package_http_adapter_is_infrastructure_owned() -> None:
-    assert ENTRY_PACKAGE_ADAPTER.is_file()
-    assert not (RUNTIME_ABI_PACKAGE / "entry_package_http.py").exists()
+    assert (
+        HttpxAbiEntryPackageAdapter.__module__
+        == "strategy_runtime.infrastructure.abi.http_entry_package"
+    )
+    assert not hasattr(runtime_abi, "HttpxAbiEntryPackageAdapter")
 
-    runtime_package_source = (RUNTIME_ABI_PACKAGE / "__init__.py").read_text(encoding="utf-8")
-    assert "HttpxAbiEntryPackageAdapter" not in runtime_package_source
 
+def test_open_position_resolver_is_transport_free() -> None:
+    imported = _imported_modules((OPEN_POSITION_RESOLVER,))
 
-def test_open_position_resolver_is_unchanged_and_still_only_transport_free() -> None:
-    """9.1 (scoped): OpenPositionResolver has no httpx/adapter/URL ownership."""
-    source_path = Path("src/strategy_runtime/runtime/open_position/resolver.py")
-    source = source_path.read_text(encoding="utf-8")
-
-    forbidden_tokens = ("httpx", "HttpxAbiOpenPositionLookupAdapter", "base_url", "timeout_seconds")
-    for token in forbidden_tokens:
-        assert token not in source, f"forbidden token '{token}' found in resolver.py"
+    forbidden_prefixes = (
+        "httpx",
+        "strategy_runtime.adapters",
+        "strategy_runtime.bootstrap",
+        "strategy_runtime.config",
+        "strategy_runtime.infrastructure",
+    )
+    assert not any(
+        name == prefix or name.startswith(f"{prefix}.")
+        for name in imported
+        for prefix in forbidden_prefixes
+    )

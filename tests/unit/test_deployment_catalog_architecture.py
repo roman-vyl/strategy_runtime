@@ -2,16 +2,16 @@ import ast
 from pathlib import Path
 
 FORBIDDEN_PREFIXES = (
-    "strategy_runtime.utility.committed_bar.orchestrator",
-    "strategy_runtime.utility.activation",
-    "strategy_runtime.adapters.activation",
-    "strategy_runtime.adapters.strategy_engine",
-    "strategy_runtime.ports.strategy_engine",
-    "strategy_runtime.application.process_committed_bar",
     "fastapi",
-    "strategy_runtime.domain.strategy_registry",
-    "strategy_runtime.ports.strategy_registry",
-    "strategy_runtime.adapters.strategy_registry",
+    "httpx",
+    "strategy_runtime.adapters",
+    "strategy_runtime.bootstrap",
+    "strategy_runtime.config",
+    "strategy_runtime.infrastructure",
+    "strategy_runtime.runtime",
+    "strategy_runtime.utility.committed_bar",
+    "strategy_runtime.utility.deployment_selection",
+    "strategy_runtime.utility.processing_journal",
 )
 
 
