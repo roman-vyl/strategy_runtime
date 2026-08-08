@@ -174,7 +174,7 @@ first-fill freeze
   -> confirmed Runtime state
 ```
 
-Engine получает immutable entry context: применённый `DesiredEntry`, timestamp первого fill и aligned `entry_bar_open_time_ms`. Его ответ преобразуется в `PositionManagementRecipe` с desired protection, close signal и diagnostics.
+Engine получает immutable entry context: применённый `DesiredEntry` и время entry bar, нормализованное по сетке базового timeframe. Вместе с текущим target bar этого достаточно для open-trade calculation; детали формирования frozen context остаются внутренней ответственностью Runtime.
 
 `PositionManagementOrchestrator` выбирает `NoOp`, `ApplyProtection` или `ClosePosition`. Protection становится частью state только после совпадающей ABI confirmation; подтверждённый close очищает текущий cycle. Transport или protocol failure не превращается в успешный state transition.
 
