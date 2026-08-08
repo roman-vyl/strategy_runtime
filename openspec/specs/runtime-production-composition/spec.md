@@ -5,40 +5,23 @@ Define the production composition of the complete strategy runtime application g
 ## Requirements
 ### Requirement: Runtime composes exactly one complete production graph
 `strategy_runtime.bootstrap.application.build_application` SHALL construct,
-for every `ready=True` result, the complete production graph from the
-existing utility contour through the existing semantic core and existing
-outbound adapters to the existing `AbiEntryPackagePort` and
-`PositionManagementExecutionPort` HTTP clients, using only components
-already implemented and tested in isolation by prior changes, and SHALL
-additionally construct exactly one `AbiExecutionEventOrchestrator` and
-connect it to `create_http_app(...)` as the first-fill application
-callable. `StrategyRuntimeOrchestrator`'s constructor is the one component
-this change itself extends, to accept `position_management_orchestrator`;
-every other component in the graph is consumed exactly as already
-implemented, with no redesign. There is no caller-supplied override that
-replaces any part of this graph, and no construction path returns
-`ready=True` with only part of it.
+for every `ready=True` result, one complete production graph from the utility
+contour through the semantic Runtime core to all five outbound HTTP adapters.
+The graph SHALL include exactly one `AbiExecutionEventOrchestrator`, connected
+to `create_http_app(...)` as the first-fill application callable, and one
+`StrategyRuntimeOrchestrator` connected to both nested semantic branches.
+There is no caller-supplied override that replaces any part of this graph, and
+no construction path returns `ready=True` with only part of it.
 
-#### Scenario: Compose the existing components, not new ones
+#### Scenario: Compose the complete production graph
 - **WHEN** `build_application` constructs a ready application
 - **THEN** it constructs `OpenPositionResolver`, `StrategyUseCaseRouter`,
   `EntryReconciliationOrchestrator`, `PositionManagementOrchestrator`, and
-  `AbiExecutionEventOrchestrator` from their existing, unmodified
-  constructors, and constructs `StrategyRuntimeOrchestrator` from its
-  constructor as extended by this change to additionally accept
-  `position_management_orchestrator`
+  `AbiExecutionEventOrchestrator`, and connects both semantic branches through
+  `StrategyRuntimeOrchestrator`
 - **AND** it constructs `HttpxStrategyEngineLiveEntryAdapter`,
   `HttpxStrategyEngineOpenTradeAdapter`, `HttpxAbiOpenPositionLookupAdapter`,
   `HttpxAbiEntryPackageAdapter`, and `HttpxAbiPositionManagementAdapter`
-  from their existing, unmodified constructors
-- **AND** `PositionManagementOrchestrator` and
-  `HttpxAbiPositionManagementAdapter` are consumed exactly as already
-  ratified, with no redesign of either
-- **AND** it introduces no new top-level orchestrator, reconciliation
-  component, or outbound adapter class beyond the already-shipped
-  `AbiExecutionEventOrchestrator` and `PositionManagementOrchestrator`
-- **AND** it introduces no new outbound HTTP client beyond the
-  already-shipped `HttpxAbiPositionManagementAdapter`
 
 #### Scenario: Connect the semantic orchestrator directly as the strategy-cycle dispatcher
 - **WHEN** `build_application` constructs a ready application
@@ -67,7 +50,7 @@ replaces any part of this graph, and no construction path returns
   through the not-ready application's HTTP surface
 
 #### Scenario: No caller-supplied composition override exists
-- **WHEN** `build_application`'s public signature is inspected
+- **WHEN** `build_application` constructs an application
 - **THEN** it accepts no strategy-cycle dispatcher override, no first-fill
   callable override, and no equivalent parameter that could replace the
   production dispatcher, replace the production first-fill callable, skip
@@ -103,16 +86,14 @@ pass the same two instances into both the one constructed
 - **AND** that same exact object is the one `AbiExecutionEventOrchestrator`
   uses to serialize every strategy instance's first-fill critical section
 
-#### Scenario: Shared between both existing top-level writers, with no alternative build mode
+#### Scenario: Shared between both top-level writers, with no alternative build mode
 - **WHEN** the composition root finishes construction
 - **THEN** the constructed repository and keyed-mutex-registry instances
-  are the same two objects held by both existing top-level writers —
+  are the same two objects held by both top-level writers —
   `StrategyRuntimeOrchestrator` (the closed-bar writer) and
   `AbiExecutionEventOrchestrator` (the first-fill writer)
-- **AND** both instances remain reachable from the composition-owned
-  `app.state` that `build_application` returns, for test and operational
-  access (not only closed over privately and unreachably inside either
-  orchestrator)
+- **AND** the composition root retains those shared instances for the
+  application lifetime
 - **AND** no alternative build mode, parameter, or flag exists to obtain
   either instance, or to construct either writer with a different pair of
   instances, outside this one construction path
@@ -280,9 +261,9 @@ authorize any state mutation.
 ### Requirement: Non-durable Live V1 limitation is accepted, not open
 Strategy Runtime SHALL use exactly one
 `InMemoryStrategyInstanceRuntimeStateRepository` and exactly one bounded,
-in-memory, non-persisted committed-bar intake queue for `I4d`'s
-production graph, and SHALL treat the resulting non-durable behavior of
-both as an accepted Live V1 limitation.
+in-memory, non-persisted committed-bar intake queue in the production graph,
+and SHALL treat the resulting non-durable behavior of both as an accepted
+Live V1 limitation.
 
 #### Scenario: In-memory repository is the selected implementation
 - **WHEN** the production graph is constructed
@@ -296,7 +277,7 @@ both as an accepted Live V1 limitation.
   had already dequeued it from the intake queue
 - **THEN** that event is lost with no persisted pending action, replay,
   or recovery mechanism, and this is documented as an accepted Live V1
-  limitation rather than an unresolved task of this change
+  limitation
 
 ### Requirement: Runtime composes exactly one committed-bar intake boundary and its single worker
 `build_application` SHALL construct, for every `ready=True` result,
@@ -316,8 +297,7 @@ of the production graph — introducing no second orchestrator instance.
 
 ### Requirement: Committed-bar intake worker is started once and stopped exactly once by one lifecycle owner, in a fixed shutdown sequence
 The composition root SHALL be the single owner of the worker's start/stop
-lifecycle, matching the existing ownership pattern for the five outbound
-HTTP clients, and SHALL execute shutdown as three ordered steps: stop
+lifecycle and SHALL execute shutdown as three ordered steps: stop
 accepting new events, then wait for the worker to stop, then close the
 outbound HTTP clients.
 
@@ -332,11 +312,9 @@ outbound HTTP clients.
 #### Scenario: Stop-accepting first, then an event-loop-safe wait, then client close
 - **WHEN** the production application shuts down
 - **THEN** the lifecycle owner first calls `stop_accepting()`
-  synchronously on the event-loop thread (a single lock acquisition that
-  never blocks), then waits for the worker to stop via `await asyncio
-  .to_thread(intake_worker.stop_once)` — so other coroutines on the same
-  event loop keep running during that wait — and only closes the five
-  outbound HTTP clients after that offloaded call returns
+  before waiting for the worker to stop without blocking the application
+  event loop, and only closes the five outbound HTTP clients after that wait
+  returns
 - **AND** this ordering holds regardless of how long the wait takes: its
   network operations are bounded by existing outbound timeouts, but its
-  local operations are not bounded by any timeout this change introduces
+  local operations are not subject to an additional shutdown timeout

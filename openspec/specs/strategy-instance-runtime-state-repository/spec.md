@@ -197,4 +197,4 @@ within one process.
 - **WHEN** callers perform `get` followed later by `save`
 - **THEN** the repository does not claim that the sequence is atomic
 - **AND** does not detect stale snapshots or provide compare-and-swap
-- **AND** future writers remain responsible for using keyed coordination
+- **AND** Runtime writers remain responsible for using keyed coordination

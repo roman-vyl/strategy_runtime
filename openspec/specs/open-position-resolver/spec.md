@@ -42,18 +42,16 @@ result instead.
   `current_trade_cycle.trade_cycle_id` into the lookup request
 - **AND** invokes the ABI lookup port exactly once with that pair
 
-#### Scenario: This is a Live V1 in-memory lifecycle assumption, not a restart-safety proof
+#### Scenario: The Live V1 lookup rule does not establish restart safety
 - **WHEN** `current_trade_cycle` is absent because Runtime has genuinely
   never applied an entry package for this strategy instance
 - **THEN** skipping the ABI call and resolving `position_open=False` is
   correct, because no ABI-side record could exist under this contract
   without a prior Runtime-issued entry-package PUT
-- **AND** this scenario is indistinguishable, by this capability alone, from
-  Runtime having restarted and lost a previously acknowledged
-  `current_trade_cycle` — restart-safe recovery of a lost trade cycle is
-  explicitly out of scope for this capability and remains a future durable
-  -state change (see `runtime-durable-state-repository-backlog.md`); this
-  capability makes no claim of safe continuation after a Runtime restart
+- **AND** this capability cannot distinguish that state from a process restart
+  that lost a previously acknowledged `current_trade_cycle`
+- **AND** under the accepted non-durable Live V1 boundary, this capability
+  makes no claim of safe continuation after such a restart
 
 ### Requirement: Resolver treats an ABI-reported trade-cycle-binding divergence as a fail-closed failure
 When the resolver calls ABI with an existing `trade_cycle_id` and ABI

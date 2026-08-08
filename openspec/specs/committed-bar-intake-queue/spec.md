@@ -1,7 +1,10 @@
 # committed-bar-intake-queue Specification
 
 ## Purpose
-TBD - created by archiving change runtime-bounded-committed-bar-intake-v1. Update Purpose after archive.
+
+Define the bounded process-local FIFO boundary and single worker that separate
+closed-bar HTTP acceptance from committed-bar processing, including overflow,
+failure isolation, and shutdown guarantees.
 ## Requirements
 ### Requirement: Runtime bounds accepted committed-bar events in one FIFO queue
 Strategy Runtime SHALL hold accepted `CommittedBarEvent`s in exactly one
@@ -155,4 +158,3 @@ durability.
 - **THEN** this capability does not coordinate or share queue state
   across those processes — each process's queue and worker are
   independent
-

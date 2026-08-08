@@ -1,7 +1,10 @@
 # entry-reconciliation-execution-bridge Specification
 
 ## Purpose
-TBD - created by archiving change runtime-production-outbound-adapters-v1. Update Purpose after archive.
+
+Define the transport-independent bridge that translates entry-reconciliation
+commands and Runtime state into ABI entry-package requests, and maps confirmed
+ABI outcomes or typed failures back to the reconciliation workflow.
 ## Requirements
 ### Requirement: Runtime exposes one entry-reconciliation execution bridge
 Strategy Runtime SHALL provide a production implementation of the existing
@@ -131,32 +134,4 @@ Reconciliation decisions remain the responsibility of the existing
 - **AND** applies no confirmation to `CurrentTradeCycle` or
   `StrategyInstanceRuntimeState`
 - **AND** does not reproduce `NoOp`/`Apply`/`Replace`/`Cancel` decisions
-
-### Requirement: Bridge behavior is verified by typed translation tests
-The bridge layer SHALL include unit/translation tests against a fake
-`AbiEntryPackagePort` covering command-to-request mapping, both success
-confirmations, every failure mapping, and the no-retry/no-state-mutation
-invariants. It SHALL NOT be covered by fake-HTTP tests because it owns no HTTP
-behavior.
-
-#### Scenario: Verify command-to-request translation
-- **WHEN** translation tests exercise present and absent commands
-- **THEN** they assert the exact `EntryPackageRequest` fields, the sourced
-  `risk_multiplier`, and the bidirectional `DesiredEntry` mapping
-
-#### Scenario: Verify confirmation and failure mapping
-- **WHEN** the fake `AbiEntryPackagePort` returns each result or raises each
-  typed exception
-- **THEN** tests assert the matching `SuccessfulEntryConfirmation` variant or
-  `EntryReconciliationExecutionError`
-- **AND** for the `EntryPackagePublicError` result value, the error is
-  constructed directly with no `__cause__` asserted
-- **AND** for each raised exception (`AbiEntryPackageTimeout`,
-  `AbiEntryPackageNetworkFailure`, `AbiEntryPackageProtocolError`), the
-  original exception is preserved as `__cause__`
-
-#### Scenario: Verify no HTTP ownership
-- **WHEN** the bridge is tested
-- **THEN** no fake HTTP server is used
-- **AND** tests inject only a fake `AbiEntryPackagePort`
 

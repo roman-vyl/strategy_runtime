@@ -2,8 +2,8 @@
 
 ## Purpose
 
-Define process-local per-strategy-instance mutual exclusion for later Runtime
-state writers under the single-process Live V1 deployment boundary.
+Define process-local per-strategy-instance mutual exclusion for Runtime state
+writers under the single-process Live V1 deployment boundary.
 
 ## Requirements
 
@@ -65,10 +65,10 @@ state, reconciliation, transport, or orchestration work.
 #### Scenario: Keep application behavior outside the registry
 - **WHEN** a keyed critical section is created, entered, or exited
 - **THEN** the registry does not call the repository, Strategy Engine, ABI, or an HTTP handler
-- **AND** it does not create a trade cycle, apply a package, or decide when a future writer acquires the lock
+- **AND** it does not create a trade cycle, apply a package, or decide when a writer acquires the lock
 
-#### Scenario: Share one registry across later writers
-- **WHEN** later Runtime state writers receive the same registry instance and request the same strategy-instance key
+#### Scenario: Share one registry across Runtime state writers
+- **WHEN** Runtime state writers receive the same registry instance and request the same strategy-instance key
 - **THEN** both critical sections are backed by the same keyed lock
 
 ### Requirement: Live V1 coordination makes no cross-process guarantee
@@ -83,4 +83,4 @@ durability.
 #### Scenario: Defer stronger coordination
 - **WHEN** Live V1 runs with more than one process or replica
 - **THEN** this capability alone does not serialize those processes
-- **AND** distributed locking, repository CAS, and durable pending actions remain outside I2
+- **AND** Live V1 provides no distributed locking, repository CAS, or durable pending actions

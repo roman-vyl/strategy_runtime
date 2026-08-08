@@ -89,8 +89,8 @@ makes no promise — support or rejection — for a dot-only segment value.
   `trade_cycle_id` value of exactly `.` or `..`
 - **THEN** this requirement makes no guarantee that the segment survives
   standard client-side URL normalization to reach Runtime's router intact
-- **AND** this change does not implement a custom routing layer to
-  guarantee delivery of a dot-only segment
+- **AND** Runtime provides no custom routing guarantee for delivery of a
+  dot-only segment
 
 ### Requirement: The request body carries exactly one field, validated strictly
 Strategy Runtime SHALL accept a first-fill request body containing exactly
@@ -190,11 +190,10 @@ domain-shaped work itself.
 - **AND** the adapter does not construct any Strategy Engine-facing DTO
 
 ### Requirement: The endpoint acknowledges only after the application callable fully completes
-The first-fill route SHALL be a synchronous handler — an ordinary blocking
-`def` route or an equivalent guaranteed off-event-loop execution — and
-SHALL return its HTTP response only after the injected application
-callable has returned or raised, never before, and never through a
-background task, queue, or fire-and-forget mechanism.
+The first-fill route SHALL execute its blocking application callable off the
+application event loop and SHALL return its HTTP response only after that
+callable has returned or raised, never before, and never through a background
+task, queue, or fire-and-forget mechanism.
 
 #### Scenario: Response follows completion, not acceptance
 - **WHEN** Runtime processes a valid first-fill request
@@ -206,13 +205,11 @@ background task, queue, or fire-and-forget mechanism.
   other deferred-execution mechanism for this endpoint
 
 #### Scenario: The route does not block the event loop
-- **WHEN** the first-fill route is defined
-- **THEN** it is declared as a synchronous `def` handler that FastAPI runs
-  off the event loop, or an equivalent mechanism guaranteeing the
-  blocking mutex-and-repository sequence never runs directly inside an
-  `async def` coroutine
-- **AND** the existing closed-bar webhook's own `async def` handler and its
-  `BackgroundTasks` semantics are unchanged by this requirement
+- **WHEN** the first-fill route invokes the blocking application callable
+- **THEN** the mutex-and-repository sequence executes off the application
+  event loop
+- **AND** the closed-bar webhook's asynchronous acceptance and handoff
+  semantics are unchanged by this requirement
 
 ### Requirement: First application and identical retry return the identical success response
 Strategy Runtime SHALL return the identical `200
@@ -297,8 +294,8 @@ The first-fill route SHALL contain only transport validation, event
 construction, one delegated application call, and typed-exception-to-status
 mapping; it SHALL NOT contain candle-boundary alignment, entry-freezing
 logic, or any other domain computation, and it SHALL NOT replace, extend,
-or duplicate the existing `http-closed-bar` capability's webhook, its
-`BackgroundTasks` acknowledgement, or its health endpoints.
+or duplicate the `http-closed-bar` capability's webhook, asynchronous
+acceptance contract, or health endpoints.
 
 #### Scenario: No domain computation in the route
 - **WHEN** the first-fill route executes
@@ -308,8 +305,8 @@ or duplicate the existing `http-closed-bar` capability's webhook, its
   callable
 
 #### Scenario: The closed-bar endpoint's contract is unaffected
-- **WHEN** this capability is added
+- **WHEN** Runtime serves both the first-fill and closed-bar endpoints
 - **THEN** `POST /v1/webhooks/closed-bar`'s request/response shape,
-  `BackgroundTasks` acknowledgement, and error contract remain exactly as
-  already specified by `http-closed-bar`
+  asynchronous acceptance semantics, and error contract remain exactly as
+  specified by `http-closed-bar`
 - **AND** `GET /health/live` and `GET /health/ready` remain unchanged

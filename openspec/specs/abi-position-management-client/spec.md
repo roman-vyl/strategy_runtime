@@ -1,7 +1,10 @@
 # abi-position-management-client Specification
 
 ## Purpose
-TBD - created by archiving change runtime-abi-position-management-http-client-v1. Update Purpose after archive.
+
+Define Runtime's outbound ABI position-management HTTP contract for applying
+protection and closing a position, including verified confirmations, strict
+error decoding, and bounded single-attempt transport behavior.
 ## Requirements
 ### Requirement: Runtime implements the execution port over HTTP against the exact ABI resources
 Strategy Runtime SHALL provide an HTTP implementation of
@@ -134,20 +137,4 @@ retry, and never follow redirects.
 - **WHEN** ABI responds to either operation with a redirect status
 - **THEN** the adapter does not issue a request to the redirect target
 - **AND** raises a protocol failure
-
-### Requirement: Cross-repository OpenAPI conformance is verified
-The implementation SHALL be verified against the authoritative
-`abi-position-management-api-v1` OpenAPI document from the sibling
-`abi_executor_bot` checkout: both routes, both HTTP methods, the closed
-request/response schemas, and every documented status/error-code
-combination for each operation.
-
-#### Scenario: Conformance verification runs outside the production path
-- **WHEN** conformance verification runs against the authoritative
-  `abi-position-management-api-v1` document
-- **THEN** it confirms the exact methods, routes, closed request/response
-  schemas, and status/error-code combinations this capability implements,
-  and fails if the authoritative document is missing or incompatible
-- **AND** the production adapter itself never loads the sibling repository
-  or its OpenAPI document at runtime
 

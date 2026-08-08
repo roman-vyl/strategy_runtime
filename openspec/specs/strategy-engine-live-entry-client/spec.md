@@ -1,7 +1,10 @@
 # strategy-engine-live-entry-client Specification
 
 ## Purpose
-TBD - created by archiving change runtime-production-outbound-adapters-v1. Update Purpose after archive.
+
+Define Runtime's outbound live-entry Strategy Engine HTTP contract, including
+strict request and response shapes, exact-decimal handling, typed failures, and
+single-attempt transport behavior.
 ## Requirements
 ### Requirement: Runtime exposes one scalar live-entry Engine outbound port implementation
 Strategy Runtime SHALL provide a production HTTP adapter that implements the
@@ -199,24 +202,4 @@ disabled.
 - **WHEN** Engine returns a redirect response
 - **THEN** the adapter does not issue a request to the redirect target
 - **AND** raises `StrategyEngineProjectionProtocolError`
-
-### Requirement: Live-entry contract tests verify the implemented Engine contract
-The live-entry client layer SHALL include fake-HTTP contract tests covering
-request shape, success decoding, every typed error branch, timeout, malformed
-response, redirect rejection, and single-attempt cardinality.
-
-#### Scenario: Verify the raw outbound request
-- **WHEN** fake-HTTP contract tests exercise present and absent desired-entry
-  responses
-- **THEN** they assert the exact method, route, content type, closed JSON body,
-  JSON-integer timestamp, absence of Runtime identity fields, and decimal-string
-  preservation
-
-#### Scenario: Verify all response classes
-- **WHEN** the fake Engine emits a present `DesiredEntry`, an absent desire, a
-  `market_stream_not_found`, another documented public error, mismatched
-  envelopes, malformed payloads, timeout, network failure, redirects, and
-  undocumented statuses
-- **THEN** tests assert the exact typed result or failure
-- **AND** assert that no unconfirmed outcome becomes success
 

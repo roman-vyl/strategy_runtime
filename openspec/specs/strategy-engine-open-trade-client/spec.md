@@ -1,7 +1,10 @@
 # strategy-engine-open-trade-client Specification
 
 ## Purpose
-TBD - created by archiving change runtime-production-outbound-adapters-v1. Update Purpose after archive.
+
+Define Runtime's outbound open-trade Strategy Engine HTTP contract, including
+strict request and response shapes, exact-decimal handling, typed failures, and
+single-attempt transport behavior.
 ## Requirements
 ### Requirement: Runtime exposes one scalar open-trade Engine outbound port implementation
 Strategy Runtime SHALL provide a production HTTP adapter that implements the
@@ -217,24 +220,4 @@ disabled.
 - **WHEN** Engine returns a redirect response
 - **THEN** the adapter does not issue a request to the redirect target
 - **AND** raises `StrategyEngineProjectionProtocolError`
-
-### Requirement: Open-trade contract tests verify the implemented Engine contract
-The open-trade client layer SHALL include fake-HTTP contract tests covering
-request shape, `executed_trade_receipt` regrouping, success decoding, every
-typed error branch, timeout, malformed response, redirect rejection, and
-single-attempt cardinality.
-
-#### Scenario: Verify the raw outbound request
-- **WHEN** fake-HTTP contract tests exercise open-trade requests
-- **THEN** they assert the exact method, route, content type, closed JSON body,
-  the seven-field `executed_trade_receipt`, absence of `executed_entry_price`
-  and Runtime identity fields, and decimal-string preservation
-
-#### Scenario: Verify all response classes
-- **WHEN** the fake Engine emits a complete projection, a `market_stream_not_found`,
-  another documented public error, mismatched envelopes, malformed payloads,
-  non-object diagnostics, timeout, network failure, redirects, and undocumented
-  statuses
-- **THEN** tests assert the exact typed result or failure
-- **AND** assert that no unconfirmed outcome becomes success
 

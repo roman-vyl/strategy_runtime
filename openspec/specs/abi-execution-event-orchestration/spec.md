@@ -57,37 +57,33 @@ field.
 
 ### Requirement: AbiFirstFillExecutionEvent validates strictly at construction, before any mutex or repository interaction
 `AbiFirstFillExecutionEvent` construction SHALL validate every field before
-returning a usable instance, using exact-type checks consistent with the
-existing codebase idiom (`type(value) is ...`, not `isinstance`), and an
-invalid event SHALL fail at construction — before `process(...)` ever
-acquires the keyed mutex or calls the repository.
+returning a usable event, and an invalid event SHALL fail at construction —
+before `process(...)` ever acquires the keyed mutex or calls the repository.
 
-- `strategy_instance_id`: SHALL require `type(value) is str` and non-empty.
-- `trade_cycle_id`: SHALL require `type(value) is str` and non-empty.
-- `first_fill_at_ms`: SHALL require `type(value) is int` and strictly
-  positive (`> 0`); a `bool` value SHALL be rejected even though `bool` is a
-  subtype of `int` in Python, and a `float` value SHALL be rejected.
+- `strategy_instance_id`: SHALL be a non-empty string.
+- `trade_cycle_id`: SHALL be a non-empty string.
+- `first_fill_at_ms`: SHALL be a strictly positive integer; boolean and
+  floating-point values SHALL be rejected.
 
 #### Scenario: Reject a non-string or empty strategy_instance_id
-- **WHEN** `strategy_instance_id` is not exactly `str`, or is an empty
-  string
+- **WHEN** `strategy_instance_id` is not a string, or is an empty string
 - **THEN** constructing `AbiFirstFillExecutionEvent` raises before any
   field is accepted
 
 #### Scenario: Reject a non-string or empty trade_cycle_id
-- **WHEN** `trade_cycle_id` is not exactly `str`, or is an empty string
+- **WHEN** `trade_cycle_id` is not a string, or is an empty string
 - **THEN** constructing `AbiFirstFillExecutionEvent` raises before any
   field is accepted
 
 #### Scenario: Reject a non-positive or non-integer first_fill_at_ms
-- **WHEN** `first_fill_at_ms` is not exactly `int`, or is zero or negative
+- **WHEN** `first_fill_at_ms` is not an integer, or is zero or negative
 - **THEN** constructing `AbiFirstFillExecutionEvent` raises before any
   field is accepted
 
 #### Scenario: Reject a boolean first_fill_at_ms
 - **WHEN** `first_fill_at_ms` is `True` or `False`
-- **THEN** construction raises, even though `bool` would satisfy a looser
-  `isinstance(value, int)` check
+- **THEN** construction raises because boolean values are not valid integer
+  timestamps under this contract
 
 #### Scenario: Reject a float first_fill_at_ms
 - **WHEN** `first_fill_at_ms` is a `float`, including a whole-number value
@@ -168,25 +164,21 @@ computation itself.
 - **AND** it does not read or branch on `registered_spec_snapshot.
   base_timeframe`
 
-### Requirement: The orchestrator saves only when apply_first_fill returns a distinct state object
-`AbiExecutionEventOrchestrator` SHALL compare the result of
-`apply_first_fill` to the loaded state using object identity
-(`resulting_state is state`), matching `apply_first_fill`'s own documented
-no-op contract, and SHALL call `save(...)` exactly once only when the
-result is a different object.
+### Requirement: The orchestrator saves only when apply_first_fill produces replacement state
+`AbiExecutionEventOrchestrator` SHALL treat an unchanged aggregate returned by
+`apply_first_fill` as a no-op and SHALL call `save(...)` exactly once only when
+the transition produces a replacement aggregate.
 
 #### Scenario: Identical retry performs no save
-- **WHEN** `apply_first_fill` returns the identical `state` object reference
-  it was given
+- **WHEN** `apply_first_fill` returns the loaded aggregate unchanged
 - **THEN** `process(...)` does not call `save(...)`
-- **AND** returns that same state object
+- **AND** returns the unchanged aggregate
 
 #### Scenario: A confirmed freeze saves exactly once
-- **WHEN** `apply_first_fill` returns a new, distinct
-  `StrategyInstanceRuntimeState` object
-- **THEN** `process(...)` calls `save(...)` exactly once with that object
-- **AND** returns the exact object returned by `save(...)`, not the
-  pre-save input
+- **WHEN** `apply_first_fill` returns a replacement
+  `StrategyInstanceRuntimeState`
+- **THEN** `process(...)` calls `save(...)` exactly once with that aggregate
+- **AND** returns the aggregate returned by `save(...)`, not the pre-save input
 
 ### Requirement: The orchestrator holds the keyed mutex across the complete load-transition-save sequence and always releases it
 `AbiExecutionEventOrchestrator` SHALL hold the keyed critical section from
@@ -256,4 +248,3 @@ suppression, retry, or fallback.
 - **THEN** that exception propagates after exactly one save attempt
 - **AND** `process(...)` performs no retry, compensating write, or
   successful return
-

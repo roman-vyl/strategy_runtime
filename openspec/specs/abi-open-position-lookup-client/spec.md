@@ -1,7 +1,10 @@
 # abi-open-position-lookup-client Specification
 
 ## Purpose
-TBD - created by archiving change runtime-production-outbound-adapters-v1. Update Purpose after archive.
+
+Define Runtime's outbound ABI open-position lookup contract, including opaque
+identifier encoding, strict position-fact decoding, exact-decimal handling,
+typed failures, and single-attempt transport behavior.
 ## Requirements
 ### Requirement: Runtime exposes one scalar ABI open-position lookup port implementation
 Strategy Runtime SHALL provide a production HTTP adapter that implements the
@@ -180,62 +183,4 @@ and network-failure subtypes), not as `OpenPositionLookupPublicError`.
   `{error: {code, message}}` envelope
 - **THEN** the adapter raises `OpenPositionLookupProtocolError`
 - **AND** does not raise `OpenPositionLookupUnavailable`
-
-### Requirement: Open-position contract tests verify the implemented ABI contract
-The open-position client layer SHALL include fake-HTTP contract tests
-covering both path-segment encodings, both success variants, every typed
-error branch and its exact per-code envelope shape, timeout, malformed
-response, redirect rejection, and single-attempt cardinality.
-
-#### Scenario: Verify the raw outbound request
-- **WHEN** fake-HTTP contract tests exercise open-position lookups
-- **THEN** they assert the exact GET method, the two-segment encoded route,
-  absence of a request body (and therefore no request `Content-Type`
-  header, which does not apply to a bodyless GET), opaque path-segment
-  encoding for both `strategy_instance_id` and `trade_cycle_id`, and
-  dot-only segment handling for each independently
-- **AND** they assert the response `Content-Type: application/json` is
-  checked on the response side
-
-#### Scenario: Verify all response classes
-- **WHEN** the fake ABI emits a closed position, an open position, an
-  unexpected `404`, each of the three documented `422` public errors with
-  its exact envelope shape, a documented `500` `internal_error`, mismatched
-  envelopes, malformed payloads, timeout, network failure, redirects, and
-  undocumented statuses
-- **THEN** tests assert the exact typed result or failure
-- **AND** assert that no unconfirmed outcome becomes `position_open=false`
-
-#### Scenario: Reject the superseded pre-alignment success shape
-- **WHEN** the fake ABI emits the pre-alignment success body
-  (`entry_bar_open_time_ms`/`executed_entry_price` field names)
-- **THEN** the adapter raises `OpenPositionLookupProtocolError`
-- **AND** does not return a success response
-
-### Requirement: An authoritative cross-repository contract test verifies the client against the published ABI OpenAPI document
-The open-position client layer SHALL include one contract test that loads the
-authoritative ABI OpenAPI document from the sibling repository checkout
-(`../abi_executor_bot/docs/openapi/abi-open-position-lookup-api-v1.json`,
-relative to the Runtime repository root) and verifies the implemented client
-against its exact schema — not merely against local fixtures.
-
-#### Scenario: Verify the exact contract from the authoritative document
-- **WHEN** the cross-repository contract test runs
-- **THEN** it asserts the exact path template, HTTP method, and both
-  required path parameters against the loaded OpenAPI document
-- **AND** asserts the success `oneOf`'s two variants, their `position_open`
-  `const` values, required/nullable field rules, and `additionalProperties:
-  false`
-- **AND** asserts every documented error status code and its exact,
-  code-specific schema, including which codes require a `details` field and
-  which forbid one
-- **AND** fails if the client accepts a response shape the document does not
-  authorize, or rejects one the document does authorize
-
-#### Scenario: Missing sibling checkout fails with an actionable message
-- **WHEN** `../abi_executor_bot` is not present relative to the Runtime
-  repository root
-- **THEN** the test fails with a message explaining the required canonical
-  checkout layout (`BBB_project/{strategy_runtime,abi_executor_bot}`)
-- **AND** does not silently skip contract verification
 

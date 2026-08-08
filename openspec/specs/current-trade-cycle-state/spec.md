@@ -3,8 +3,8 @@
 ## Purpose
 
 Define the minimal Runtime-owned current-cycle aggregate, its acknowledged
-entry-package value, and Runtime-owned trade-cycle identity boundary without
-pre-empting the deferred ABI fill contract.
+entry-package value, frozen executed-entry context, confirmed management
+protection, and Runtime-owned trade-cycle identity boundary.
 ## Requirements
 ### Requirement: Strategy-instance state owns at most one minimal current cycle
 `StrategyInstanceRuntimeState` SHALL contain
@@ -23,7 +23,7 @@ no acknowledged current trade cycle.
   `AppliedEntryPackage` is nested under that strategy instance
 - **AND** the aggregate cannot contain a second concurrent current cycle
 
-### Requirement: Current trade cycle has only the minimal I2 fields
+### Requirement: Current trade cycle has only the minimal Runtime-owned fields
 `CurrentTradeCycle` SHALL contain exactly one non-empty `trade_cycle_id`, one
 required `applied_entry_package: AppliedEntryPackage`, one nullable
 `frozen_entry_context: FrozenExecutedEntryContext | null`, and one nullable
@@ -113,7 +113,7 @@ Every `CurrentTradeCycle` SHALL preserve one supplied non-empty opaque
 
 #### Scenario: Keep cycle identity out of Strategy Engine
 - **WHEN** Runtime owns a trade-cycle identity
-- **THEN** I2 does not add it to any Strategy Engine request or response
+- **THEN** Runtime does not add it to any Strategy Engine request or response
 
 ### Requirement: Production-generated trade-cycle identities are unique
 Runtime SHALL expose an injected `TradeCycleIdFactory` boundary and a
@@ -124,11 +124,6 @@ new trade cycle.
 - **WHEN** the production factory is invoked for two different new cycles
 - **THEN** it returns two different non-empty identities
 - **AND** neither value is user-authored, ABI-authored, or exchange-authored
-
-#### Scenario: Preserve test injectability
-- **WHEN** deterministic identity generation is needed in a test
-- **THEN** application code can receive an injected test factory
-- **AND** the production uniqueness requirement remains unchanged
 
 #### Scenario: Generate no cycle identity during instance registration
 - **WHEN** repository `get_or_create` creates initial strategy-instance state
@@ -261,8 +256,8 @@ Runtime-issued position-management execution only after a confirmation from
 `PositionManagementExecutionPort` matches the originating decision's
 ownership identities, action type, and (for protection) confirmed value.
 This requirement governs only Runtime-issued `ApplyProtection` /
-`ClosePosition` execution; it neither defines nor precludes a future
-external-close lifecycle (e.g. Runtime reacting to ABI reporting
+`ClosePosition` execution; it does not define an externally initiated close
+lifecycle (e.g. Runtime reacting to ABI reporting
 `position_open=false` after an exchange-side close).
 
 #### Scenario: Update confirmed protection after a matching apply confirmation
@@ -284,4 +279,3 @@ external-close lifecycle (e.g. Runtime reacting to ABI reporting
   `PositionManagementExecutionInvariantError`
 - **AND** the input `StrategyInstanceRuntimeState` remains unmodified and
   domain-value-equivalent to its pre-call snapshot
-

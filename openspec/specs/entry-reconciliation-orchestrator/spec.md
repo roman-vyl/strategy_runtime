@@ -59,8 +59,8 @@ no logical state transition.
 - **WHEN** pure reconciliation returns `NoOp`
 - **THEN** the result is domain-value-equivalent to the extracted `source_state`
 - **AND** no logical state transition is available to the caller
-- **AND** Runtime imposes no requirement that the returned aggregate or nested
-  values have the same Python object identity as the extracted `source_state`
+- **AND** Runtime requires value preservation, not preservation of a particular
+  in-memory aggregate or nested-value instance
 
 ### Requirement: Apply reserves exactly one new trade-cycle identity
 The orchestrator SHALL reserve an apply-only `trade_cycle_id` through its
@@ -251,38 +251,35 @@ validation, or successful-confirmation application.
   suppression marker, partial aggregate, or alternative decision
 
 ### Requirement: Pure reconciliation remains independent of application orchestration
-The dependency direction SHALL run from the new application package to the
-existing pure `runtime/entry_reconciliation` package and never in reverse.
+The application orchestrator SHALL depend on the pure
+`runtime/entry_reconciliation` capability, and the pure reconciliation
+capability SHALL remain independent of application orchestration.
 
 #### Scenario: Application composes approved pure dependencies
 - **WHEN** the orchestrator decides, builds, and applies a confirmed transition
-- **THEN** it uses the existing reconciliation decision, command builder, and
+- **THEN** it uses the reconciliation decision, command builder, and
   successful-confirmation applier
 - **AND** does not duplicate their comparison, command-field, or transition
   rules
 
 #### Scenario: Pure modules do not know the application layer
-- **WHEN** dependencies of `runtime/entry_reconciliation` are inspected
-- **THEN** they contain no import of
-  `entry_reconciliation_orchestrator`, its execution port, or another
-  application orchestrator
+- **WHEN** pure reconciliation decisions, commands, or state transitions run
+- **THEN** they require no `EntryReconciliationOrchestrator`, execution port,
+  or other application orchestrator
 
-#### Scenario: Constrain direct dependencies rather than transitive model graph
-- **WHEN** direct imports and behavior of the new application package are
-  inspected
-- **THEN** it has no direct import of or behavioral dependency on
-  open-position or open-trade application and adapter modules
-- **AND** importing `LiveEntryProjectedStrategyInstance` from
-  `runtime.routing.models` remains allowed
-- **AND** existing transitive model imports of `runtime.routing.models` are not
-  treated as direct dependencies of the new application package
+#### Scenario: Keep adjacent application concerns outside reconciliation
+- **WHEN** the entry-reconciliation operation runs
+- **THEN** it has no behavioral dependency on open-position resolution,
+  open-trade orchestration, or transport adapters
+- **AND** its typed live-entry projection input does not transfer ownership of
+  those adjacent concerns into this capability
 
 ### Requirement: Nested operation owns no outer workflow or transport concern
 The `EntryReconciliationOrchestrator` SHALL NOT acquire coordination, load or
 save repository state, adapt transport models, or control another Runtime
 workflow.
 
-#### Scenario: Leave closed-bar ownership to the future caller
+#### Scenario: Leave closed-bar ownership to the outer orchestrator
 - **WHEN** the operation runs
 - **THEN** it does not acquire or release a keyed mutex
 - **AND** does not call repository get, get-or-create, or save

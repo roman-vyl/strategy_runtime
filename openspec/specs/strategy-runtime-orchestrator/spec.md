@@ -234,12 +234,12 @@ invocation.
 - **AND** an already-completed first-fill freeze save for this invocation,
   if any, remains in effect — a post-projection `NoOp` never reverts it
 
-#### Scenario: Object allocation does not imply transition
-- **WHEN** the selected nested operation returns a different Python object
-  that is value-equal to the projection's embedded source aggregate
+#### Scenario: Value equality governs transition detection
+- **WHEN** the selected nested operation returns an aggregate that is
+  value-equal to the projection's embedded source aggregate
 - **THEN** no post-projection repository `save(...)` is called
-- **AND** the orchestrator does not use `resulting_state is not source_state` as
-  a change test
+- **AND** allocation of a separate in-memory aggregate does not by itself
+  constitute a state transition
 
 #### Scenario: Confirmed transition saves exactly once
 - **WHEN** the selected nested operation returns a complete

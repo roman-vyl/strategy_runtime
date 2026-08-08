@@ -1,7 +1,10 @@
 # position-management-orchestrator Specification
 
 ## Purpose
-TBD - created by archiving change runtime-position-management-execution-v1. Update Purpose after archive.
+
+Define the position-management execution boundary that maps Protect and Close
+decisions to one verified ABI operation and applies state changes only after a
+matching confirmation.
 ## Requirements
 ### Requirement: Runtime exposes a two-action position-management execution port taking only the command
 Runtime SHALL define `PositionManagementExecutionPort` with exactly two
@@ -75,7 +78,7 @@ SHALL return the source state unmodified when the decision is `NoOp`.
 - **THEN** the orchestrator calls neither `apply_protection` nor
   `close_position`
 - **AND** it returns `projection.source.resolved_state.runtime_state`
-  unchanged, by identity-equivalent value
+  unchanged by value
 
 ### Requirement: The orchestrator composes decision, one port call, and a fail-closed confirmed state replacement
 Runtime SHALL expose `PositionManagementOrchestrator.execute(projection:
@@ -112,4 +115,3 @@ or pending-command bookkeeping.
 - **WHEN** `PositionManagementOrchestrator.execute` runs
 - **THEN** it acquires no keyed mutex, performs no repository load or save,
   and performs no retry of a failed port call
-

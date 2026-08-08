@@ -234,29 +234,6 @@ disabled.
 - **THEN** the adapter does not issue a request to the redirect target
 - **AND** reports `AbiEntryPackageProtocolError`
 
-### Requirement: Contract tests verify the implemented ABI contract
-The future client layer SHALL include contract tests using a fake ABI and
-conformance verification against the approved ABI OpenAPI document.
-
-#### Scenario: Verify the raw outbound request
-- **WHEN** fake ABI contract tests exercise present and absent requests
-- **THEN** they assert the exact method, encoded route, content type, closed JSON body, nullable `desired_entry`, mandatory non-null `risk_multiplier`, opaque values, and decimal-string preservation
-
-#### Scenario: Verify all response classes
-- **WHEN** fake ABI emits both successes, all four public errors, mismatched identifiers, malformed payloads, obsolete `accepted_risk_multiplier` echoes, timeout, network failure, redirects, and undocumented statuses
-- **THEN** tests assert the exact typed result or failure
-- **AND** assert that no unconfirmed outcome becomes success
-
-#### Scenario: Verify ABI OpenAPI conformance
-- **WHEN** client contract verification reads the authoritative
-  `abi-entry-package-api-v1` OpenAPI document
-- **THEN** it confirms the exact method, route, nullable `desired_entry`, mandatory positive-string `risk_multiplier`, success union without `accepted_risk_multiplier`, closed DTOs, decimal formats, and `400`/`415`/`422`/`500` mappings
-- **AND** verification fails if the authoritative document is missing or incompatible
-
-#### Scenario: Keep verification out of production runtime
-- **WHEN** the production client is built or invoked
-- **THEN** it does not load the sibling repository or OpenAPI document at runtime
-
 ### Requirement: ABI does not return or reconfirm risk multiplier
 The Runtime entry-package client SHALL treat `risk_multiplier` as a one-way
 operational value Runtime sends to ABI. The ABI applied acknowledgement SHALL NOT

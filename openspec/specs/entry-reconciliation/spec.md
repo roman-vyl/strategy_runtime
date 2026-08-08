@@ -82,7 +82,7 @@ Runtime SHALL produce exactly one closed payload-bearing decision variant from
 - **THEN** the decision is `Cancel`
 - **AND** carries the acknowledged current `trade_cycle_id`
 
-### Requirement: I3 command models contain only reconciliation command data
+### Requirement: Command models contain only reconciliation command data
 Runtime SHALL define the transport-free `EntryReconciliationCommand` with
 exactly `strategy_instance_id`, `trade_cycle_id`, `ticker`, and
 `desired_entry: DesiredEntry | null`.
@@ -154,33 +154,33 @@ for a valid `NoOp`.
 - **WHEN** construction of an `Apply`, `Replace`, or `Cancel` command fails
 - **THEN** Runtime constructs no alternative cancel, apply, replace, or no-op
   result
-- **AND** I3 performs no immediate retry
+- **AND** Runtime performs no immediate retry
 
 #### Scenario: Leave the next bar on the ordinary path
 - **WHEN** required command construction raises
   `EntryReconciliationInvariantError`
-- **THEN** I3 stores no pending, suppression, fallback, or retry state
+- **THEN** Runtime stores no pending, suppression, fallback, or retry state
 - **AND** a later closed bar remains eligible to derive reconciliation again
   through the ordinary pipeline
 
-### Requirement: I3 success confirmations contain only transition facts
+### Requirement: Success confirmations contain only transition facts
 Runtime SHALL define the closed confirmation union
 `EntryAppliedConfirmation | EntryAbsentConfirmation`.
 
 #### Scenario: Represent an applied confirmation
-- **WHEN** a successful present-package result is adapted for I3
+- **WHEN** a successful present-package result is adapted into a Runtime confirmation
 - **THEN** `EntryAppliedConfirmation` contains exactly
   `strategy_instance_id`, `trade_cycle_id`, canonical
   `applied_desired_entry`, and finite exact-decimal `calculated_quantity`
 
 #### Scenario: Represent an absent confirmation
-- **WHEN** a successful absent-package result is adapted for I3
+- **WHEN** a successful absent-package result is adapted into a Runtime confirmation
 - **THEN** `EntryAbsentConfirmation` contains exactly
   `strategy_instance_id` and `trade_cycle_id`
 
-#### Scenario: Keep transport adaptation outside I3
+#### Scenario: Keep transport adaptation outside reconciliation
 - **WHEN** either confirmation is constructed
-- **THEN** I3 does not decode a response, inspect a response envelope, or
+- **THEN** reconciliation does not decode a response, inspect a response envelope, or
   invoke a client
 
 ### Requirement: The state applier accepts only successful confirmations
@@ -208,9 +208,9 @@ client or transport outcomes part of that input.
 #### Scenario: Exclude non-success client outcomes
 - **WHEN** a client returns a public error or raises timeout, network, or
   protocol failure
-- **THEN** no successful I3 confirmation exists
-- **AND** the I3 state applier is not invoked
-- **AND** I3 defines no null confirmation or unconfirmed-result variant
+- **THEN** no successful confirmation exists
+- **AND** the state applier is not invoked
+- **AND** reconciliation defines no null confirmation or unconfirmed-result variant
 
 ### Requirement: Successful confirmations are checked fail-closed
 Runtime SHALL validate every supplied successful confirmation against the
@@ -295,8 +295,8 @@ entry, and source-state preconditions before constructing replacement state.
 - **THEN** the input aggregate remains unmodified and domain-value-equivalent
   to its pre-call snapshot
 - **AND** no state transition is available for repository save
-- **AND** Runtime imposes no requirement that any returned aggregate or nested
-  value has the same Python object identity as an input value
+- **AND** Runtime requires value preservation, not preservation of a particular
+  in-memory aggregate or nested-value instance
 
 ### Requirement: Successful confirmations produce the closed state-transition table
 Runtime SHALL produce a new complete immutable aggregate only for a successful
@@ -324,7 +324,7 @@ confirmation that passes every invariant check.
 - **AND** does not retain an empty cycle
 
 ### Requirement: Pure reconciliation has no orchestration or external dependencies
-The I3 reconciliation, command-building, and success-transition components
+The reconciliation, command-building, and success-transition components
 SHALL remain free of external calls and production-flow dependencies.
 
 #### Scenario: Execute all pure components

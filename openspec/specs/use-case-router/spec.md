@@ -61,7 +61,7 @@ Engine's singular `desired_entry: DesiredEntry | null` without side selection
 or arbitration. Every non-null `DesiredEntry` SHALL contain a `side` of `long`
 or `short` and a non-empty, finite, positive exact-decimal
 `initial_take_price`; a missing or null take SHALL be rejected before the object
-can enter projected Runtime state or future ABI reconciliation.
+can enter projected Runtime state or ABI reconciliation.
 
 #### Scenario: Map the live-entry request
 - **WHEN** a closed position is routed
@@ -130,11 +130,10 @@ closed position is unaffected.
   .strategy_instance_id)`
 - **AND** calls neither Engine port
 
-#### Scenario: Closed-position routing is unchanged
+#### Scenario: Route a closed position to live-entry calculation
 - **WHEN** `resolved.position_open` is `false`
 - **THEN** the router builds `LiveEntryProjectionRequest` and calls
-  `StrategyEngineLiveEntryPort.project_live_entry(...)` exactly as before
-  this change
+  `StrategyEngineLiveEntryPort.project_live_entry(...)` exactly once
 
 ### Requirement: Position-management diagnostics are opaque and immutable
 The router SHALL preserve open-trade calculation objects without interpretation,
