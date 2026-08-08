@@ -76,20 +76,15 @@ class StrategyRuntimeOrchestrator:
             if type(projection) is LiveEntryProjectedStrategyInstance:
                 source_state = projection.source.resolved_state.runtime_state
                 resulting_state = self._entry_reconciliation_orchestrator.execute(projection)
-                if resulting_state == source_state:
-                    return resulting_state
-                saved_state = self._state_repository.save(resulting_state)
-                return saved_state
-
-            if type(projection) is OpenTradeProjectedStrategyInstance:
+            elif type(projection) is OpenTradeProjectedStrategyInstance:
                 source_state = projection.source.resolved_state.runtime_state
                 resulting_state = self._position_management_orchestrator.execute(projection)
-                if resulting_state == source_state:
-                    return resulting_state
-                saved_state = self._state_repository.save(resulting_state)
-                return saved_state
+            else:
+                raise UnknownStrategyProjectionError
 
-            raise UnknownStrategyProjectionError
+            if resulting_state == source_state:
+                return resulting_state
+            return self._state_repository.save(resulting_state)
 
     def dispatch(
         self, unit: StrategyBarProcessingUnit[DeploymentSpecification]

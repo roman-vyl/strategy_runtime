@@ -18,7 +18,6 @@ MDS POST /v1/webhooks/closed-bar
        -> filesystem deployment catalog
        -> instrument/timeframe selector
        -> deterministic per-instance fan-out
-  -> StrategyCycleHandoffBoundary
   -> StrategyRuntimeOrchestrator
        -> keyed mutex
        -> in-memory state repository

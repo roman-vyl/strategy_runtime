@@ -49,14 +49,11 @@ from strategy_runtime.runtime.state.repository import (
 from strategy_runtime.shared.identifiers import new_identifier, utc_timestamp
 from strategy_runtime.utility.committed_bar import (
     CommittedBarOrchestrator,
-    StrategyBarProcessingUnit,
 )
 from strategy_runtime.utility.deployment_catalog import (
-    DeploymentSpecification,
     FilesystemDeploymentCatalog,
 )
 from strategy_runtime.utility.deployment_selection import CommittedBarDeploymentSelector
-from strategy_runtime.utility.handoff import StrategyCycleHandoffBoundary
 from strategy_runtime.utility.processing_journal import JsonlProcessingJournal
 
 
@@ -108,13 +105,13 @@ def build_application(
 
     A `ready=True` result always has the complete graph constructed: the
     utility contour, the shared state repository and keyed-mutex registry,
-    all five outbound HTTP clients, and the semantic core wired as the
-    production `StrategyCycleHandoffBoundary` sink. There is no parameter
-    that returns a partial or utility-only ready result.
+    all five outbound HTTP clients, and the semantic core wired directly as
+    the strategy-cycle dispatcher. There is no parameter that returns a
+    partial or utility-only ready result.
 
     Every step from the first outbound HTTP client constructed through
     returning the ready FastAPI application -- including the semantic graph,
-    the thin dispatch sink, the utility graph, lifespan construction,
+    direct strategy-cycle dispatch, the utility graph, lifespan construction,
     `create_http_app(...)`, and `app.state` attachment -- is inside one
     construction boundary. Any failure anywhere in that boundary triggers
     `lifecycle.close_all_once()` (startup rollback) before a not-ready
@@ -202,16 +199,10 @@ def build_application(
         ) -> StrategyInstanceRuntimeState:
             return abi_execution_event_orchestrator.process(event)
 
-        def process_strategy_cycle(
-            unit: StrategyBarProcessingUnit[DeploymentSpecification],
-        ) -> None:
-            strategy_runtime_orchestrator.process(unit)
-
-        handoff_boundary = StrategyCycleHandoffBoundary(process_strategy_cycle)
         orchestrator = CommittedBarOrchestrator(
             deployment_catalog=catalog,
             deployment_selector=selector,
-            strategy_cycle_dispatcher=handoff_boundary,
+            strategy_cycle_dispatcher=strategy_runtime_orchestrator,
             processing_journal=journal,
         )
 

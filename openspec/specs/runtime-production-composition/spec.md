@@ -40,15 +40,14 @@ replaces any part of this graph, and no construction path returns
 - **AND** it introduces no new outbound HTTP client beyond the
   already-shipped `HttpxAbiPositionManagementAdapter`
 
-#### Scenario: Attach the semantic core through a thin production sink, unconditionally
+#### Scenario: Connect the semantic orchestrator directly as the strategy-cycle dispatcher
 - **WHEN** `build_application` constructs a ready application
-- **THEN** `StrategyCycleHandoffBoundary` is constructed with a thin,
-  `None`-returning sink function that calls
-  `StrategyRuntimeOrchestrator.process(unit)` and discards its result
-- **AND** no unattached (no-op) sink is used, and no other sink is ever
-  attached in a `ready=True` application
-- **AND** `.dispatch` is not used as the sink (it would construct a second,
-  discarded `StrategyCycleDispatchOutcome`)
+- **THEN** it passes the constructed `StrategyRuntimeOrchestrator` directly
+  to `CommittedBarOrchestrator` as `strategy_cycle_dispatcher`
+- **AND** `CommittedBarOrchestrator` invokes its existing `dispatch(...)`
+  contract for every selected processing unit
+- **AND** no forwarding boundary, sink, or wrapper callable exists between
+  the two orchestrators
 
 #### Scenario: Connect a thin first-fill callable to create_http_app
 - **WHEN** `build_application` constructs a ready application
@@ -69,11 +68,12 @@ replaces any part of this graph, and no construction path returns
 
 #### Scenario: No caller-supplied composition override exists
 - **WHEN** `build_application`'s public signature is inspected
-- **THEN** it accepts no `strategy_cycle_handoff`, no first-fill callable
-  override, and no equivalent parameter that could replace the production
-  sink, replace the production first-fill callable, skip constructing the
-  semantic graph, skip constructing `AbiExecutionEventOrchestrator`, or
-  skip constructing any of the five outbound HTTP clients
+- **THEN** it accepts no strategy-cycle dispatcher override, no first-fill
+  callable override, and no equivalent parameter that could replace the
+  production dispatcher, replace the production first-fill callable, skip
+  constructing the semantic graph, skip constructing
+  `AbiExecutionEventOrchestrator`, or skip constructing any of the five
+  outbound HTTP clients
 - **AND** every `ready=True` application it returns has the complete graph
   constructed — there is no alternative utility-only `ready=True` result
 

@@ -1,6 +1,5 @@
 """Guardrail tests for the single production composition-root construction path."""
 
-import inspect
 import json
 import threading
 from collections.abc import Callable
@@ -77,8 +76,7 @@ def _record_kwargs(monkeypatch: pytest.MonkeyPatch, name: str) -> dict[str, obje
 def test_outbound_http_clients_are_not_constructed_by_utility_dispatch_components() -> None:
     """The five outbound HTTP clients are constructed only inside
     `build_application`'s composition step, never inside
-    `CommittedBarOrchestrator` or `StrategyCycleHandoffBoundary`, and never
-    per-request/per-cycle."""
+    `CommittedBarOrchestrator`, and never per-request/per-cycle."""
     forbidden_tokens = (
         "httpx",
         "HttpxStrategyEngineLiveEntryAdapter",
@@ -87,20 +85,23 @@ def test_outbound_http_clients_are_not_constructed_by_utility_dispatch_component
         "HttpxAbiEntryPackageAdapter",
         "HttpxAbiPositionManagementAdapter",
     )
-    for source_path in (
-        Path("src/strategy_runtime/utility/committed_bar/orchestrator.py"),
-        Path("src/strategy_runtime/utility/handoff/boundary.py"),
-    ):
-        source = source_path.read_text(encoding="utf-8")
-        for token in forbidden_tokens:
-            assert token not in source, f"forbidden token '{token}' found in {source_path}"
+    source_path = Path("src/strategy_runtime/utility/committed_bar/orchestrator.py")
+    source = source_path.read_text(encoding="utf-8")
+    for token in forbidden_tokens:
+        assert token not in source, f"forbidden token '{token}' found in {source_path}"
 
 
-def test_build_application_has_no_composition_override_parameter() -> None:
-    parameters = inspect.signature(build_application).parameters
-    assert "strategy_cycle_handoff" not in parameters
-    forbidden_names = {"strategy_cycle_handoff", "handoff", "sink", "override", "test_mode"}
-    assert forbidden_names.isdisjoint(parameters)
+def test_runtime_orchestrator_is_the_direct_strategy_cycle_dispatcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime_orchestrators = _count_constructions(monkeypatch, "StrategyRuntimeOrchestrator")
+    committed_bar_kwargs = _record_kwargs(monkeypatch, "CommittedBarOrchestrator")
+
+    app = build_application(_valid_environ(tmp_path))
+
+    assert app.state.ready is True
+    assert len(runtime_orchestrators) == 1
+    assert committed_bar_kwargs["strategy_cycle_dispatcher"] is runtime_orchestrators[0]
 
 
 def test_ready_application_constructs_all_five_outbound_clients_exactly_once(
@@ -292,7 +293,7 @@ def test_startup_rollback_covers_construction_after_all_five_clients_exist(
 ) -> None:
     """The rollback boundary extends past the five HTTP clients: a failure
     inside `create_http_app(ready=True, ...)` itself -- after all five
-    clients, the semantic graph, and the thin sink already exist -- still
+    clients and the semantic graph already exist -- still
     triggers rollback and returns `ready=False`, never a partially assembled
     `ready=True` application."""
     live_entry_instances = _count_constructions(monkeypatch, "HttpxStrategyEngineLiveEntryAdapter")
@@ -348,7 +349,7 @@ def test_missing_position_management_timeout_fails_before_any_client_exists(
     assert all(instances == [] for instances in construction_counts)
 
 
-def test_default_sink_dispatches_into_the_real_strategy_runtime_orchestrator(
+def test_default_dispatcher_is_the_real_strategy_runtime_orchestrator(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     env = _valid_environ(tmp_path)
