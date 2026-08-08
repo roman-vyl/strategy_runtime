@@ -67,8 +67,6 @@ def test_entry_reconciliation_orchestrator_free_of_mutex_repository_workflow() -
         ".get_or_create(",
         "CommittedBarOrchestrator",
         "StrategyCycleDispatchOutcome",
-        "StrategyCycleHandoffBoundary",
-        "handoff",
     )
     for token in forbidden_tokens:
         assert token not in source, (
@@ -84,7 +82,6 @@ def test_no_production_wiring_or_adapter_changes() -> None:
     source = source_path.read_text(encoding="utf-8")
 
     forbidden_tokens = (
-        "StrategyCycleHandoffBoundary",
         "bootstrap",
         "httpx",
         "fastapi",

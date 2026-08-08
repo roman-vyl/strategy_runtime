@@ -287,7 +287,7 @@ workflow.
 - **THEN** it does not acquire or release a keyed mutex
 - **AND** does not call repository get, get-or-create, or save
 - **AND** does not reload the state embedded in the projection
-- **AND** does not invoke `StrategyRuntimeOrchestrator` or handoff dispatch
+- **AND** does not invoke `StrategyRuntimeOrchestrator` or outer strategy-cycle dispatch
 
 #### Scenario: Leave adapters and adjacent branches outside
 - **WHEN** the operation runs

@@ -69,7 +69,6 @@ from strategy_runtime.utility.committed_bar import (
     SelectedDeployment,
 )
 from strategy_runtime.utility.deployment_catalog import DeploymentSpecification
-from strategy_runtime.utility.handoff import StrategyCycleHandoffBoundary
 
 _SID_A = "instance-a"
 _SID_B = "instance-b"
@@ -445,16 +444,10 @@ def _make_real_semantic_harness(
         position_management_orchestrator=MagicMock(),
     )
 
-    def process_strategy_cycle(
-        unit: object,
-    ) -> None:
-        strategy_runtime_orchestrator.process(unit)  # type: ignore[arg-type]
-
-    handoff_boundary = StrategyCycleHandoffBoundary(process_strategy_cycle)
     committed_bar_orchestrator = CommittedBarOrchestrator(
         deployment_catalog=_SingleDeploymentCatalog(),
         deployment_selector=_FixedTargetSelectorWithDeployment(target_sid, _deployment(target_sid)),
-        strategy_cycle_dispatcher=handoff_boundary,
+        strategy_cycle_dispatcher=strategy_runtime_orchestrator,
         processing_journal=_NoOpJournal(),
     )
 

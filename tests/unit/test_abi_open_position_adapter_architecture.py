@@ -4,6 +4,9 @@ import ast
 from pathlib import Path
 
 ABI_INFRASTRUCTURE_PACKAGE = Path("src/strategy_runtime/infrastructure/abi")
+OPEN_POSITION_ADAPTER = ABI_INFRASTRUCTURE_PACKAGE / "http_open_position.py"
+ENTRY_PACKAGE_ADAPTER = ABI_INFRASTRUCTURE_PACKAGE / "http_entry_package.py"
+RUNTIME_ABI_PACKAGE = Path("src/strategy_runtime/runtime/abi")
 WIRED_COMPONENT_PATHS = (
     Path("src/strategy_runtime/bootstrap/application.py"),
     Path("src/strategy_runtime/bootstrap/main.py"),
@@ -46,8 +49,7 @@ def test_open_position_adapter_is_wired_into_production_composition_by_i4d() -> 
 
 
 def test_new_open_position_adapter_module_has_no_forbidden_dependencies() -> None:
-    assert tuple(ABI_INFRASTRUCTURE_PACKAGE.glob("*.py"))
-    imported = _imported_modules(tuple(ABI_INFRASTRUCTURE_PACKAGE.glob("*.py")))
+    imported = _imported_modules((OPEN_POSITION_ADAPTER,))
 
     forbidden_prefixes = (
         "strategy_runtime.bootstrap",
@@ -68,13 +70,19 @@ def test_new_open_position_adapter_module_has_no_forbidden_dependencies() -> Non
     )
 
 
-def test_existing_abi_entry_package_client_is_untouched_by_open_position_adapter() -> None:
-    open_position_source = "\n".join(
-        path.read_text(encoding="utf-8") for path in ABI_INFRASTRUCTURE_PACKAGE.glob("*.py")
-    )
+def test_open_position_adapter_does_not_own_entry_package_contracts() -> None:
+    open_position_source = OPEN_POSITION_ADAPTER.read_text(encoding="utf-8")
     assert "entry_package_codec" not in open_position_source
     assert "EntryPackageRequest" not in open_position_source
     assert "EntryPackageResult" not in open_position_source
+
+
+def test_entry_package_http_adapter_is_infrastructure_owned() -> None:
+    assert ENTRY_PACKAGE_ADAPTER.is_file()
+    assert not (RUNTIME_ABI_PACKAGE / "entry_package_http.py").exists()
+
+    runtime_package_source = (RUNTIME_ABI_PACKAGE / "__init__.py").read_text(encoding="utf-8")
+    assert "HttpxAbiEntryPackageAdapter" not in runtime_package_source
 
 
 def test_open_position_resolver_is_unchanged_and_still_only_transport_free() -> None:

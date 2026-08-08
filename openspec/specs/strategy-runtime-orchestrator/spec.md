@@ -9,7 +9,7 @@ logical state transition, and return of the final aggregate
 `StrategyInstanceRuntimeState`, all inside one keyed closed-bar critical
 section.
 ## Requirements
-### Requirement: Runtime exposes the utility handoff dispatch contract
+### Requirement: Runtime exposes the utility dispatch contract
 `StrategyRuntimeOrchestrator.dispatch(...)` SHALL remain a thin adapter from
 semantic processing to the utility `StrategyCycleDispatchPort` contract.
 

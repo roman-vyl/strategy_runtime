@@ -6,14 +6,25 @@ from strategy_runtime.utility.committed_bar import (
     CommittedBarEvent,
     CommittedBarOrchestrator,
     StrategyBarProcessingUnit,
+    StrategyCycleDispatchOutcome,
 )
 from strategy_runtime.utility.deployment_catalog import (
     DeploymentSpecification,
     FilesystemDeploymentCatalog,
 )
 from strategy_runtime.utility.deployment_selection import CommittedBarDeploymentSelector
-from strategy_runtime.utility.handoff import StrategyCycleHandoffBoundary
 from strategy_runtime.utility.processing_journal import JsonlProcessingJournal
+
+
+class _RecordingDispatcher:
+    def __init__(self, received: list[StrategyBarProcessingUnit[DeploymentSpecification]]) -> None:
+        self._received = received
+
+    def dispatch(
+        self, unit: StrategyBarProcessingUnit[DeploymentSpecification]
+    ) -> StrategyCycleDispatchOutcome:
+        self._received.append(unit)
+        return StrategyCycleDispatchOutcome.succeeded(unit.strategy_instance_id)
 
 
 def _write_deployment(
@@ -82,11 +93,10 @@ def test_utility_contour_selects_and_dispatches_matching_deployment(tmp_path: Pa
         event_id_factory=new_identifier,
         timestamp_factory=utc_timestamp,
     )
-    handoff_boundary = StrategyCycleHandoffBoundary(received.append)
     orchestrator = CommittedBarOrchestrator(
         deployment_catalog=catalog,
         deployment_selector=selector,
-        strategy_cycle_dispatcher=handoff_boundary,
+        strategy_cycle_dispatcher=_RecordingDispatcher(received),
         processing_journal=journal,
     )
 

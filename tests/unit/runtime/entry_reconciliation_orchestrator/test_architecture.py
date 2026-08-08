@@ -57,7 +57,6 @@ def test_application_package_has_no_outer_workflow_or_adapter_dependency() -> No
         "strategy_runtime.runtime.open_position",
         "strategy_runtime.runtime.orchestrator",
         "strategy_runtime.runtime.state.repository",
-        "strategy_runtime.utility.handoff",
     )
     imported = imported_modules()
 
@@ -77,7 +76,6 @@ def test_application_package_has_no_outer_workflow_or_adapter_dependency() -> No
         "httpx",
         "fastapi",
         "retry",
-        "handoff",
         "bootstrap",
         "infrastructure",
     )
