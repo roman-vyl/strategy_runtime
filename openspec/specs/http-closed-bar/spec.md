@@ -1,7 +1,8 @@
 # http-closed-bar Specification
 
 ## Purpose
-Define the MDS-facing closed-bar webhook, immediate acceptance boundary, pre-acceptance error semantics, internal trace hook, and Runtime liveness and readiness endpoints.
+Define the MDS-facing closed-bar webhook, immediate acceptance boundary,
+pre-acceptance error semantics, and Runtime liveness and readiness endpoints.
 ## Requirements
 ### Requirement: Runtime accepts closed-bar notifications over HTTP
 Strategy Runtime SHALL expose one HTTP endpoint for Market Data Service to report a newly committed closed bar.
