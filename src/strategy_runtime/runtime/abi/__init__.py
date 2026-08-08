@@ -6,7 +6,6 @@ from strategy_runtime.runtime.abi.entry_package_errors import (
     AbiEntryPackageProtocolError,
     AbiEntryPackageTimeout,
 )
-from strategy_runtime.runtime.abi.entry_package_http import HttpxAbiEntryPackageAdapter
 from strategy_runtime.runtime.abi.entry_package_models import (
     EntryPackageAbsent,
     EntryPackageApplied,
@@ -39,5 +38,4 @@ __all__ = [
     "EntryPackageValidationDetail",
     "EntryPackageValidationFailed",
     "EntryPackageWireDesiredEntry",
-    "HttpxAbiEntryPackageAdapter",
 ]

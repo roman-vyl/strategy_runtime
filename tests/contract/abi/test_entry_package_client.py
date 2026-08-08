@@ -5,12 +5,14 @@ from typing import Any, cast
 import httpx
 import pytest
 
+from strategy_runtime.infrastructure.abi.http_entry_package import (
+    HttpxAbiEntryPackageAdapter,
+)
 from strategy_runtime.runtime.abi.entry_package_errors import (
     AbiEntryPackageNetworkFailure,
     AbiEntryPackageProtocolError,
     AbiEntryPackageTimeout,
 )
-from strategy_runtime.runtime.abi.entry_package_http import HttpxAbiEntryPackageAdapter
 from strategy_runtime.runtime.abi.entry_package_models import (
     EntryPackageAbsent,
     EntryPackageApplied,
