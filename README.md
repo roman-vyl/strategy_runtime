@@ -314,6 +314,48 @@ make verify
 npm exec -- openspec validate --all --strict
 ```
 
+## Docker
+
+Single-container Runtime packaging uses the existing `strategy-runtime`
+production entrypoint and keeps the V1 topology unchanged: one process,
+one Uvicorn server, one committed-bar worker, one replica.
+
+Example build:
+
+```bash
+docker build -t strategy-runtime:local .
+```
+
+Example run:
+
+```bash
+docker run --rm \
+  -p 8093:8093 \
+  -e RUNTIME_HOST=0.0.0.0 \
+  -e RUNTIME_PORT=8093 \
+  -e RUNTIME_SPECS_PATH=/runtime/specs \
+  -e RUNTIME_JOURNAL_PATH=/runtime/journal/runtime.jsonl \
+  -e RUNTIME_STRATEGY_ENGINE_BASE_URL=http://engine:8094 \
+  -e RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS=5 \
+  -e RUNTIME_ABI_BASE_URL=http://abi:8095 \
+  -e RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS=5 \
+  -e RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS=5 \
+  -e RUNTIME_ABI_POSITION_MANAGEMENT_TIMEOUT_SECONDS=5 \
+  -e RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY=256 \
+  --mount type=bind,src="$(pwd)/var/specs",dst=/runtime/specs,readonly \
+  --mount type=bind,src="$(pwd)/var/journal",dst=/runtime/journal \
+  strategy-runtime:local
+```
+
+Container mount contract:
+
+- `RUNTIME_SPECS_PATH` should point at a mounted directory of deployment
+  JSON files and is intended to be read-only.
+- `RUNTIME_JOURNAL_PATH` should point at a writable mounted path so the
+  JSONL processing journal survives container removal.
+- `/health/live` and `/health/ready` remain the container-facing probes;
+  the image healthcheck uses `/health/ready`.
+
 ## Карта репозитория
 
 ```text
