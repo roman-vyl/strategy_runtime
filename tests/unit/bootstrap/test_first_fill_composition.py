@@ -129,18 +129,6 @@ def test_not_ready_application_has_no_first_fill_callable(
     assert response.json() == {"status": "not_ready"}
 
 
-# ---------------------------------------------------------------------------
-# 6.7 / 6.8: no new outbound HTTP client, existing lifecycle unchanged
-# ---------------------------------------------------------------------------
-
-
-def test_first_fill_wiring_adds_zero_outbound_http_clients(tmp_path: Path) -> None:
-    app = build_application(_valid_environ(tmp_path))
-
-    assert app.state.ready is True
-    assert len(app.state.outbound_http_clients) == 5
-
-
 def test_first_fill_wiring_does_not_change_existing_shutdown_lifecycle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

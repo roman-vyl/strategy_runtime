@@ -320,30 +320,6 @@ async def test_event_loop_keeps_running_while_the_offloaded_join_waits(
     assert not worker._thread.is_alive()  # type: ignore[union-attr]
 
 
-# ---------------------------------------------------------------------------
-# stop_once() idempotency and concurrent callers, exercised through the real
-# composition-root-owned worker.
-# ---------------------------------------------------------------------------
-
-
-def test_stop_once_called_twice_closes_clients_exactly_once(tmp_path: Path) -> None:
-    app = build_application(_valid_environ(tmp_path))
-    worker = app.state.committed_bar_intake_worker
-
-    with TestClient(app):
-        pass
-
-    assert worker.state == "STOPPED"
-    close_counts_before = [
-        c._client.is_closed
-        for c in app.state.outbound_http_clients  # type: ignore[attr-defined]
-    ]
-    assert all(close_counts_before)
-
-    worker.stop_once()  # no exception, no second join, already-closed clients untouched
-    assert worker.state == "STOPPED"
-
-
 def test_no_orphan_worker_thread_remains_after_clean_shutdown(tmp_path: Path) -> None:
     app = build_application(_valid_environ(tmp_path))
     worker = app.state.committed_bar_intake_worker

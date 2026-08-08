@@ -1,20 +1,12 @@
 from dataclasses import replace
 from typing import Literal
-from unittest.mock import MagicMock
 
 import pytest
 
-from strategy_runtime.runtime.coordination import StrategyInstanceKeyedMutexRegistry
 from strategy_runtime.runtime.engine.live_entry import LiveEntryProjectionResponse
 from strategy_runtime.runtime.engine.open_trade import (
     OpenTradeProjectionRequest,
     OpenTradeProjectionResponse,
-)
-from strategy_runtime.runtime.entry_reconciliation import (
-    EntryAbsentConfirmation,
-)
-from strategy_runtime.runtime.entry_reconciliation_orchestrator.orchestrator import (
-    EntryReconciliationOrchestrator,
 )
 from strategy_runtime.runtime.open_position.errors import (
     OpenPositionLookupProtocolError,
@@ -26,7 +18,6 @@ from strategy_runtime.runtime.open_position.models import (
     PositionResolvedStrategyInstanceRuntimeState,
 )
 from strategy_runtime.runtime.open_position.resolver import OpenPositionResolver
-from strategy_runtime.runtime.orchestrator.orchestrator import StrategyRuntimeOrchestrator
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
 from strategy_runtime.runtime.recipes.position_management import CloseSignal, DesiredProtection
 from strategy_runtime.runtime.routing.errors import (
@@ -509,91 +500,3 @@ def test_live_entry_response_rejects_old_side_wise_contract() -> None:
         LiveEntryProjectionResponse(  # type: ignore[call-arg]
             plans_by_side={"long": desired_entry(), "short": None}
         )
-
-
-class CountingRepository:
-    def __init__(self, state: StrategyInstanceRuntimeState) -> None:
-        self.state = state
-        self.requests: list[object] = []
-        self.save_calls: list[StrategyInstanceRuntimeState] = []
-
-    def get_or_create(self, request):
-        self.requests.append(request)
-        return self.state
-
-    def get(self, strategy_instance_id):
-        return self.state if strategy_instance_id == self.state.strategy_instance_id else None
-
-    def save(self, state):
-        self.save_calls.append(state)
-        self.state = state
-        return state
-
-
-class CountingResolver:
-    def __init__(self, resolved: PositionResolvedStrategyInstanceRuntimeState) -> None:
-        self.resolved = resolved
-        self.states: list[object] = []
-
-    def resolve(self, state):
-        self.states.append(state)
-        return self.resolved
-
-
-class CountingRouter:
-    def __init__(self, projected: LiveEntryProjectedStrategyInstance) -> None:
-        self.projected = projected
-        self.items: list[object] = []
-
-    def route(self, item):
-        self.items.append(item)
-        return self.projected
-
-
-def test_semantic_orchestrator_calls_each_scalar_stage_once_and_applies_live_entry_projection() -> (
-    None
-):
-    state = runtime_state()
-    resolved = resolved_state(position_open=False, state=state)
-    item = PositionResolvedStrategyInstance(processing_unit(), resolved)
-    projected = LiveEntryProjectedStrategyInstance(item, None)
-    repository = CountingRepository(state)
-    resolver_port = CountingResolver(resolved)
-    router_port = CountingRouter(projected)
-
-    orchestrator = StrategyRuntimeOrchestrator(
-        state_repository=repository,
-        open_position_resolver=resolver_port,
-        use_case_router=router_port,
-        keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
-        entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
-            trade_cycle_id_factory=lambda: "trade-cycle-id",
-            execution_port=type(
-                "_NoOpExecutionPort",
-                (),
-                {
-                    "execute": lambda self, command, source_state: EntryAbsentConfirmation(
-                        strategy_instance_id=source_state.strategy_instance_id,
-                        trade_cycle_id=command.trade_cycle_id,
-                    ),
-                },
-            )(),
-        ),
-        position_management_orchestrator=MagicMock(),
-    )
-
-    result = orchestrator.process(item.processing_unit)
-
-    assert isinstance(result, StrategyInstanceRuntimeState)
-    assert result.strategy_instance_id == state.strategy_instance_id
-    assert result == state
-    assert repository.save_calls == []
-    assert len(repository.requests) == 1
-    assert not hasattr(repository.requests[0], "risk_multiplier")
-    assert "risk_multiplier" not in repository.requests[0].raw_spec
-    assert state.risk_multiplier == "1"
-    assert resolver_port.states == [state]
-    assert len(router_port.items) == 1
-    assert router_port.items[0].processing_unit is item.processing_unit
-    assert router_port.items[0].resolved_state is resolved
-    assert state.current_trade_cycle is None

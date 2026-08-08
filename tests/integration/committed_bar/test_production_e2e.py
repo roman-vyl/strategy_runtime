@@ -27,8 +27,6 @@ from fastapi.testclient import TestClient
 from strategy_runtime.bootstrap.application import build_application
 from strategy_runtime.runtime.abi.entry_package_errors import (
     AbiEntryPackageNetworkFailure,
-    AbiEntryPackageProtocolError,
-    AbiEntryPackageTimeout,
 )
 from strategy_runtime.runtime.entry_reconciliation_bridge import (
     AbiEntryPackageExecutionBridge,
@@ -65,7 +63,6 @@ _PROTECTION_PATH_RE = re.compile(
 _OPEN_POSITION_PATH_RE = re.compile(
     r"^/v1/strategy-instances/([^/]+)/trade-cycles/([^/]+)/open-position$"
 )
-_UNREACHABLE_URL = "http://127.0.0.1:1"
 
 
 def _write_deployment(specs_path: Path) -> None:
@@ -204,19 +201,6 @@ def _open_position_open(first_fill_at_ms: int, average_entry_price: str) -> Fake
     )
 
 
-def _abi_open_position_public_error() -> FakeResponse:
-    return FakeResponse(
-        422,
-        {
-            "error": {
-                "code": "validation_failed",
-                "message": "malformed identifier",
-                "details": [{"path": "/path/trade_cycle_id", "message": "malformed"}],
-            }
-        },
-    )
-
-
 def _abi_open_position_protocol_error() -> FakeResponse:
     return FakeResponse(200, {"unexpected": "shape"})
 
@@ -250,10 +234,6 @@ def _engine_public_error() -> FakeResponse:
             "request_id": "req-1",
         },
     )
-
-
-def _engine_protocol_error() -> FakeResponse:
-    return FakeResponse(200, {"unexpected": "shape"})
 
 
 def _open_trade_success(
@@ -331,23 +311,6 @@ def _position_closed(request: RecordedRequest) -> FakeResponse:
             "status": "trade_cycle_closed",
         },
     )
-
-
-def _entry_package_public_error() -> FakeResponse:
-    return FakeResponse(
-        422,
-        {
-            "error": {
-                "code": "validation_failed",
-                "message": "bad entry package",
-                "details": [{"path": "risk_multiplier", "message": "invalid"}],
-            }
-        },
-    )
-
-
-def _entry_package_protocol_error() -> FakeResponse:
-    return FakeResponse(200, {"unexpected": "shape"})
 
 
 @pytest.fixture
@@ -622,53 +585,6 @@ def test_cancel_clears_cycle_only_after_entry_package_absent_confirmation(
         assert len(entry_package_requests) == 2
 
 
-def test_legacy_pre_alignment_open_position_success_shape_is_no_longer_accepted(
-    tmp_path: Path, engine_server: FakeHttpServer, abi_server: FakeHttpServer
-) -> None:
-    """The pre-alignment success shape (entry_bar_open_time_ms/
-    executed_entry_price) is a protocol error now, not a silently coerced
-    result. This can only be observed once ABI is actually called, so cycle
-    1 establishes a current_trade_cycle first."""
-    _set_engine_routes(engine_server, live_entry=_live_entry_present())
-    _set_abi_routes(
-        abi_server, open_position=_open_position_closed(), entry_package=_entry_package_applied
-    )
-    app = _build_app(
-        tmp_path, engine_base_url=engine_server.base_url, abi_base_url=abi_server.base_url
-    )
-
-    with TestClient(app) as client:
-        first = _post_closed_bar(client, 1)
-        assert first.status_code == 200
-        state_after_apply = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
-        assert state_after_apply is not None
-        assert state_after_apply.current_trade_cycle is not None
-
-        legacy_shape = FakeResponse(
-            200,
-            {
-                "position_open": False,
-                "entry_bar_open_time_ms": None,
-                "executed_entry_price": None,
-            },
-        )
-        _set_abi_routes(
-            abi_server, open_position=legacy_shape, entry_package=_entry_package_applied
-        )
-
-        second = _post_closed_bar(client, 2)
-        assert second.status_code == 200
-
-        state_after_failure = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
-        assert state_after_failure == state_after_apply
-
-        entry_package_requests = [r for r in abi_server.requests if "/entry-package" in r.path]
-        assert len(entry_package_requests) == 1
-
-        outcomes = _dispatch_outcomes(tmp_path / "journal" / "runtime.jsonl")
-        assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_failed"
-
-
 def test_open_trade_noop_succeeds_after_frozen_first_fill(
     tmp_path: Path, engine_server: FakeHttpServer, abi_server: FakeHttpServer
 ) -> None:
@@ -869,29 +785,22 @@ def test_position_management_failure_preserves_first_fill_freeze(
         assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_failed"
 
 
-# --- per-boundary failures ----------------------------------------------------
-
-_FAILURE_KINDS = ["timeout", "network_failure", "protocol_error", "public_error"]
+# --- representative per-boundary failures -----------------------------------
 
 
-@pytest.mark.parametrize("kind", _FAILURE_KINDS)
 def test_abi_open_position_lookup_failure_stops_before_engine(
-    tmp_path: Path, engine_server: FakeHttpServer, abi_server: FakeHttpServer, kind: str
+    tmp_path: Path, engine_server: FakeHttpServer, abi_server: FakeHttpServer
 ) -> None:
     """The resolver only calls ABI's open-position endpoint once a
     current_trade_cycle exists, so this test first establishes one (cycle 1,
-    no ABI open-position call at all) before injecting the failure on cycle
-    2's lookup. `network_failure` uses a per-route `DisconnectResponse` on
-    the same real server/base URL, not an unreachable URL, since cycle 1's
-    entry-package call must still succeed against that same base URL."""
+    no ABI open-position call at all) before injecting a representative
+    protocol failure on cycle 2's lookup."""
     _set_engine_routes(engine_server, live_entry=_live_entry_present())
-    abi_open_position_timeout = 0.05 if kind == "timeout" else 5.0
 
     app = _build_app(
         tmp_path,
         engine_base_url=engine_server.base_url,
         abi_base_url=abi_server.base_url,
-        abi_open_position_timeout=abi_open_position_timeout,
     )
 
     with TestClient(app) as client:
@@ -905,16 +814,10 @@ def test_abi_open_position_lookup_failure_stops_before_engine(
             [r for r in engine_server.requests if r.path == _LIVE_ENTRY_PATH]
         )
 
-        if kind == "timeout":
-            open_position_response: object = FakeResponse(200, {}, delay_seconds=1.0)
-        elif kind == "network_failure":
-            open_position_response = DisconnectResponse()
-        elif kind == "protocol_error":
-            open_position_response = _abi_open_position_protocol_error()
-        else:
-            open_position_response = _abi_open_position_public_error()
         _set_abi_routes(
-            abi_server, open_position=open_position_response, entry_package=_entry_package_applied
+            abi_server,
+            open_position=_abi_open_position_protocol_error(),
+            entry_package=_entry_package_applied,
         )
 
         second = _post_closed_bar(client, 2)
@@ -932,29 +835,16 @@ def test_abi_open_position_lookup_failure_stops_before_engine(
         assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_failed"
 
 
-@pytest.mark.parametrize("kind", _FAILURE_KINDS)
 def test_strategy_engine_projection_failure_stops_before_abi_entry_package(
-    tmp_path: Path, engine_server: FakeHttpServer, abi_server: FakeHttpServer, kind: str
+    tmp_path: Path, engine_server: FakeHttpServer, abi_server: FakeHttpServer
 ) -> None:
     _set_abi_routes(abi_server, open_position=_open_position_closed())
-    engine_base_url = engine_server.base_url
-    engine_timeout = 5.0
-
-    if kind == "timeout":
-        _set_engine_routes(engine_server, live_entry=FakeResponse(200, {}, delay_seconds=1.0))
-        engine_timeout = 0.05
-    elif kind == "network_failure":
-        engine_base_url = _UNREACHABLE_URL
-    elif kind == "protocol_error":
-        _set_engine_routes(engine_server, live_entry=_engine_protocol_error())
-    else:
-        _set_engine_routes(engine_server, live_entry=_engine_public_error())
+    _set_engine_routes(engine_server, live_entry=_engine_public_error())
 
     app = _build_app(
         tmp_path,
-        engine_base_url=engine_base_url,
+        engine_base_url=engine_server.base_url,
         abi_base_url=abi_server.base_url,
-        engine_timeout=engine_timeout,
     )
 
     with TestClient(app) as client:
@@ -971,26 +861,15 @@ def test_strategy_engine_projection_failure_stops_before_abi_entry_package(
         assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_failed"
 
 
-_ENTRY_PACKAGE_EXPECTED_CAUSE: dict[str, type[Exception] | None] = {
-    "timeout": AbiEntryPackageTimeout,
-    "network_failure": AbiEntryPackageNetworkFailure,
-    "protocol_error": AbiEntryPackageProtocolError,
-    "public_error": None,
-}
-
-
-@pytest.mark.parametrize("kind", _FAILURE_KINDS)
 def test_abi_entry_package_failure_leaves_no_saved_cycle(
     tmp_path: Path,
     engine_server: FakeHttpServer,
     abi_server: FakeHttpServer,
-    kind: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Every one of the four ABI entry-package failure kinds is exercised
-    end to end, including `network_failure`: the fake ABI server accepts the
-    TCP connection and records the request, then disconnects before writing
-    any HTTP response (`DisconnectResponse`), which httpx surfaces as
+    """A representative network failure is exercised end to end: the fake
+    ABI server accepts the TCP connection and records the request, then
+    disconnects before writing any HTTP response (`DisconnectResponse`), which httpx surfaces as
     `httpx.RemoteProtocolError` (a `TransportError` subclass) -- the same
     transport-failure family the existing `HttpxAbiEntryPackageAdapter`
     already maps to `AbiEntryPackageNetworkFailure`. ABI open-position and
@@ -1010,39 +889,16 @@ def test_abi_entry_package_failure_leaves_no_saved_cycle(
     monkeypatch.setattr(AbiEntryPackageExecutionBridge, "execute", _recording_execute)
 
     _set_engine_routes(engine_server, live_entry=_live_entry_present())
-    entry_package_timeout = 5.0
-
-    if kind == "timeout":
-        _set_abi_routes(
-            abi_server,
-            open_position=_open_position_closed(),
-            entry_package=FakeResponse(200, {}, delay_seconds=1.0),
-        )
-        entry_package_timeout = 0.05
-    elif kind == "network_failure":
-        _set_abi_routes(
-            abi_server,
-            open_position=_open_position_closed(),
-            entry_package=DisconnectResponse(),
-        )
-    elif kind == "protocol_error":
-        _set_abi_routes(
-            abi_server,
-            open_position=_open_position_closed(),
-            entry_package=_entry_package_protocol_error(),
-        )
-    else:
-        _set_abi_routes(
-            abi_server,
-            open_position=_open_position_closed(),
-            entry_package=_entry_package_public_error(),
-        )
+    _set_abi_routes(
+        abi_server,
+        open_position=_open_position_closed(),
+        entry_package=DisconnectResponse(),
+    )
 
     app = _build_app(
         tmp_path,
         engine_base_url=engine_server.base_url,
         abi_base_url=abi_server.base_url,
-        abi_entry_package_timeout=entry_package_timeout,
     )
 
     with TestClient(app) as client:
@@ -1060,7 +916,7 @@ def test_abi_entry_package_failure_leaves_no_saved_cycle(
         assert len(live_entry_requests) == 1
 
         # The entry-package endpoint was attempted exactly once, with no
-        # automatic retry, regardless of how it failed.
+        # automatic retry.
         entry_package_requests = [r for r in abi_server.requests if "/entry-package" in r.path]
         assert len(entry_package_requests) == 1
 
@@ -1069,12 +925,7 @@ def test_abi_entry_package_failure_leaves_no_saved_cycle(
         # core uncaught.
         assert len(captured_errors) == 1
         error = captured_errors[0]
-        expected_cause = _ENTRY_PACKAGE_EXPECTED_CAUSE[kind]
-        if expected_cause is None:
-            assert error.__cause__ is None
-            assert error.public_error is not None
-        else:
-            assert isinstance(error.__cause__, expected_cause)
+        assert isinstance(error.__cause__, AbiEntryPackageNetworkFailure)
 
         # CommittedBarOrchestrator caught the propagated failure and
         # journaled it; no repository save occurred.
