@@ -84,11 +84,6 @@ class CurrentTradeCycle:
             )
 
     @property
-    def desired_entry_frozen(self) -> bool:
-        """Compatibility read for the unchanged pre-I2 router; not persisted state."""
-        return True
-
-    @property
     def desired_entry(self) -> DesiredEntry:
         """Read the singular applied entry without duplicating it on the cycle."""
         return self.applied_entry_package.applied_desired_entry

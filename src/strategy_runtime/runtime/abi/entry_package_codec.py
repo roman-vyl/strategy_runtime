@@ -98,9 +98,7 @@ def _decode_success(payload: object, request: EntryPackageRequest) -> EntryPacka
                 ),
                 trade_cycle_id=_non_empty_string(body["trade_cycle_id"], "trade_cycle_id"),
                 applied_desired_entry=_decode_desired_entry(body["applied_desired_entry"]),
-                calculated_quantity=_string(
-                    body["calculated_quantity"], "calculated_quantity"
-                ),
+                calculated_quantity=_string(body["calculated_quantity"], "calculated_quantity"),
             )
         elif status == EntryPackageAbsent.status:
             _require_exact_fields(body, _ABSENT_FIELDS, "absent response")
@@ -154,9 +152,7 @@ def _decode_public_error(status_code: int, payload: object) -> EntryPackageResul
         )
         _require_exact_fields(error, expected_fields, "error object")
         if error["code"] != expected_code:
-            raise ValueError(
-                f"HTTP {status_code} requires error code {expected_code!r}"
-            )
+            raise ValueError(f"HTTP {status_code} requires error code {expected_code!r}")
         message = _non_empty_string(error["message"], "error.message")
         if expected_code == "malformed_json":
             return EntryPackageMalformedJson(message=message)
@@ -239,9 +235,7 @@ def _require_json_content_type(value: str | None) -> None:
         seen_charset = True
 
 
-def _closed_object(
-    value: object, fields: frozenset[str] | None, name: str
-) -> dict[str, object]:
+def _closed_object(value: object, fields: frozenset[str] | None, name: str) -> dict[str, object]:
     if type(value) is not dict:
         raise TypeError(f"{name} must be a JSON object")
     result = cast("dict[str, object]", value)
@@ -250,9 +244,7 @@ def _closed_object(
     return result
 
 
-def _require_exact_fields(
-    value: dict[str, object], fields: frozenset[str], name: str
-) -> None:
+def _require_exact_fields(value: dict[str, object], fields: frozenset[str], name: str) -> None:
     actual = frozenset(value)
     if actual != fields:
         missing = sorted(fields - actual)

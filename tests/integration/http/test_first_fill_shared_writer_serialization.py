@@ -245,7 +245,6 @@ def _make_harness() -> tuple[TestClient, _RecordingRepository, _MutexAttemptSpy]
     )
     app = create_http_app(
         ready=True,
-        trace_id_factory=lambda: "trace-1",
         committed_bar_intake=None,
         process_first_fill=orchestrator.process,
     )
@@ -469,7 +468,6 @@ def _make_real_semantic_harness(
 
     app = create_http_app(
         ready=True,
-        trace_id_factory=lambda: "trace-1",
         committed_bar_intake=intake,
         process_first_fill=first_fill_orchestrator.process,
     )

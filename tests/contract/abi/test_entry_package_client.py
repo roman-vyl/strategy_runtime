@@ -192,9 +192,7 @@ def test_validation_failure_preserves_closed_details() -> None:
         lambda body: body.update({"accepted_risk_multiplier": "0"}),
         lambda body: body.update({"status": "other"}),
         lambda body: body["applied_desired_entry"].update({"extra": True}),
-        lambda body: body["applied_desired_entry"].update(
-            {"source_plan_bar_open_time_ms": True}
-        ),
+        lambda body: body["applied_desired_entry"].update({"source_plan_bar_open_time_ms": True}),
         lambda body: body["applied_desired_entry"].update({"initial_take_price": "0"}),
     ],
 )

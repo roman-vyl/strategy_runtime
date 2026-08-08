@@ -23,7 +23,6 @@ def test_loads_defaults() -> None:
     assert config.port == 8093
     assert config.journal_path == Path("var/journal/runtime.jsonl")
     assert config.specs_path == Path("var/specs")
-    assert config.service_instance == "local"
 
 
 def test_environment_overrides() -> None:
@@ -33,12 +32,10 @@ def test_environment_overrides() -> None:
             "RUNTIME_HOST": "0.0.0.0",
             "RUNTIME_PORT": "9000",
             "RUNTIME_JOURNAL_PATH": "tmp/events.jsonl",
-            "RUNTIME_SERVICE_INSTANCE": "node-a",
             "RUNTIME_SPECS_PATH": "tmp/specs",
         }
     )
     assert config.port == 9000
-    assert config.service_instance == "node-a"
     assert config.specs_path == Path("tmp/specs")
 
 

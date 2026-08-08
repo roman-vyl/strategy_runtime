@@ -92,10 +92,7 @@ class HttpxAbiEntryPackageAdapter:
 def _entry_package_path(strategy_instance_id: str, trade_cycle_id: str) -> str:
     strategy_segment = _encode_opaque_path_segment(strategy_instance_id)
     cycle_segment = _encode_opaque_path_segment(trade_cycle_id)
-    return (
-        f"/v1/strategy-instances/{strategy_segment}"
-        f"/trade-cycles/{cycle_segment}/entry-package"
-    )
+    return f"/v1/strategy-instances/{strategy_segment}/trade-cycles/{cycle_segment}/entry-package"
 
 
 def _encode_opaque_path_segment(value: str) -> str:

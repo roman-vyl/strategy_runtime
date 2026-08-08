@@ -3,8 +3,7 @@ from pathlib import Path
 from typing import Any
 
 ENTRY_PACKAGE_PATH = (
-    "/v1/strategy-instances/{strategy_instance_id}"
-    "/trade-cycles/{trade_cycle_id}/entry-package"
+    "/v1/strategy-instances/{strategy_instance_id}/trade-cycles/{trade_cycle_id}/entry-package"
 )
 
 
@@ -116,9 +115,7 @@ def assert_desired_entry_schema(schema: dict[str, Any]) -> None:
     assert properties["locked_exit_profile"] == {"type": "string"}
 
 
-def assert_success_schemas(
-    schemas: dict[str, Any], operation: dict[str, Any]
-) -> None:
+def assert_success_schemas(schemas: dict[str, Any], operation: dict[str, Any]) -> None:
     success = operation["responses"]["200"]["content"]["application/json"]["schema"]
     assert success == {
         "oneOf": [
@@ -153,9 +150,7 @@ def assert_success_schemas(
     assert absent["properties"]["status"] == {"const": "entry_package_absent"}
 
 
-def assert_error_schemas(
-    schemas: dict[str, Any], operation: dict[str, Any]
-) -> None:
+def assert_error_schemas(schemas: dict[str, Any], operation: dict[str, Any]) -> None:
     response_refs = {
         "400": ("MalformedJsonError", "malformed_json"),
         "415": ("UnsupportedMediaTypeError", "unsupported_media_type"),
@@ -163,9 +158,7 @@ def assert_error_schemas(
         "500": ("InternalError", "internal_error"),
     }
     for status, (schema_name, code) in response_refs.items():
-        response_schema = operation["responses"][status]["content"]["application/json"][
-            "schema"
-        ]
+        response_schema = operation["responses"][status]["content"]["application/json"]["schema"]
         assert response_schema == {"$ref": f"#/components/schemas/{schema_name}"}
         resolved = resolve_schema_reference(schemas, schema_name)
         assert resolved["additionalProperties"] is False
@@ -193,9 +186,7 @@ def assert_error_schemas(
     }
 
 
-def resolve_schema_reference(
-    schemas: dict[str, Any], schema_name: str
-) -> dict[str, Any]:
+def resolve_schema_reference(schemas: dict[str, Any], schema_name: str) -> dict[str, Any]:
     schema = schemas[schema_name]
     reference = schema.get("$ref")
     if reference is None:

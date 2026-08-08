@@ -47,26 +47,6 @@ was processed.
 - **THEN** the response does not assert that a strategy was discovered or
   evaluated, or that ABI or an exchange accepted or executed any action
 
-### Requirement: Runtime reserves an internal trace hook for accepted notifications
-Strategy Runtime SHALL generate one internal trace identifier for each
-accepted closed-bar notification and SHALL currently discard it without
-propagating it into queued processing or the HTTP response.
-
-#### Scenario: Create identity before background handoff
-- **WHEN** a valid request passes readiness checks and is enqueued
-- **THEN** Runtime creates one `trace_id`, enqueues the validated
-  `CommittedBarEvent` alone, and does not place `trace_id` in the queued
-  item, the orchestration object graph, or the processing journal
-
-#### Scenario: Do not expose flow identity to MDS
-- **WHEN** Runtime accepts a closed-bar notification
-- **THEN** the HTTP response does not contain `trace_id`
-
-#### Scenario: Rejected requests have no accepted flow
-- **WHEN** Runtime rejects a request before acceptance, for any reason
-- **THEN** Runtime does not create an accepted flow or enqueue anything
-  for that request
-
 ### Requirement: Runtime reports pre-acceptance failures
 Strategy Runtime SHALL distinguish request validation, readiness,
 intake-queue-capacity, intake-stopping, and unexpected internal failures

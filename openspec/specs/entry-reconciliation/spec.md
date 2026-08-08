@@ -16,7 +16,7 @@ Runtime SHALL derive entry reconciliation only from the new
 - **THEN** reconciliation uses only
   `current_trade_cycle.applied_entry_package.applied_desired_entry` as the
   currently applied desired entry
-- **AND** does not use `desired_entry_frozen` as independent persisted state
+- **AND** does not use a separate persisted freeze flag
 
 #### Scenario: Represent no acknowledged desired entry
 - **WHEN** `current_trade_cycle` is null

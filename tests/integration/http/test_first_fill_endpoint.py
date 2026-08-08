@@ -47,7 +47,6 @@ def make_client(
 ) -> TestClient:
     app = create_http_app(
         ready=ready,
-        trace_id_factory=lambda: "trace-1",
         committed_bar_intake=None,
         process_first_fill=process_first_fill,
     )
@@ -452,7 +451,6 @@ def test_unknown_exception_is_logged_and_returns_500() -> None:
     use_case = RaisingUseCase(RuntimeError("boom"))
     app = create_http_app(
         ready=True,
-        trace_id_factory=lambda: "trace-1",
         committed_bar_intake=None,
         process_first_fill=use_case,
         logger=fake_logger,

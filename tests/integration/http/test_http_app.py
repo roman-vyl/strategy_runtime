@@ -30,15 +30,12 @@ def make_client(
     *,
     ready: bool = True,
     capacity: int = 8,
-    ids: list[str] | None = None,
     logger: RecordingLogger | None = None,
 ) -> tuple[TestClient, CommittedBarIntakeBoundary | None, RecordingLogger]:
     intake = CommittedBarIntakeBoundary(capacity) if ready else None
-    values = iter(ids or ["flow-1", "flow-2"])
     recording_logger = logger or RecordingLogger()
     app = create_http_app(
         ready=ready,
-        trace_id_factory=lambda: next(values),
         committed_bar_intake=intake,
         process_first_fill=None,
         logger=recording_logger,  # type: ignore[arg-type]
@@ -120,59 +117,12 @@ def test_malformed_json_returns_400() -> None:
         intake.get(timeout=0)
 
 
-def test_separate_requests_generate_and_discard_separate_trace_ids() -> None:
-    generated: list[str] = []
-    values = iter(["trace-a", "trace-b"])
-
-    def trace_id_factory() -> str:
-        value = next(values)
-        generated.append(value)
-        return value
-
-    intake = CommittedBarIntakeBoundary(8)
-    app = create_http_app(
-        ready=True,
-        trace_id_factory=trace_id_factory,
-        committed_bar_intake=intake,
-        process_first_fill=None,
-    )
-    client = TestClient(app)
-    payload = {"instrument": "BTCUSDT.P", "timeframe": "5m", "open_time_ms": 1}
-    assert client.post("/v1/webhooks/closed-bar", json=payload).status_code == 200
-    assert client.post("/v1/webhooks/closed-bar", json=payload).status_code == 200
-    assert generated == ["trace-a", "trace-b"]
-    assert intake.get(timeout=1) == CommittedBarEvent("BTCUSDT.P", "5m", 1)
-    assert intake.get(timeout=1) == CommittedBarEvent("BTCUSDT.P", "5m", 1)
-    with pytest.raises(queue.Empty):
-        intake.get(timeout=0)
-
-
-def test_unexpected_pre_acceptance_failure_returns_500() -> None:
-    intake = CommittedBarIntakeBoundary(8)
-    app = create_http_app(
-        ready=True,
-        trace_id_factory=lambda: (_ for _ in ()).throw(RuntimeError("boom")),
-        committed_bar_intake=intake,
-        process_first_fill=None,
-    )
-    client = TestClient(app)
-    response = client.post(
-        "/v1/webhooks/closed-bar",
-        json={"instrument": "BTCUSDT.P", "timeframe": "5m", "open_time_ms": 1},
-    )
-    assert response.status_code == 500
-    assert response.json() == {"status": "error"}
-    with pytest.raises(queue.Empty):
-        intake.get(timeout=0)
-
-
 def test_valid_request_returns_200_before_any_processing_occurs() -> None:
     """5.1: acceptance means "enqueued," not "processed" -- no orchestrator
     call, no worker, is ever touched by the HTTP layer itself."""
     intake = CommittedBarIntakeBoundary(8)
     app = create_http_app(
         ready=True,
-        trace_id_factory=lambda: "trace-1",
         committed_bar_intake=intake,
         process_first_fill=None,
     )

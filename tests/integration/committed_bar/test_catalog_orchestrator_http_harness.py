@@ -122,7 +122,6 @@ def test_fake_webhook_runs_catalog_and_orchestrator_against_bbb_like_specs(tmp_p
     try:
         app = create_http_app(
             ready=True,
-            trace_id_factory=lambda: "trace-bbb-1",
             committed_bar_intake=intake,
             process_first_fill=None,
         )

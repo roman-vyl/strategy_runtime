@@ -288,9 +288,7 @@ both as an accepted Live V1 limitation.
 - **WHEN** the production graph is constructed
 - **THEN** the shared state repository is
   `InMemoryStrategyInstanceRuntimeStateRepository`
-- **AND** `infrastructure/runtime_state/sqlite_repository.py` remains an
-  unimplemented placeholder, not a partially completed component of this
-  change
+- **AND** no durable repository implementation is composed for Live V1
 
 #### Scenario: A lost in-flight cycle is an accepted risk
 - **WHEN** Runtime terminates after acknowledging a webhook but before

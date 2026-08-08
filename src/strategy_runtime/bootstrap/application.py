@@ -231,7 +231,6 @@ def build_application(
 
         app = create_http_app(
             ready=True,
-            trace_id_factory=new_identifier,
             committed_bar_intake=committed_bar_intake,
             process_first_fill=process_first_fill,
             logger=runtime_logger,
@@ -250,7 +249,6 @@ def build_application(
         lifecycle.close_all_once()
         return create_http_app(
             ready=False,
-            trace_id_factory=new_identifier,
             committed_bar_intake=None,
             process_first_fill=None,
             logger=runtime_logger,

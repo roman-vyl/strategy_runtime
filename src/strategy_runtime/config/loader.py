@@ -42,7 +42,6 @@ def load_runtime_config(environ: Mapping[str, str] | None = None) -> RuntimeConf
         port=port,
         journal_path=Path(journal_text),
         specs_path=Path(specs_text),
-        service_instance=values.get("RUNTIME_SERVICE_INSTANCE", "local"),
         strategy_engine_base_url=strategy_engine_base_url,
         strategy_engine_timeout_seconds=strategy_engine_timeout_seconds,
         abi_base_url=abi_base_url,

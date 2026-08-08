@@ -10,3 +10,7 @@ __pycache__/
 node_modules/
 *.egg-info/
 *.zip
+.env
+.env.*
+!.env.example
+!.env.*.example

@@ -30,7 +30,6 @@ from strategy_runtime.runtime.committed_bar_intake import (
 from strategy_runtime.runtime.first_fill.errors import FirstFillInvariantError
 from strategy_runtime.runtime.state.errors import StrategyInstanceStateNotFound
 from strategy_runtime.runtime.state.models import StrategyInstanceRuntimeState
-from strategy_runtime.shared.identifiers import IdentifierFactory
 from strategy_runtime.utility.committed_bar import CommittedBarEvent
 
 FirstFillUseCase = Callable[[AbiFirstFillExecutionEvent], StrategyInstanceRuntimeState]
@@ -39,7 +38,6 @@ FirstFillUseCase = Callable[[AbiFirstFillExecutionEvent], StrategyInstanceRuntim
 def create_http_app(
     *,
     ready: bool,
-    trace_id_factory: IdentifierFactory,
     committed_bar_intake: CommittedBarIntakeBoundary | None,
     process_first_fill: FirstFillUseCase | None,
     logger: logging.Logger | None = None,
@@ -49,7 +47,6 @@ def create_http_app(
     app.state.ready = ready
     app.state.committed_bar_intake = committed_bar_intake
     app.state.process_first_fill = process_first_fill
-    app.state.trace_id_factory = trace_id_factory
     app.state.logger = logger or logging.getLogger(__name__)
 
     @app.exception_handler(RequestValidationError)
@@ -95,7 +92,6 @@ def create_http_app(
                 timeframe=request.timeframe,
                 open_time_ms=request.open_time_ms,
             )
-            _trace_id = app.state.trace_id_factory()
             app.state.committed_bar_intake.put_nowait(committed_bar)
         except IntakeNotAccepting:
             app.state.logger.warning(
