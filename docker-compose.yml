@@ -19,9 +19,9 @@ services:
       RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY: ${RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY:-256}
     volumes:
       - type: bind
-        source: ${BBB_DATA_ROOT}/strategy-runtime/specs
+        source: ${BBB_DATA_ROOT:?BBB_DATA_ROOT must be set}/strategy-runtime/specs
         target: /runtime/specs
         read_only: true
       - type: bind
-        source: ${BBB_DATA_ROOT}/strategy-runtime/journal
+        source: ${BBB_DATA_ROOT:?BBB_DATA_ROOT must be set}/strategy-runtime/journal
         target: /runtime/journal
