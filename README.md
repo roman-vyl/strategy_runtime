@@ -318,7 +318,19 @@ npm exec -- openspec validate --all --strict
 
 Single-container Runtime packaging uses the existing `strategy-runtime`
 production entrypoint and keeps the V1 topology unchanged: one process,
-one Uvicorn server, one committed-bar worker, one replica.
+one Uvicorn server, one committed-bar worker, one replica. The image runs
+`strategy-runtime` directly as PID 1 (no shell, no supervisor), as a
+non-root `strategy-runtime` user, and defaults `RUNTIME_HOST=0.0.0.0` so
+the process listens on all interfaces inside the container — publishing
+stays restricted to the loopback interface on the host side
+(`127.0.0.1:8093:8093`). Strategy Engine and ABI base URLs are read only
+from Runtime environment configuration; this repository builds and runs
+only the Strategy Runtime container, never Engine, ABI, or MDS.
+
+The container is designed to run with `--read-only` (or Compose's
+`read_only: true`): the only writable path it needs is the
+`RUNTIME_JOURNAL_PATH` mount for the processing journal.
+`RUNTIME_SPECS_PATH` is read-only.
 
 Example build:
 
@@ -330,9 +342,8 @@ Example run:
 
 ```bash
 docker run --rm \
-  -p 8093:8093 \
-  -e RUNTIME_HOST=0.0.0.0 \
-  -e RUNTIME_PORT=8093 \
+  --read-only \
+  -p 127.0.0.1:8093:8093 \
   -e RUNTIME_SPECS_PATH=/runtime/specs \
   -e RUNTIME_JOURNAL_PATH=/runtime/journal/runtime.jsonl \
   -e RUNTIME_STRATEGY_ENGINE_BASE_URL=http://engine:8094 \
@@ -347,14 +358,41 @@ docker run --rm \
   strategy-runtime:local
 ```
 
+`RUNTIME_HOST` and `RUNTIME_PORT` are omitted above because the image
+already defaults them to `0.0.0.0`/`8093`; only override them if a
+non-default in-container bind is genuinely needed.
+
+Or with Compose (see [`docker-compose.yml`](docker-compose.yml)):
+
+```bash
+RUNTIME_STRATEGY_ENGINE_BASE_URL=http://engine:8094 \
+RUNTIME_ABI_BASE_URL=http://abi:8095 \
+docker compose up --build
+```
+
+The bundled compose file runs only the Runtime service — no Engine, ABI,
+or MDS containers. It publishes `127.0.0.1:8093:8093`, sets
+`read_only: true`, mounts `./var/specs` read-only and `./var/journal`
+writable, and reads Engine/ABI URLs from the shell environment (with
+local-loopback defaults for `docker compose up` without any override).
+
 Container mount contract:
 
 - `RUNTIME_SPECS_PATH` should point at a mounted directory of deployment
   JSON files and is intended to be read-only.
 - `RUNTIME_JOURNAL_PATH` should point at a writable mounted path so the
-  JSONL processing journal survives container removal.
+  JSONL processing journal survives container removal, recreate, and
+  restart — as long as the same host path (or named volume) is reused.
+- No other writable filesystem path is required; the container runs
+  correctly with a read-only root filesystem plus these two mounts.
 - `/health/live` and `/health/ready` remain the container-facing probes;
-  the image healthcheck uses `/health/ready`.
+  the image healthcheck uses `/health/ready`, matching the existing
+  readiness semantics — no separate Docker-only health contract is
+  introduced.
+- The container's main process receives `SIGTERM` directly (no shell or
+  supervisor is interposed) and shuts down through the existing lifespan
+  sequence: stop accepting new intake, drain the worker, close outbound
+  HTTP clients.
 
 ## Карта репозитория
 
