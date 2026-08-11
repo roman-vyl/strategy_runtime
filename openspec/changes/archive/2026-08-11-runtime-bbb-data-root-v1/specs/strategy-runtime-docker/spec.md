@@ -18,6 +18,10 @@ change container-internal paths, does not make strategy-instance state
 durable, and does not change processing-journal semantics — it relocates
 only where the two existing mount sources live on the host.
 
+Compose SHALL require `BBB_DATA_ROOT` to be set, failing closed with no
+empty-path substitution when it is not — the same fail-closed convention
+already applied to ABI's Compose configuration.
+
 #### Scenario: Specs mount is read-only
 - **WHEN** the container is run with `RUNTIME_SPECS_PATH` mounted
   read-only
@@ -63,6 +67,14 @@ only where the two existing mount sources live on the host.
 - **AND** any remaining `./var/specs`/`./var/journal` path in the
   repository is understood as a local, non-Docker development default
   only
+
+#### Scenario: Missing BBB_DATA_ROOT fails Compose closed
+- **WHEN** `docker compose config` (or any Compose invocation) resolves
+  `docker-compose.yml` with `BBB_DATA_ROOT` unset
+- **THEN** Compose exits non-zero
+- **AND** the error message explicitly states `BBB_DATA_ROOT must be set`
+- **AND** no empty-path substitution for either mount `source` is
+  produced
 
 #### Scenario: No change to durability or journal semantics
 - **WHEN** the host-side mount source changes to the BBB data root
