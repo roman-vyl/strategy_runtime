@@ -1,0 +1,27 @@
+services:
+  strategy-runtime:
+    build: .
+    image: strategy-runtime:local
+    read_only: true
+    ports:
+      - "127.0.0.1:8093:8093"
+    environment:
+      RUNTIME_HOST: "0.0.0.0"
+      RUNTIME_PORT: "8093"
+      RUNTIME_SPECS_PATH: /runtime/specs
+      RUNTIME_JOURNAL_PATH: /runtime/journal/runtime.jsonl
+      RUNTIME_STRATEGY_ENGINE_BASE_URL: ${RUNTIME_STRATEGY_ENGINE_BASE_URL:-http://engine:8094}
+      RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS: ${RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS:-5}
+      RUNTIME_ABI_BASE_URL: ${RUNTIME_ABI_BASE_URL:-http://abi:8095}
+      RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS: ${RUNTIME_ABI_OPEN_POSITION_TIMEOUT_SECONDS:-5}
+      RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS: ${RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS:-5}
+      RUNTIME_ABI_POSITION_MANAGEMENT_TIMEOUT_SECONDS: ${RUNTIME_ABI_POSITION_MANAGEMENT_TIMEOUT_SECONDS:-5}
+      RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY: ${RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY:-256}
+    volumes:
+      - type: bind
+        source: ./var/specs
+        target: /runtime/specs
+        read_only: true
+      - type: bind
+        source: ./var/journal
+        target: /runtime/journal
