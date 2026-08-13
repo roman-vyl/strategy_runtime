@@ -1085,7 +1085,7 @@ class TestTypedBranchAndErrorBoundary:
         # (300_000) so the post-freeze temporal guard does not short-circuit
         # before reaching position management, which is what this test covers.
         unit = replace(
-            _processing_unit(), committed_bar=CommittedBarEvent("BTCUSDT.P", "5m", 300_950)
+            _processing_unit(), committed_bar=CommittedBarEvent("BTCUSDT.P", "5m", 300_000)
         )
         repo = _FakeRepository(state)
         router = MagicMock(
@@ -1433,12 +1433,13 @@ class TestTypedBranchAndErrorBoundary:
 
 class TestPostFreezeTemporalGuard:
     """ABI can report an open position whose first fill lands on a bar
-    strictly newer than the committed bar currently being processed (e.g. a
-    stale/out-of-order webhook, or ABI racing ahead of the committed-bar
-    stream). The freeze must still be saved truthfully so the next genuine
-    webhook sees it, but this processing unit must stop before the
-    router/Engine and before position management - there is no chronologically
-    valid open-trade case to route yet."""
+    strictly newer than the committed bar currently being processed:
+    processing lag can leave the ABI exchange state already ahead of the
+    committed bar Runtime is still working through. The freeze must still
+    be saved truthfully so the next genuine webhook sees it, but this
+    processing unit must stop before the router/Engine and before position
+    management - there is no chronologically valid open-trade case to route
+    yet."""
 
     _TARGET_BAR_OPEN_TIME_MS = 1_786_633_800_000
     _FIRST_FILL_AT_MS = 1_786_634_141_858

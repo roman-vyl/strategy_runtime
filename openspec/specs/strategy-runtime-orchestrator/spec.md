@@ -49,8 +49,10 @@ state return.
 - **THEN** it calls
   `StrategyInstanceRuntimeStateRepository.get_or_create(...)` exactly once
 - **AND** passes that returned state to the open-position resolver exactly once
-- **AND** passes the original processing unit and resolved state to
-  `StrategyUseCaseRouter` exactly once
+- **AND**, for a temporally eligible processing unit (see "Runtime applies
+  the first-fill transition before routing an open position"), passes the
+  original processing unit and resolved state to `StrategyUseCaseRouter`
+  exactly once
 - **AND** receives the router's typed Strategy Engine projection before
   selecting a post-projection branch
 
@@ -142,19 +144,32 @@ strategy-instance IDs differ.
 ### Requirement: Runtime applies the first-fill transition before routing an open position
 For a resolved open position, `StrategyRuntimeOrchestrator.process(...)`
 SHALL apply the existing first-fill transition inside the already-held
-keyed critical section before calling `StrategyUseCaseRouter`. A later
-router or Engine failure SHALL NOT revert an already-saved result of this
-transition.
+keyed critical section before evaluating whether to call
+`StrategyUseCaseRouter`. A later router or Engine failure SHALL NOT revert
+an already-saved result of this transition.
+
+After the first-fill transition, the orchestrator SHALL compare the
+resolved position's `frozen_entry_context.entry_bar_open_time_ms` with the
+current processing unit's committed-bar `open_time_ms` before calling
+`StrategyUseCaseRouter`. A processing unit is temporally eligible for
+routing only when `entry_bar_open_time_ms` is not after the committed
+bar's `open_time_ms`; ABI processing lag can otherwise leave the ABI
+exchange state already ahead of the committed bar Runtime is still
+working through.
 
 #### Scenario: A changed transition result is saved and routed
 - **WHEN** the transition produces a changed state for the resolved open
   position
+- **AND** the resulting `entry_bar_open_time_ms` is not after the current
+  processing unit's committed-bar `open_time_ms`
 - **THEN** the orchestrator saves that state through the repository before
   calling the router
 - **AND** the router receives the saved state
 
 #### Scenario: An unchanged transition result is not saved
 - **WHEN** the transition returns its input state unchanged
+- **AND** the existing `entry_bar_open_time_ms` is not after the current
+  processing unit's committed-bar `open_time_ms`
 - **THEN** the orchestrator does not call repository `save(...)`
 - **AND** routing proceeds with the unchanged resolved state
 
@@ -162,6 +177,24 @@ transition.
 - **WHEN** the transition raises
 - **THEN** that failure propagates out of `process(...)`
 - **AND** the router is not called and no save occurs
+
+#### Scenario: A frozen entry bar newer than the committed bar defers routing
+- **WHEN** the resolved position is open
+- **AND** the first-fill transition (existing or freshly applied) leaves
+  `frozen_entry_context.entry_bar_open_time_ms` strictly after the current
+  processing unit's committed-bar `open_time_ms`
+- **THEN** the truthful frozen first-fill state remains saved exactly as the
+  transition left it
+- **AND** `StrategyUseCaseRouter` is not called for this processing unit
+- **AND** neither Strategy Engine projection is invoked
+- **AND** the post-projection nested operation
+  (`EntryReconciliationOrchestrator` or `PositionManagementOrchestrator`) is
+  not invoked
+- **AND** `process(...)` completes successfully and returns the current
+  `StrategyInstanceRuntimeState`
+- **AND** a later processing unit whose committed-bar `open_time_ms` reaches
+  or passes `entry_bar_open_time_ms` resumes ordinary routing without any
+  special handling
 
 ### Requirement: Runtime dispatches post-Engine results by supported typed projection variant
 After the router returns, `StrategyRuntimeOrchestrator` SHALL select behavior
