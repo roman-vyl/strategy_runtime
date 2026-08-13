@@ -69,6 +69,12 @@ class StrategyRuntimeOrchestrator:
             resolved = self._open_position_resolver.resolve(state)
             if resolved.position_open:
                 resolved = self._ensure_first_fill_frozen(resolved)
+                current_cycle = resolved.runtime_state.current_trade_cycle
+                assert current_cycle is not None
+                frozen_context = current_cycle.frozen_entry_context
+                assert frozen_context is not None
+                if frozen_context.entry_bar_open_time_ms > unit.committed_bar.open_time_ms:
+                    return resolved.runtime_state
             projection = self._use_case_router.route(
                 PositionResolvedStrategyInstance(unit, resolved)
             )
