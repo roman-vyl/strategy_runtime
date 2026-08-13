@@ -615,7 +615,10 @@ def test_open_trade_noop_succeeds_after_frozen_first_fill(
         assert state_after_apply.current_trade_cycle is not None
         assert state_after_apply.current_trade_cycle.frozen_entry_context is None
 
-        second = _post_closed_bar(client, 2)
+        # The committed bar driving cycle 2 must be at/after the frozen
+        # entry_bar_open_time_ms (1_720_000_200_000) so the post-freeze
+        # temporal guard lets this genuinely later webhook reach the router.
+        second = _post_closed_bar(client, 1_720_000_200_000)
         assert second.status_code == 200
 
         state_after_open_trade = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
@@ -681,7 +684,9 @@ def test_open_trade_apply_protection_saves_verified_confirmation(
     with TestClient(app) as client:
         assert _post_closed_bar(client, 1).status_code == 200
         save_calls.clear()
-        assert _post_closed_bar(client, 2).status_code == 200
+        # At/after the frozen entry_bar_open_time_ms (1_720_000_200_000) so
+        # the post-freeze temporal guard lets this webhook reach the router.
+        assert _post_closed_bar(client, 1_720_000_200_000).status_code == 200
 
         state = repository.get(_STRATEGY_INSTANCE_ID)
         assert state is not None
@@ -721,7 +726,9 @@ def test_open_trade_close_position_clears_cycle_after_verified_confirmation(
 
     with TestClient(app) as client:
         assert _post_closed_bar(client, 1).status_code == 200
-        assert _post_closed_bar(client, 2).status_code == 200
+        # At/after the frozen entry_bar_open_time_ms (1_720_000_200_000) so
+        # the post-freeze temporal guard lets this webhook reach the router.
+        assert _post_closed_bar(client, 1_720_000_200_000).status_code == 200
 
         state = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
         assert state is not None
@@ -765,7 +772,9 @@ def test_position_management_failure_preserves_first_fill_freeze(
     with TestClient(app) as client:
         assert _post_closed_bar(client, 1).status_code == 200
         save_calls.clear()
-        response = _post_closed_bar(client, 2)
+        # At/after the frozen entry_bar_open_time_ms (1_720_000_200_000) so
+        # the post-freeze temporal guard lets this webhook reach the router.
+        response = _post_closed_bar(client, 1_720_000_200_000)
         assert response.status_code == 200
         assert response.json() == {"status": "accepted"}
 

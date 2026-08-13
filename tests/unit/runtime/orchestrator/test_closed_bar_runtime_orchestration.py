@@ -1081,7 +1081,12 @@ class TestTypedBranchAndErrorBoundary:
     def test_position_management_failure_preserves_first_fill_freeze_only(self) -> None:
         state = _open_trade_state(frozen=False)
         resolved = _resolved_state(position_open=True, state=state, first_fill_at_ms=300_950)
-        unit = _processing_unit()
+        # committed_bar must be at/after the resulting entry_bar_open_time_ms
+        # (300_000) so the post-freeze temporal guard does not short-circuit
+        # before reaching position management, which is what this test covers.
+        unit = replace(
+            _processing_unit(), committed_bar=CommittedBarEvent("BTCUSDT.P", "5m", 300_000)
+        )
         repo = _FakeRepository(state)
         router = MagicMock(
             route=MagicMock(
@@ -1419,6 +1424,165 @@ class TestTypedBranchAndErrorBoundary:
 
         assert result.failed_count == 1
         assert result.outcomes[0].error_code == "strategy_cycle_dispatch_failed"
+
+
+# ---------------------------------------------------------------------------
+# 7. Post-freeze temporal guard (Live V1 blocker regression)
+# ---------------------------------------------------------------------------
+
+
+class TestPostFreezeTemporalGuard:
+    """ABI can report an open position whose first fill lands on a bar
+    strictly newer than the committed bar currently being processed:
+    processing lag can leave the ABI exchange state already ahead of the
+    committed bar Runtime is still working through. The freeze must still
+    be saved truthfully so the next genuine webhook sees it, but this
+    processing unit must stop before the router/Engine and before position
+    management - there is no chronologically valid open-trade case to route
+    yet."""
+
+    _TARGET_BAR_OPEN_TIME_MS = 1_786_633_800_000
+    _FIRST_FILL_AT_MS = 1_786_634_141_858
+    _ENTRY_BAR_OPEN_TIME_MS = 1_786_634_100_000
+
+    def _unit_at(self, open_time_ms: int) -> StrategyBarProcessingUnit[DeploymentSpecification]:
+        return replace(
+            _processing_unit(),
+            committed_bar=CommittedBarEvent("BTCUSDT.P", "5m", open_time_ms),
+        )
+
+    def test_entry_after_target_freezes_and_stops_before_router_and_engine(self) -> None:
+        """Real regression case: entry_bar_open_time_ms (1_786_634_100_000)
+        is after target_bar_open_time_ms (1_786_633_800_000). Router, Engine,
+        and position management must never be invoked; dispatch still
+        succeeds and the truthful freeze is saved."""
+        state = _open_trade_state(frozen=False)
+        resolved = _resolved_state(
+            position_open=True, state=state, first_fill_at_ms=self._FIRST_FILL_AT_MS
+        )
+        unit = self._unit_at(self._TARGET_BAR_OPEN_TIME_MS)
+        repo = _FakeRepository(state)
+        router = MagicMock()
+        position_management_orchestrator = MagicMock()
+
+        orch = StrategyRuntimeOrchestrator(
+            state_repository=repo,
+            open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
+            use_case_router=router,
+            keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=position_management_orchestrator,
+            entry_reconciliation_orchestrator=MagicMock(),
+        )
+
+        outcome = orch.dispatch(unit)
+
+        assert outcome.status.value == "succeeded"
+        router.route.assert_not_called()
+        position_management_orchestrator.execute.assert_not_called()
+        assert len(repo.save_calls) == 1
+        frozen_context = repo.save_calls[0].current_trade_cycle.frozen_entry_context
+        assert frozen_context is not None
+        assert frozen_context.entry_bar_open_time_ms == self._ENTRY_BAR_OPEN_TIME_MS
+        assert frozen_context.first_fill_at_ms == self._FIRST_FILL_AT_MS
+
+    def test_entry_equal_target_routes_normally(self) -> None:
+        state = _open_trade_state(frozen=False)
+        resolved = _resolved_state(
+            position_open=True, state=state, first_fill_at_ms=self._FIRST_FILL_AT_MS
+        )
+        unit = self._unit_at(self._ENTRY_BAR_OPEN_TIME_MS)
+        repo = _FakeRepository(state)
+        desired_protection = DesiredProtection("98", "103")
+        router = MagicMock(
+            route=MagicMock(
+                side_effect=lambda item: _open_trade_projection(
+                    item, desired_protection=desired_protection
+                )
+            )
+        )
+        port = _FakePositionManagementExecutionPort(
+            protection_confirmation=ProtectionAppliedConfirmation(
+                _SID, "cycle-1", desired_protection
+            )
+        )
+
+        orch = StrategyRuntimeOrchestrator(
+            state_repository=repo,
+            open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
+            use_case_router=router,
+            keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=PositionManagementOrchestrator(port),
+            entry_reconciliation_orchestrator=MagicMock(),
+        )
+
+        orch.process(unit)
+
+        router.route.assert_called_once()
+        assert len(port.apply_calls) == 1
+
+    def test_entry_before_target_routes_normally(self) -> None:
+        state = _open_trade_state(frozen=False)
+        resolved = _resolved_state(
+            position_open=True, state=state, first_fill_at_ms=self._FIRST_FILL_AT_MS
+        )
+        unit = self._unit_at(self._ENTRY_BAR_OPEN_TIME_MS + 300_000)
+        repo = _FakeRepository(state)
+        desired_protection = DesiredProtection("98", "103")
+        router = MagicMock(
+            route=MagicMock(
+                side_effect=lambda item: _open_trade_projection(
+                    item, desired_protection=desired_protection
+                )
+            )
+        )
+        port = _FakePositionManagementExecutionPort(
+            protection_confirmation=ProtectionAppliedConfirmation(
+                _SID, "cycle-1", desired_protection
+            )
+        )
+
+        orch = StrategyRuntimeOrchestrator(
+            state_repository=repo,
+            open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
+            use_case_router=router,
+            keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=PositionManagementOrchestrator(port),
+            entry_reconciliation_orchestrator=MagicMock(),
+        )
+
+        orch.process(unit)
+
+        router.route.assert_called_once()
+        assert len(port.apply_calls) == 1
+
+    def test_closed_position_flow_unaffected_by_guard(self) -> None:
+        """When ABI reports the position closed, the guard branch never
+        runs at all (it lives inside `if resolved.position_open:`) - routing
+        proceeds exactly as before regardless of the committed bar's
+        timing."""
+        state = _open_trade_state(frozen=False)
+        resolved = _resolved_state(position_open=False, state=state)
+        unit = self._unit_at(500)
+        repo = _FakeRepository(state)
+        projection = LiveEntryProjectedStrategyInstance(
+            PositionResolvedStrategyInstance(unit, resolved), _desired_entry()
+        )
+        entry_orch = MagicMock(execute=MagicMock(return_value=state))
+
+        orch = StrategyRuntimeOrchestrator(
+            state_repository=repo,
+            open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
+            use_case_router=MagicMock(route=MagicMock(return_value=projection)),
+            keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=MagicMock(),
+            entry_reconciliation_orchestrator=entry_orch,
+        )
+
+        result = orch.process(unit)
+
+        entry_orch.execute.assert_called_once_with(projection)
+        assert result is state
+        assert repo.save_calls == []
 
 
 # ---------------------------------------------------------------------------
