@@ -24,9 +24,11 @@ redelivery of closed bars, and MDS catch-up remain non-durable and out of scope.
   snapshot before Runtime reports ready, with no ABI- or Engine-derived
   reconstruction;
 - validate every replayed record against the full state schema; fail closed
-  on a corrupt record found before the last line, while tolerating exactly
-  one case — a truncated final line left by a crash mid-append — by discarding
-  it and keeping that key's last complete prior snapshot;
+  on any record that parses as valid JSON but fails schema/domain
+  validation — regardless of its position, including the last line — while
+  tolerating exactly one case — the *last* line failing to parse as JSON at
+  all, a truncated write left by a crash mid-append — by discarding it and
+  keeping that key's last complete prior snapshot;
 - keep `processing_journal` a separate, still-best-effort observability file;
   this durable store is a different file with different correctness semantics
   and is never recovered from journal content;
@@ -39,10 +41,13 @@ redelivery of closed bars, and MDS catch-up remain non-durable and out of scope.
   `InMemoryStrategyInstanceRuntimeStateRepository` to
   `JsonlStrategyInstanceRuntimeStateRepository`; keep the in-memory
   implementation for tests and other explicitly ephemeral compositions;
-- add `RUNTIME_STATE_PATH` configuration and a third writable Docker mount,
-  sourced from `${BBB_DATA_ROOT}/strategy-runtime/state`, alongside the
-  existing read-only specs mount and writable journal mount, compatible with
-  a read-only container root filesystem;
+- add `RUNTIME_STATE_PATH` configuration — a file path, e.g.
+  `/runtime/state/runtime_state.jsonl`, not a mount directory — and a third
+  writable Docker mount *directory*, `/runtime/state`, sourced from host
+  directory `${BBB_DATA_ROOT}/strategy-runtime/state`, symmetric with how
+  `RUNTIME_JOURNAL_PATH=/runtime/journal/runtime.jsonl` names a file inside
+  the existing `/runtime/journal` mount; alongside the existing read-only
+  specs mount, compatible with a read-only container root filesystem;
 - scope V1 to a single Runtime process/writer, with no distributed
   coordination, compare-and-swap, or multi-replica contract;
 - scope V1 to append-only growth, with no rotation, compaction, or retention;
@@ -61,14 +66,22 @@ redelivery of closed bars, and MDS catch-up remain non-durable and out of scope.
 ### Modified Capabilities
 
 - `runtime-production-composition`: production composition selects the
-  durable file-backed repository instead of the in-memory repository; the
-  existing "non-durable Live V1 limitation" requirement no longer holds for
-  strategy-instance state (it still holds for the committed-bar intake
-  queue, which stays in scope of that capability, unchanged).
-- `strategy-runtime-docker`: adds the third writable `RUNTIME_STATE_PATH`
-  mount sourced from `${BBB_DATA_ROOT}/strategy-runtime/state`; removes the
-  existing "no other writable path" and "state remains non-durable, lost on
-  restart" claims, which this change makes false.
+  durable file-backed repository instead of the in-memory repository. The
+  existing "Non-durable Live V1 limitation is accepted, not open"
+  requirement no longer holds as written for strategy-instance state, so it
+  is removed and replaced — via REMOVED + ADDED, since narrowing it in
+  place would force-keep or silently drop scenario names whose asserted
+  outcome this change makes false — by a requirement scoping that
+  acceptance to the committed-bar intake queue only, plus a new requirement
+  gating `ready=True` on successful durable-state replay.
+- `strategy-runtime-docker`: adds the third writable `/runtime/state` mount
+  directory (sourced from `${BBB_DATA_ROOT}/strategy-runtime/state`),
+  backing `RUNTIME_STATE_PATH=/runtime/state/runtime_state.jsonl`; removes
+  the existing "state remains non-durable, lost on restart" claim, which
+  this change makes false; renames the requirement whose title claimed "one
+  writable journal mount, no other writable path" — via REMOVED + ADDED,
+  since the rename also changes its body — to a title that accounts for the
+  new writable state mount.
 
 ## Impact
 

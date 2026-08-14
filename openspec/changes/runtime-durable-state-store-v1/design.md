@@ -37,8 +37,10 @@ future implementation.
   serialize → append → flush → `fsync` → return.
 - Recover the latest valid snapshot per `strategy_instance_id` from the file
   on startup, before Runtime reports ready.
-- Fail closed on file corruption, except a truncated final line from a
-  crash mid-append, which is discarded in favor of the prior snapshot.
+- Fail closed on file corruption — a syntactically valid but schema/domain
+  -invalid record always fails closed, regardless of position — except a
+  syntactically truncated (unparsable) final line from a crash mid-append,
+  which is discarded in favor of the prior snapshot.
 - Wire the durable repository into production composition in place of the
   in-memory one; add `RUNTIME_STATE_PATH` and its Docker mount.
 
@@ -130,24 +132,33 @@ semantics unchanged, so this change adds a durability layer underneath
 proven logic instead of re-deriving get/save behavior. Every read after
 startup is an in-memory lookup — no per-call file read.
 
-### Replay validates every record; only a genuinely last, unparsable/invalid line is tolerated
+### Replay validates every record; only a syntactically truncated last line is tolerated
 
-Replay reads the file sequentially. For each line except the last: a JSON
-parse failure or a domain/schema validation failure (the same
+Replay reads the file sequentially. A JSON parse failure on any line other
+than the last aborts startup — Runtime does not reach `ready=True`. A JSON
+parse failure on the last line only is tolerated: it is discarded (logged
+as a recovered truncated tail) and replay proceeds using whatever prior
+valid record that key already had. Separately, a line that parses as
+syntactically valid JSON but fails domain/schema validation (the same
 `StrategyInstanceRuntimeState`/`RegisteredSpecSnapshot`/`CurrentTradeCycle`
-validation `__post_init__` already enforces) aborts startup — Runtime does
-not reach `ready=True`. For the last line only: if it fails to parse or
-fails validation, it is discarded (logged as a recovered truncated tail)
-and replay proceeds using whatever prior valid record that key already had.
-A last line that parses and validates successfully is applied normally,
-with no special leniency.
+validation `__post_init__` already enforces) always aborts startup — this
+holds for every line, including the last one; syntactic validity earns no
+leniency for domain-invalid content.
 
-**Rationale:** directly implements the proposal's integrity guarantee — a
-crash mid-`write()` can only ever leave a partial *final* line, because
-appends are sequential and each prior append already completed its own
-`fsync`. Any corruption earlier than the last line cannot be explained by
-that one benign failure mode and must fail closed rather than silently
-drop history.
+**Rationale:** a crash mid-`write()` can only ever leave a partial *final*
+line that fails to parse as JSON, because appends are sequential and each
+prior append already completed its own `fsync`. A line that *does* parse as
+valid JSON but fails domain validation is not explained by that failure
+mode at all — its physical write did complete — so it is a real corruption
+regardless of where in the file it appears, and must fail closed the same
+as any other line.
+
+**Alternative considered:** also tolerating a validation failure on the
+last line (treating any last-line problem as a possible crash artifact).
+Rejected — a crash mid-append cannot produce well-formed-but-invalid JSON;
+that outcome indicates a genuine bug or external corruption, exactly what
+fail-closed handling exists to catch. Widening tolerance to it would let a
+real defect silently discard a saved state instead of surfacing it.
 
 **Alternative considered:** best-effort replay that skips any bad line
 anywhere in the file. Rejected — this is the exact lenient-journal-replay
@@ -194,11 +205,19 @@ adapter selection in this codebase.
 a new `prepare_state_path` startup function, mirroring
 `journal_path`/`RUNTIME_JOURNAL_PATH`/`prepare_journal_path` field-for-field
 (non-empty path, parent directory created, must identify a file, opened in
-append mode once at startup to prove writability). Docker/Compose add a
-third writable bind mount, `RUNTIME_STATE_PATH` → `/runtime/state`, sourced
-from `${BBB_DATA_ROOT}/strategy-runtime/state`, alongside the existing
-read-only specs mount and writable journal mount — still compatible with
-`--read-only` / `read_only: true` on the container root filesystem.
+append mode once at startup to prove writability), with a local-dev default
+of `var/state/runtime_state.jsonl` (matching the existing
+`var/journal/runtime.jsonl` default).
+
+`RUNTIME_STATE_PATH` names a *file*, not a mount directory — exactly like
+`RUNTIME_JOURNAL_PATH=/runtime/journal/runtime.jsonl` already names a file
+inside the `/runtime/journal` mount, not the mount itself. Docker/Compose
+add a third writable bind mount *directory*, `/runtime/state`, sourced from
+`${BBB_DATA_ROOT}/strategy-runtime/state`; the container's
+`RUNTIME_STATE_PATH` is set to `/runtime/state/runtime_state.jsonl`, a file
+inside that mount — alongside the existing read-only specs mount and
+writable journal mount, still compatible with `--read-only` /
+`read_only: true` on the container root filesystem.
 
 **Rationale:** this is the only precedent in the codebase for "one
 writable, persistent, host-mounted JSONL path," so reusing its exact shape

@@ -86,28 +86,41 @@ any `get_or_create`, `get`, or `save` call.
 - **THEN** replay completes with an empty in-memory index
 - **AND** no error is raised solely because no prior records exist
 
-### Requirement: Replay fails closed on corrupted state, except a truncated final line
-Replay SHALL validate every line against
-`StrategyInstanceRuntimeState`'s full schema and domain validation. A line
-other than the file's last line that fails to parse or fails validation
-SHALL abort replay with a fail-closed error. The file's last line, and only
-the last line, MAY fail to parse or fail validation and still be
-tolerated — as a truncated write left by a crash mid-append — by
-discarding it and keeping the prior valid record for that key, if any.
+### Requirement: Replay fails closed on corrupted state, except a syntactically truncated final line
+Replay SHALL validate every line's JSON syntax and, for syntactically valid
+lines, SHALL validate the record against `StrategyInstanceRuntimeState`'s
+full envelope/schema/domain validation. A line other than the file's last
+line that fails to parse as JSON SHALL abort replay with a fail-closed
+error. The file's last line, and only the last line, MAY fail to parse as
+JSON and still be tolerated — as a truncated write left by a crash
+mid-append — by discarding it and keeping the prior valid record for that
+key, if any. A line that parses as syntactically valid JSON but fails
+envelope/schema/domain validation SHALL always abort replay with a
+fail-closed error, regardless of its position in the file — including the
+last line; syntactic validity does not earn leniency for domain-invalid
+content.
 
-#### Scenario: A corrupted record before the last line fails closed
-- **WHEN** a line other than the last line cannot be parsed as JSON or does
-  not satisfy `StrategyInstanceRuntimeState` validation
+#### Scenario: A JSON parse failure before the last line fails closed
+- **WHEN** a line other than the last line cannot be parsed as JSON
 - **THEN** replay raises a fail-closed error
 - **AND** the repository does not become ready to serve requests
 
-#### Scenario: A truncated last line is discarded, not fatal
-- **WHEN** the file's last line cannot be parsed as JSON or does not satisfy
-  validation, and every prior line replayed successfully
+#### Scenario: A syntactically truncated last line is discarded, not fatal
+- **WHEN** the file's last line cannot be parsed as JSON, and every prior
+  line replayed successfully
 - **THEN** replay discards that last line
 - **AND** the affected key's state is whatever its last valid prior record
   was — null if it had none
 - **AND** replay otherwise completes successfully
+
+#### Scenario: A schema/domain validation failure fails closed regardless of position
+- **WHEN** any line, including the last line, parses as syntactically valid
+  JSON but does not satisfy `StrategyInstanceRuntimeState` envelope/schema
+  or domain validation — a missing required field, wrong type, or invalid
+  decimal text
+- **THEN** replay raises a fail-closed error
+- **AND** the repository does not become ready to serve requests — this
+  holds even when the failing line is the file's last line
 
 #### Scenario: A fully valid last line is applied normally
 - **WHEN** the file's last line parses and validates successfully

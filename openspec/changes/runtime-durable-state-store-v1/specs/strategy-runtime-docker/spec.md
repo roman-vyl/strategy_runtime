@@ -1,6 +1,21 @@
-## MODIFIED Requirements
+## REMOVED Requirements
 
 ### Requirement: Read-only specs mount, one writable journal mount, no other writable path
+**Reason**: This title asserted exactly one writable mount ("no other
+writable path"). This change adds a second writable mount
+(`RUNTIME_STATE_PATH`, for durable strategy-instance state), which makes
+that title false — a MODIFIED requirement cannot change its own header
+text, so the requirement is removed and replaced rather than renamed in
+place.
+**Migration**: See the added requirement "Read-only specs mount, writable
+journal and durable state mounts, no other writable path" below, which
+carries the complete updated three-mount contract (read-only specs,
+writable journal, writable durable state) forward, unchanged in substance
+from this requirement's journal/specs behavior.
+
+## ADDED Requirements
+
+### Requirement: Read-only specs mount, writable journal and durable state mounts, no other writable path
 The container SHALL treat `RUNTIME_SPECS_PATH` as a read-only mount,
 `RUNTIME_JOURNAL_PATH` as one writable, persistent mount, and
 `RUNTIME_STATE_PATH` as a second writable, persistent mount for the
@@ -79,6 +94,10 @@ already applied to ABI's Compose configuration.
   `${BBB_DATA_ROOT}/strategy-runtime/state` and is writable
 - **AND** all three mounts' `target` values remain `/runtime/specs`,
   `/runtime/journal`, and `/runtime/state` respectively
+- **AND** `RUNTIME_STATE_PATH` is set to a file path inside the state
+  mount target (`/runtime/state/runtime_state.jsonl`), not the bare mount
+  target directory — mirroring `RUNTIME_JOURNAL_PATH` naming a file
+  (`/runtime/journal/runtime.jsonl`) inside the journal mount target
 
 #### Scenario: Repository-local ./var is not production/local Compose storage
 - **WHEN** `docker-compose.yml` and the README `## Docker` section are
