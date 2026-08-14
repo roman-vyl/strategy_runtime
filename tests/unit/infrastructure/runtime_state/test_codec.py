@@ -164,3 +164,83 @@ def test_decode_does_not_restrict_keys_inside_raw_spec() -> None:
 
     assert decoded.registered_spec_snapshot.raw_spec["anything_goes"]["nested"] == (1, 2, 3)
     assert decoded.registered_spec_snapshot.raw_spec["another_field"] is True
+
+
+# ---------------------------------------------------------------------------
+# A record is a complete snapshot: a nullable field must still be present
+# with an explicit JSON `null`. Omitting the key entirely is a schema
+# violation, not an implicit null -- `.get(...)` must never paper over it.
+# ---------------------------------------------------------------------------
+
+
+def test_decode_rejects_missing_current_trade_cycle_key() -> None:
+    envelope = json.loads(encode_state_line(_bare_state()))
+    assert envelope["current_trade_cycle"] is None
+    del envelope["current_trade_cycle"]
+
+    with pytest.raises(StateRecordDecodeError):
+        decode_state_line(json.dumps(envelope))
+
+
+def test_decode_rejects_missing_frozen_entry_context_key() -> None:
+    envelope = json.loads(encode_state_line(_complete_state()))
+    del envelope["current_trade_cycle"]["frozen_entry_context"]
+
+    with pytest.raises(StateRecordDecodeError):
+        decode_state_line(json.dumps(envelope))
+
+
+def test_decode_rejects_missing_latest_confirmed_management_protection_key() -> None:
+    envelope = json.loads(encode_state_line(_complete_state()))
+    del envelope["current_trade_cycle"]["latest_confirmed_management_protection"]
+
+    with pytest.raises(StateRecordDecodeError):
+        decode_state_line(json.dumps(envelope))
+
+
+def test_decode_rejects_missing_take_price_key() -> None:
+    envelope = json.loads(encode_state_line(_complete_state()))
+    del envelope["current_trade_cycle"]["latest_confirmed_management_protection"]["take_price"]
+
+    with pytest.raises(StateRecordDecodeError):
+        decode_state_line(json.dumps(envelope))
+
+
+def test_decode_accepts_explicit_null_current_trade_cycle() -> None:
+    envelope = json.loads(encode_state_line(_bare_state()))
+    envelope["current_trade_cycle"] = None
+
+    decoded = decode_state_line(json.dumps(envelope))
+
+    assert decoded.current_trade_cycle is None
+
+
+def test_decode_accepts_explicit_null_frozen_entry_context_and_protection() -> None:
+    bare_cycle_state = replace(
+        _bare_state(),
+        current_trade_cycle=CurrentTradeCycle(
+            trade_cycle_id="cycle-1",
+            applied_entry_package=AppliedEntryPackage(
+                applied_desired_entry=DesiredEntry("long", 900, "100", "99", "103", "runner"),
+                calculated_quantity="0.0100",
+            ),
+        ),
+    )
+
+    decoded = decode_state_line(encode_state_line(bare_cycle_state))
+
+    assert decoded.current_trade_cycle is not None
+    assert decoded.current_trade_cycle.frozen_entry_context is None
+    assert decoded.current_trade_cycle.latest_confirmed_management_protection is None
+
+
+def test_decode_accepts_explicit_null_take_price() -> None:
+    envelope = json.loads(encode_state_line(_complete_state()))
+    envelope["current_trade_cycle"]["latest_confirmed_management_protection"]["take_price"] = None
+
+    decoded = decode_state_line(json.dumps(envelope))
+
+    assert decoded.current_trade_cycle is not None
+    protection = decoded.current_trade_cycle.latest_confirmed_management_protection
+    assert protection is not None
+    assert protection.take_price is None

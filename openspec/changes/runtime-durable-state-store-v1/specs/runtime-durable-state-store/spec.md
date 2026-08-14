@@ -165,13 +165,21 @@ election).
   that condition — this remains a documented single-process-writer
   deployment constraint, not a capability of the store itself
 
-### Requirement: Decoding rejects an unrecognized field in any persisted structure except `raw_spec`
+### Requirement: Decoding enforces the exact key set of every persisted structure except `raw_spec`
 Decoding a durable JSONL line SHALL reject, as a schema/domain validation
 failure, any field not in the exact allowed set for the envelope,
 `CurrentTradeCycle`, `AppliedEntryPackage`, `DesiredEntry`,
-`FrozenExecutedEntryContext`, and `DesiredProtection`. `raw_spec` SHALL
-remain exempt: its own internal keys are never restricted, only the
-presence of the `raw_spec` field itself within `registered_spec_snapshot`.
+`FrozenExecutedEntryContext`, and `DesiredProtection`, and SHALL equally
+reject any of those structures' fields being absent — including a
+nullable field such as `current_trade_cycle`, `frozen_entry_context`,
+`latest_confirmed_management_protection`, or
+`DesiredProtection.take_price`. A record is a complete snapshot: a
+nullable field MUST still be present with an explicit JSON `null`;
+omitting the key is a schema violation, not an implicit null, and decoding
+SHALL NOT treat a missing key the same as a present key holding `null`.
+`raw_spec` SHALL remain exempt from both checks: its own internal keys are
+never restricted or required, only the presence of the `raw_spec` field
+itself within `registered_spec_snapshot`.
 
 #### Scenario: An unrecognized top-level envelope field fails closed
 - **WHEN** a line's envelope contains a field outside
@@ -189,9 +197,26 @@ presence of the `raw_spec` field itself within `registered_spec_snapshot`.
 - **THEN** decoding raises a schema/domain validation failure, with the
   same fail-closed replay handling as any other invalid record
 
-#### Scenario: Fields inside `raw_spec` are never restricted
+#### Scenario: A missing nullable field fails closed instead of decoding as null
+- **WHEN** a persisted structure omits a key that its schema defines as
+  nullable — `current_trade_cycle` on the envelope,
+  `frozen_entry_context` or `latest_confirmed_management_protection` on
+  `CurrentTradeCycle`, or `take_price` on
+  `latest_confirmed_management_protection` — rather than including that
+  key with a JSON `null` value
+- **THEN** decoding raises a schema/domain validation failure
+- **AND** it does not silently substitute `None` for the missing key
+
+#### Scenario: An explicit JSON null for a nullable field decodes normally
+- **WHEN** a persisted structure includes a nullable field's key with an
+  explicit JSON `null` value
+- **THEN** decoding succeeds and that field decodes to `None`, exactly as
+  if the field had never held a value
+
+#### Scenario: Fields inside `raw_spec` are never restricted or required
 - **WHEN** `registered_spec_snapshot.raw_spec` contains any JSON-object
-  keys, including ones this repository has never seen before
+  keys, including ones this repository has never seen before, or omits
+  keys another `raw_spec` happened to have
 - **THEN** decoding does not reject the record on that basis — `raw_spec`
   is opaque deployment content, not a structure this store defines
 

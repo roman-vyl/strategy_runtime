@@ -20,6 +20,15 @@
       (opaque deployment content). Add tests for an extra top-level
       envelope field and an extra nested field (e.g. inside
       `current_trade_cycle` and inside `desired_entry`).
+- [x] 1.5 Decode SHALL also require every nullable field's key to be
+      present, reading it with `data["field"]` rather than
+      `data.get("field")` — `current_trade_cycle`, `frozen_entry_context`,
+      `latest_confirmed_management_protection`, and
+      `DesiredProtection.take_price`. A record is a complete snapshot: an
+      omitted key is a schema violation, not an implicit null; only an
+      explicit JSON `null` decodes to `None`. Add tests for each field
+      omitted (fails closed) and for each field explicitly `null`
+      (decodes normally).
 
 ## 2. Durable Repository
 

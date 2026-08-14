@@ -227,21 +227,31 @@ replayed record for free — there is no separate recovery-side validation
 path to keep in sync with the domain models.
 
 Decoding additionally checks each of those structures' JSON object against
-an exact set of allowed keys and rejects any unrecognized one as a
-`StateRecordDecodeError` — the same fail-closed replay path a missing
-field or a domain-invalid value already takes. The one deliberate
-exception is `RegisteredSpecSnapshot.raw_spec`: it is opaque, free-form
-deployment JSON by design (see `deployment-catalog`), so its own internal
-keys are never restricted — only the four keys that carry it
-(`instrument`, `base_timeframe`, `raw_spec`, `source_path`) are checked.
+an exact key set: both an unrecognized field and a missing field raise
+`StateRecordDecodeError`, the same fail-closed replay path a domain-invalid
+value already takes. This applies equally to nullable fields
+(`current_trade_cycle`, `frozen_entry_context`,
+`latest_confirmed_management_protection`, `DesiredProtection.take_price`):
+a record is a complete snapshot, so a nullable field must still be present
+with an explicit JSON `null` — decode reads it with `data["field"]`, never
+`data.get("field")`, so an omitted key is a schema violation rather than
+an implicit null. The one deliberate exception is
+`RegisteredSpecSnapshot.raw_spec`: it is opaque, free-form deployment JSON
+by design (see `deployment-catalog`), so its own internal keys are never
+restricted or required — only the four keys that carry it (`instrument`,
+`base_timeframe`, `raw_spec`, `source_path`) are checked.
 
 **Rationale:** keeps exactly one source of truth for what a valid
 `StrategyInstanceRuntimeState` is — the dataclasses themselves — instead of
 a parallel recovery schema that could drift from them. Silently ignoring
-an unrecognized field would let schema drift (a renamed field, a field
-dropped from encode but not decode, a hand-edited file) pass replay
-unnoticed instead of failing loudly, which this correctness-critical store
-cannot accept — a dropped field on replay is data loss with no error.
+an unrecognized field, or silently treating a missing nullable field as
+`None`, would both let schema drift (a renamed field, a field dropped
+from encode but not decode, a hand-edited file) pass replay unnoticed
+instead of failing loudly, which this correctness-critical store cannot
+accept — a dropped field on replay is data loss with no error. `.get(...)`
+cannot distinguish "explicitly null" from "absent" and was the exact gap
+here before this decision: reading required fields (nullable or not) with
+`data["field"]` closes it.
 
 ### Production composition swaps the repository, adds no new switch
 

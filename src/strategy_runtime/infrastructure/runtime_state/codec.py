@@ -7,10 +7,16 @@ record -- there is no separate recovery-side schema to keep in sync.
 
 Every persisted structure -- the envelope, `CurrentTradeCycle`,
 `AppliedEntryPackage`, `DesiredEntry`, `FrozenExecutedEntryContext`, and
-`DesiredProtection` -- is decoded against an exact set of allowed keys, so
-an unrecognized field fails loudly instead of being silently dropped. The
-one deliberate exception is `raw_spec`, which remains an opaque,
-free-form JSON object -- its own keys are never restricted.
+`DesiredProtection` -- is decoded against its exact key set: an
+unrecognized field fails loudly instead of being silently dropped, and a
+missing field fails loudly instead of silently decoding as absent/null.
+A record is a complete snapshot, so a nullable field (e.g.
+`current_trade_cycle`, `frozen_entry_context`,
+`latest_confirmed_management_protection`, `DesiredProtection.take_price`)
+MUST still be present with an explicit JSON `null` -- omitting the key
+entirely is a schema violation, not an implicit null. The one deliberate
+exception is `raw_spec`, which remains an opaque, free-form JSON object
+-- its own keys are never restricted or required.
 """
 
 from __future__ import annotations
@@ -191,7 +197,7 @@ def _decode_envelope(envelope: Any) -> StrategyInstanceRuntimeState:
 
 
 def _decode_aggregate(data: dict[str, Any]) -> StrategyInstanceRuntimeState:
-    current_trade_cycle_data = data.get("current_trade_cycle")
+    current_trade_cycle_data = data["current_trade_cycle"]
     return StrategyInstanceRuntimeState(
         strategy_instance_id=data["strategy_instance_id"],
         strategy_id=data["strategy_id"],
@@ -221,8 +227,8 @@ def _decode_cycle(data: Any) -> CurrentTradeCycle:
     if not isinstance(data, dict):
         raise TypeError("current_trade_cycle must be a JSON object")
     _reject_unknown_keys(data, _CYCLE_KEYS, where="current_trade_cycle")
-    frozen_entry_context_data = data.get("frozen_entry_context")
-    protection_data = data.get("latest_confirmed_management_protection")
+    frozen_entry_context_data = data["frozen_entry_context"]
+    protection_data = data["latest_confirmed_management_protection"]
     return CurrentTradeCycle(
         trade_cycle_id=data["trade_cycle_id"],
         applied_entry_package=_decode_applied_entry_package(data["applied_entry_package"]),
@@ -280,5 +286,5 @@ def _decode_desired_protection(data: Any) -> DesiredProtection:
     )
     return DesiredProtection(
         stop_price=data["stop_price"],
-        take_price=data.get("take_price"),
+        take_price=data["take_price"],
     )

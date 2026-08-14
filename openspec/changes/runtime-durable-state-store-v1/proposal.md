@@ -32,10 +32,13 @@ redelivery of closed bars, and MDS catch-up remain non-durable and out of scope.
 - keep `processing_journal` a separate, still-best-effort observability file;
   this durable store is a different file with different correctness semantics
   and is never recovered from journal content;
-- reject, during decode, any field outside the exact allowed set for the
-  envelope and each nested persisted structure — schema drift fails loudly
-  instead of being silently dropped — except `raw_spec`, which stays
-  opaque, free-form deployment JSON;
+- enforce, during decode, the exact key set of the envelope and each
+  nested persisted structure both ways — an unrecognized field and a
+  missing field both fail loudly instead of being silently dropped or
+  silently treated as null — except `raw_spec`, which stays opaque,
+  free-form deployment JSON with neither restriction; a nullable field
+  (e.g. `current_trade_cycle`) must still be present as an explicit JSON
+  `null`, since a record is a complete snapshot, not a sparse one;
 - poison the repository instance when the physical write step
   (open/write/flush/`fsync`) fails: every later call fails closed instead
   of continuing to serve from a store whose durability guarantee that
