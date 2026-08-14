@@ -32,6 +32,16 @@ redelivery of closed bars, and MDS catch-up remain non-durable and out of scope.
 - keep `processing_journal` a separate, still-best-effort observability file;
   this durable store is a different file with different correctness semantics
   and is never recovered from journal content;
+- reject, during decode, any field outside the exact allowed set for the
+  envelope and each nested persisted structure — schema drift fails loudly
+  instead of being silently dropped — except `raw_spec`, which stays
+  opaque, free-form deployment JSON;
+- poison the repository instance when the physical write step
+  (open/write/flush/`fsync`) fails: every later call fails closed instead
+  of continuing to serve from a store whose durability guarantee that
+  failure just broke; recovery is a process restart, not an in-process
+  unpoison operation; a failure before the physical write (serialization)
+  does not poison;
 - keep the existing `get_or_create` / `get` / `save` port contract, its
   full-snapshot (no diff/patch/merge) `save` semantics, and the existing
   `StrategyInstanceKeyedMutexRegistry` business-level per-instance

@@ -2,6 +2,7 @@
 
 from strategy_runtime.infrastructure.runtime_state.errors import (
     StrategyInstanceStateReplayError,
+    StrategyInstanceStateStorePoisoned,
 )
 from strategy_runtime.infrastructure.runtime_state.jsonl_repository import (
     JsonlStrategyInstanceRuntimeStateRepository,
@@ -10,4 +11,5 @@ from strategy_runtime.infrastructure.runtime_state.jsonl_repository import (
 __all__ = [
     "JsonlStrategyInstanceRuntimeStateRepository",
     "StrategyInstanceStateReplayError",
+    "StrategyInstanceStateStorePoisoned",
 ]

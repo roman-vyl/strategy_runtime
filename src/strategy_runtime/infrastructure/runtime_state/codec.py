@@ -4,6 +4,13 @@ Encoding produces one compact JSON line per snapshot. Decoding reconstructs
 the aggregate through its existing frozen-dataclass constructors, so the
 domain models' own `__post_init__` validation runs on every replayed
 record -- there is no separate recovery-side schema to keep in sync.
+
+Every persisted structure -- the envelope, `CurrentTradeCycle`,
+`AppliedEntryPackage`, `DesiredEntry`, `FrozenExecutedEntryContext`, and
+`DesiredProtection` -- is decoded against an exact set of allowed keys, so
+an unrecognized field fails loudly instead of being silently dropped. The
+one deliberate exception is `raw_spec`, which remains an opaque,
+free-form JSON object -- its own keys are never restricted.
 """
 
 from __future__ import annotations
@@ -23,6 +30,41 @@ from strategy_runtime.runtime.state.models import (
 )
 
 _SCHEMA_VERSION: Final = 1
+
+_ENVELOPE_KEYS: Final = frozenset(
+    {
+        "schema_version",
+        "strategy_instance_id",
+        "strategy_id",
+        "registered_spec_snapshot",
+        "risk_multiplier",
+        "current_trade_cycle",
+    }
+)
+_SNAPSHOT_KEYS: Final = frozenset({"instrument", "base_timeframe", "raw_spec", "source_path"})
+_CYCLE_KEYS: Final = frozenset(
+    {
+        "trade_cycle_id",
+        "applied_entry_package",
+        "frozen_entry_context",
+        "latest_confirmed_management_protection",
+    }
+)
+_APPLIED_ENTRY_PACKAGE_KEYS: Final = frozenset({"applied_desired_entry", "calculated_quantity"})
+_DESIRED_ENTRY_KEYS: Final = frozenset(
+    {
+        "side",
+        "source_plan_bar_open_time_ms",
+        "planned_entry_price",
+        "initial_stop_price",
+        "initial_take_price",
+        "locked_exit_profile",
+    }
+)
+_FROZEN_ENTRY_CONTEXT_KEYS: Final = frozenset(
+    {"desired_entry", "first_fill_at_ms", "entry_bar_open_time_ms"}
+)
+_DESIRED_PROTECTION_KEYS: Final = frozenset({"stop_price", "take_price"})
 
 
 class StateRecordDecodeError(ValueError):
@@ -133,9 +175,16 @@ def _to_plain_json(value: Any) -> Any:
     return value
 
 
+def _reject_unknown_keys(data: dict[str, Any], allowed: frozenset[str], *, where: str) -> None:
+    unknown = data.keys() - allowed
+    if unknown:
+        raise ValueError(f"{where} has unknown field(s): {sorted(unknown)}")
+
+
 def _decode_envelope(envelope: Any) -> StrategyInstanceRuntimeState:
     if not isinstance(envelope, dict):
         raise TypeError("record must be a JSON object")
+    _reject_unknown_keys(envelope, _ENVELOPE_KEYS, where="envelope")
     if envelope.get("schema_version") != _SCHEMA_VERSION:
         raise ValueError("unsupported or missing schema_version")
     return _decode_aggregate(envelope)
@@ -159,6 +208,7 @@ def _decode_aggregate(data: dict[str, Any]) -> StrategyInstanceRuntimeState:
 def _decode_snapshot(data: Any) -> RegisteredSpecSnapshot:
     if not isinstance(data, dict):
         raise TypeError("registered_spec_snapshot must be a JSON object")
+    _reject_unknown_keys(data, _SNAPSHOT_KEYS, where="registered_spec_snapshot")
     return RegisteredSpecSnapshot(
         instrument=data["instrument"],
         base_timeframe=data["base_timeframe"],
@@ -170,6 +220,7 @@ def _decode_snapshot(data: Any) -> RegisteredSpecSnapshot:
 def _decode_cycle(data: Any) -> CurrentTradeCycle:
     if not isinstance(data, dict):
         raise TypeError("current_trade_cycle must be a JSON object")
+    _reject_unknown_keys(data, _CYCLE_KEYS, where="current_trade_cycle")
     frozen_entry_context_data = data.get("frozen_entry_context")
     protection_data = data.get("latest_confirmed_management_protection")
     return CurrentTradeCycle(
@@ -189,6 +240,7 @@ def _decode_cycle(data: Any) -> CurrentTradeCycle:
 def _decode_applied_entry_package(data: Any) -> AppliedEntryPackage:
     if not isinstance(data, dict):
         raise TypeError("applied_entry_package must be a JSON object")
+    _reject_unknown_keys(data, _APPLIED_ENTRY_PACKAGE_KEYS, where="applied_entry_package")
     return AppliedEntryPackage(
         applied_desired_entry=_decode_desired_entry(data["applied_desired_entry"]),
         calculated_quantity=data["calculated_quantity"],
@@ -198,6 +250,7 @@ def _decode_applied_entry_package(data: Any) -> AppliedEntryPackage:
 def _decode_desired_entry(data: Any) -> DesiredEntry:
     if not isinstance(data, dict):
         raise TypeError("desired_entry must be a JSON object")
+    _reject_unknown_keys(data, _DESIRED_ENTRY_KEYS, where="desired_entry")
     return DesiredEntry(
         side=data["side"],
         source_plan_bar_open_time_ms=data["source_plan_bar_open_time_ms"],
@@ -211,6 +264,7 @@ def _decode_desired_entry(data: Any) -> DesiredEntry:
 def _decode_frozen_entry_context(data: Any) -> FrozenExecutedEntryContext:
     if not isinstance(data, dict):
         raise TypeError("frozen_entry_context must be a JSON object")
+    _reject_unknown_keys(data, _FROZEN_ENTRY_CONTEXT_KEYS, where="frozen_entry_context")
     return FrozenExecutedEntryContext(
         desired_entry=_decode_desired_entry(data["desired_entry"]),
         first_fill_at_ms=data["first_fill_at_ms"],
@@ -221,6 +275,9 @@ def _decode_frozen_entry_context(data: Any) -> FrozenExecutedEntryContext:
 def _decode_desired_protection(data: Any) -> DesiredProtection:
     if not isinstance(data, dict):
         raise TypeError("latest_confirmed_management_protection must be a JSON object")
+    _reject_unknown_keys(
+        data, _DESIRED_PROTECTION_KEYS, where="latest_confirmed_management_protection"
+    )
     return DesiredProtection(
         stop_price=data["stop_price"],
         take_price=data.get("take_price"),

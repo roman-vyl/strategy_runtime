@@ -1,4 +1,4 @@
-"""Typed error for the durable file-backed state repository."""
+"""Typed errors for the durable file-backed state repository."""
 
 
 class StrategyInstanceStateReplayError(RuntimeError):
@@ -12,3 +12,19 @@ class StrategyInstanceStateReplayError(RuntimeError):
     """
 
     code = "strategy_instance_state_replay_error"
+
+
+class StrategyInstanceStateStorePoisoned(RuntimeError):
+    """The durable store's on-disk state is no longer trustworthy.
+
+    Raised when a prior physical append (open/write/flush/`fsync`) failed
+    partway, leaving an ambiguous on-disk outcome -- bytes may or may not
+    have reached the file. Once poisoned, every subsequent `get_or_create`,
+    `get`, and `save` call on this repository instance fails closed instead
+    of continuing to serve from a not-provably-durable file; recovery
+    requires restarting the process (a fresh repository instance replays
+    the file from scratch). A failure before the physical write is
+    attempted -- e.g. serialization -- does not poison the repository.
+    """
+
+    code = "strategy_instance_state_store_poisoned"

@@ -164,3 +164,71 @@ election).
 - **THEN** the repository provides no detection of, or protection against,
   that condition — this remains a documented single-process-writer
   deployment constraint, not a capability of the store itself
+
+### Requirement: Decoding rejects an unrecognized field in any persisted structure except `raw_spec`
+Decoding a durable JSONL line SHALL reject, as a schema/domain validation
+failure, any field not in the exact allowed set for the envelope,
+`CurrentTradeCycle`, `AppliedEntryPackage`, `DesiredEntry`,
+`FrozenExecutedEntryContext`, and `DesiredProtection`. `raw_spec` SHALL
+remain exempt: its own internal keys are never restricted, only the
+presence of the `raw_spec` field itself within `registered_spec_snapshot`.
+
+#### Scenario: An unrecognized top-level envelope field fails closed
+- **WHEN** a line's envelope contains a field outside
+  `schema_version`, `strategy_instance_id`, `strategy_id`,
+  `registered_spec_snapshot`, `risk_multiplier`, and `current_trade_cycle`
+- **THEN** decoding raises a schema/domain validation failure
+- **AND** replay applies this exactly like any other such failure — fail
+  closed on any line, and fail closed even when confined to the last line
+
+#### Scenario: An unrecognized field inside a nested structure fails closed
+- **WHEN** `current_trade_cycle`, `applied_entry_package`,
+  `desired_entry`, `frozen_entry_context`, or
+  `latest_confirmed_management_protection` contains a field outside that
+  structure's exact allowed set
+- **THEN** decoding raises a schema/domain validation failure, with the
+  same fail-closed replay handling as any other invalid record
+
+#### Scenario: Fields inside `raw_spec` are never restricted
+- **WHEN** `registered_spec_snapshot.raw_spec` contains any JSON-object
+  keys, including ones this repository has never seen before
+- **THEN** decoding does not reject the record on that basis — `raw_spec`
+  is opaque deployment content, not a structure this store defines
+
+### Requirement: A physical write failure poisons the repository
+Once `JsonlStrategyInstanceRuntimeStateRepository`'s physical append step
+(open, write, flush, `fsync`) fails, the repository SHALL treat every
+subsequent `get_or_create`, `get`, and `save` call on that instance as a
+fail-closed error for the remainder of the process, instead of continuing
+to serve from its last known in-memory state. A failure before the
+physical write is attempted (serialization) SHALL NOT poison the
+repository.
+
+#### Scenario: A physical write failure poisons the instance
+- **WHEN** the open/write/flush/`fsync` sequence inside `_append` raises
+  for any reason
+- **THEN** the triggering call's exception propagates to its caller
+  unchanged
+- **AND** every later `get_or_create`, `get`, or `save` call on that same
+  repository instance raises a typed poisoned-store error instead of
+  reading or mutating the in-memory index or attempting another physical
+  write
+
+#### Scenario: Poisoning is instance-wide, not per-key
+- **WHEN** a physical write failure occurs while appending state for one
+  `strategy_instance_id`
+- **THEN** a later call for any other `strategy_instance_id` on that same
+  repository instance also fails closed with the poisoned-store error
+
+#### Scenario: A pre-physical-write failure does not poison
+- **WHEN** serialization fails before the physical write is attempted
+- **THEN** the repository is not poisoned
+- **AND** subsequent calls continue to serve normally, exactly as before
+  this requirement existed
+
+#### Scenario: Recovery is a process restart, not an unpoison operation
+- **WHEN** a repository instance is poisoned
+- **THEN** no method call on that instance clears the poison
+- **AND** a fresh `JsonlStrategyInstanceRuntimeStateRepository` constructed
+  against the same path (as happens on process restart) replays the file
+  from scratch and is not poisoned by a prior instance's poison state

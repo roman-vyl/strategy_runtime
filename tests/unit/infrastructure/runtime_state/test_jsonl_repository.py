@@ -1,4 +1,5 @@
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -9,6 +10,7 @@ import pytest
 from strategy_runtime.infrastructure.runtime_state import (
     JsonlStrategyInstanceRuntimeStateRepository,
     StrategyInstanceStateReplayError,
+    StrategyInstanceStateStorePoisoned,
 )
 from strategy_runtime.infrastructure.runtime_state.codec import encode_state_line
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
@@ -302,21 +304,73 @@ def test_concurrent_saves_for_different_instances_never_interleave_mid_line(
         assert replayed.get(instance_id).risk_multiplier == "20"
 
 
-def test_append_failure_does_not_update_in_memory_index(
+def test_encode_failure_before_physical_write_does_not_poison_or_update_index(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A failure in serialization -- before any file write is attempted --
+    is not an ambiguous physical outcome, so it must not poison the
+    repository: the caller sees the exception, the in-memory index is
+    unchanged, and the repository keeps serving normally afterward."""
     path = tmp_path / "state.jsonl"
     repository = JsonlStrategyInstanceRuntimeStateRepository(path)
     initial = repository.get_or_create(make_request())
 
     def _boom(_state: object) -> str:
-        raise OSError("simulated fsync failure")
+        raise ValueError("simulated serialization failure")
 
     monkeypatch.setattr(
         "strategy_runtime.infrastructure.runtime_state.jsonl_repository.encode_state_line", _boom
     )
 
+    with pytest.raises(ValueError):
+        repository.save(replace(initial, risk_multiplier="9"))
+
+    monkeypatch.undo()
+    assert repository.get(initial.strategy_instance_id) is initial
+    again = repository.save(replace(initial, risk_multiplier="9"))
+    assert repository.get(initial.strategy_instance_id) is again
+
+
+def test_physical_write_failure_poisons_the_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failure from the physical write onward (here: `os.fsync`) leaves
+    an ambiguous on-disk outcome -- the preceding `write`/`flush` may have
+    already reached the file. The repository must not keep serving from
+    that point: it poisons itself, and every later call fails closed."""
+    path = tmp_path / "state.jsonl"
+    repository = JsonlStrategyInstanceRuntimeStateRepository(path)
+    initial = repository.get_or_create(make_request())
+
+    def _boom(_fd: int) -> None:
+        raise OSError("simulated fsync failure")
+
+    monkeypatch.setattr(os, "fsync", _boom)
+
     with pytest.raises(OSError):
         repository.save(replace(initial, risk_multiplier="9"))
 
-    assert repository.get(initial.strategy_instance_id) is initial
+    with pytest.raises(StrategyInstanceStateStorePoisoned):
+        repository.get(initial.strategy_instance_id)
+    with pytest.raises(StrategyInstanceStateStorePoisoned):
+        repository.get_or_create(make_request(strategy_instance_id="another-instance"))
+    with pytest.raises(StrategyInstanceStateStorePoisoned):
+        repository.save(initial)
+
+
+def test_physical_write_failure_during_creation_poisons_the_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "state.jsonl"
+    repository = JsonlStrategyInstanceRuntimeStateRepository(path)
+
+    def _boom(_fd: int) -> None:
+        raise OSError("simulated fsync failure")
+
+    monkeypatch.setattr(os, "fsync", _boom)
+
+    with pytest.raises(OSError):
+        repository.get_or_create(make_request())
+
+    with pytest.raises(StrategyInstanceStateStorePoisoned):
+        repository.get("anything")

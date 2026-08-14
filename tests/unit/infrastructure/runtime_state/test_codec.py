@@ -114,3 +114,53 @@ def test_decode_raises_state_record_decode_error_for_unsupported_schema_version(
 def test_decode_raises_state_record_decode_error_for_non_object_envelope() -> None:
     with pytest.raises(StateRecordDecodeError):
         decode_state_line("42")
+
+
+def test_decode_rejects_unknown_top_level_envelope_field() -> None:
+    envelope = json.loads(encode_state_line(_bare_state()))
+    envelope["unexpected_field"] = "surprise"
+
+    with pytest.raises(StateRecordDecodeError):
+        decode_state_line(json.dumps(envelope))
+
+
+def test_decode_rejects_unknown_field_in_current_trade_cycle() -> None:
+    envelope = json.loads(encode_state_line(_complete_state()))
+    envelope["current_trade_cycle"]["unexpected_field"] = "surprise"
+
+    with pytest.raises(StateRecordDecodeError):
+        decode_state_line(json.dumps(envelope))
+
+
+def test_decode_rejects_unknown_field_in_desired_entry() -> None:
+    envelope = json.loads(encode_state_line(_complete_state()))
+    envelope["current_trade_cycle"]["applied_entry_package"]["applied_desired_entry"][
+        "unexpected_field"
+    ] = "surprise"
+
+    with pytest.raises(StateRecordDecodeError):
+        decode_state_line(json.dumps(envelope))
+
+
+def test_decode_rejects_unknown_field_in_registered_spec_snapshot() -> None:
+    envelope = json.loads(encode_state_line(_bare_state()))
+    envelope["registered_spec_snapshot"]["unexpected_field"] = "surprise"
+
+    with pytest.raises(StateRecordDecodeError):
+        decode_state_line(json.dumps(envelope))
+
+
+def test_decode_does_not_restrict_keys_inside_raw_spec() -> None:
+    bare = _bare_state()
+    state = replace(
+        bare,
+        registered_spec_snapshot=replace(
+            bare.registered_spec_snapshot,
+            raw_spec={"anything_goes": {"nested": [1, 2, 3]}, "another_field": True},
+        ),
+    )
+
+    decoded = decode_state_line(encode_state_line(state))
+
+    assert decoded.registered_spec_snapshot.raw_spec["anything_goes"]["nested"] == (1, 2, 3)
+    assert decoded.registered_spec_snapshot.raw_spec["another_field"] is True

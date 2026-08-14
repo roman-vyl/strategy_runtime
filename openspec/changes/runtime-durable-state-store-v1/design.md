@@ -43,6 +43,11 @@ future implementation.
   which is discarded in favor of the prior snapshot.
 - Wire the durable repository into production composition in place of the
   in-memory one; add `RUNTIME_STATE_PATH` and its Docker mount.
+- Fail loudly, not silently, on schema drift: reject an unrecognized field
+  in any persisted structure (except the deliberately free-form
+  `raw_spec`) instead of dropping it during decode.
+- Treat a physical write failure of ambiguous on-disk outcome as fatal to
+  the repository instance, not merely to the one call that triggered it.
 
 **Non-Goals:**
 
@@ -97,6 +102,49 @@ still lose — silently reintroducing the exact gap this change closes.
 correctness for throughput this store does not need; per-cycle save
 frequency is bounded by committed-bar cadence per strategy instance, not a
 high-frequency write path.
+
+### A physical write failure poisons the repository for the rest of its process life
+
+`_append`'s physical step — open, `write`, `write` the newline, `flush`,
+`os.fsync` — runs inside one `try`/`except` that records any exception it
+raises as the repository's poison state before re-raising it unchanged to
+the caller. Serialization (`encode_state_line`) runs *before* that block
+and is not covered by it: a serialization failure propagates exactly as
+before, does not poison, and leaves the repository free to keep serving.
+Once poisoned, every later `get_or_create`, `get`, and `save` call —
+including on a *different* `strategy_instance_id` than the one whose write
+failed — immediately raises `StrategyInstanceStateStorePoisoned` instead
+of touching the in-memory index or attempting another physical write.
+There is no unpoison operation; recovery is restarting the process, which
+constructs a fresh repository that replays the file from scratch.
+
+**Rationale:** `write`, `flush`, and `fsync` can each fail after partially
+succeeding — `write`/`flush` may have already handed bytes to the OS page
+cache before `fsync` fails to persist them, and a later `fsync` retry (or a
+later append) has no way to know whether that partial write is still
+sitting at the end of the file or not. Continuing to serve `get`/`save`
+from the in-memory index after that point would let the process keep
+running on state whose most basic guarantee — "a successful `save()`
+implies a restart will replay it" — this exact failure just broke, with no
+signal to the caller that the guarantee is gone. Poisoning the whole
+instance, not just failing the one call, is what makes that broken
+guarantee visible instead of silently returning to normal-looking
+operation on the next call.
+
+**Alternative considered:** propagate the exception but leave the
+repository otherwise usable (the original behavior). Rejected — this is
+exactly the ambiguous-durability gap identified during review: a caller
+that swallows or logs-and-continues past that one exception would keep
+issuing `get`/`save` calls against a store no longer provably durable,
+with nothing forcing acknowledgment of the failure.
+
+**Alternative considered:** attempt to reopen/re-verify the file and
+clear the poison automatically. Rejected — verifying that a prior partial
+write did not corrupt the file's last line is exactly the replay
+integrity check that already exists, and running it mid-process
+(concurrently with further appends) is a materially different and riskier
+problem than running it once at startup. A full process restart already
+provides that verification for free through the existing replay path.
 
 ### A dedicated write lock serializes physical appends, separate from the keyed mutex
 
@@ -178,9 +226,22 @@ constructors, so their existing `__post_init__` validation runs on every
 replayed record for free — there is no separate recovery-side validation
 path to keep in sync with the domain models.
 
+Decoding additionally checks each of those structures' JSON object against
+an exact set of allowed keys and rejects any unrecognized one as a
+`StateRecordDecodeError` — the same fail-closed replay path a missing
+field or a domain-invalid value already takes. The one deliberate
+exception is `RegisteredSpecSnapshot.raw_spec`: it is opaque, free-form
+deployment JSON by design (see `deployment-catalog`), so its own internal
+keys are never restricted — only the four keys that carry it
+(`instrument`, `base_timeframe`, `raw_spec`, `source_path`) are checked.
+
 **Rationale:** keeps exactly one source of truth for what a valid
 `StrategyInstanceRuntimeState` is — the dataclasses themselves — instead of
-a parallel recovery schema that could drift from them.
+a parallel recovery schema that could drift from them. Silently ignoring
+an unrecognized field would let schema drift (a renamed field, a field
+dropped from encode but not decode, a hand-edited file) pass replay
+unnoticed instead of failing loudly, which this correctness-critical store
+cannot accept — a dropped field on replay is data loss with no error.
 
 ### Production composition swaps the repository, adds no new switch
 
@@ -242,10 +303,19 @@ Compose file and README.
   case this store detects or corrects.
 - **Decode/encode drift between the aggregate models and the on-disk record
   shape** → mitigated by decoding through the same frozen-dataclass
-  constructors that already validate the in-memory aggregate, so a
-  future field addition that isn't also encoded/decoded fails replay
-  loudly (via `__post_init__` or a `TypeError`) rather than silently
-  dropping data.
+  constructors that already validate the in-memory aggregate, and by
+  rejecting any unrecognized field per structure, so a future field
+  addition or rename that isn't kept in sync between encode and decode
+  fails replay loudly instead of silently dropping data.
+- **A transient physical-write failure (e.g. a momentary `fsync` error)
+  poisons the whole repository instance, not just that one call** →
+  accepted trade-off: correctness over availability for a
+  correctness-critical store. The cost is an unplanned process restart
+  to recover, which the existing Live V1 topology (one process, one
+  replica, no distributed coordination) already tolerates as an
+  operational event; the alternative — continuing to serve after an
+  unverified partial write — is the exact ambiguity this store exists to
+  close.
 
 ## Migration Plan
 

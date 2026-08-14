@@ -12,6 +12,14 @@
       equivalent aggregate for a state with `current_trade_cycle = null`
       and for one with a populated `CurrentTradeCycle` including
       `frozen_entry_context` and `latest_confirmed_management_protection`.
+- [x] 1.4 Decode SHALL reject any field outside the exact allowed key set
+      for the envelope, `CurrentTradeCycle`, `AppliedEntryPackage`,
+      `DesiredEntry`, `FrozenExecutedEntryContext`, and
+      `DesiredProtection` — schema drift fails loudly instead of being
+      silently dropped. `raw_spec`'s own internal keys stay unrestricted
+      (opaque deployment content). Add tests for an extra top-level
+      envelope field and an extra nested field (e.g. inside
+      `current_trade_cycle` and inside `desired_entry`).
 
 ## 2. Durable Repository
 
@@ -30,6 +38,21 @@
       `StrategyInstanceKeyedMutexRegistry`.
 - [x] 2.4 On any failure during serialize/append/flush/fsync, propagate the
       exception without updating the in-memory index.
+- [x] 2.5 Poison the repository instance when the physical write step
+      (open/write/flush/fsync) fails: every later `get_or_create`, `get`,
+      and `save` call on that instance raises a typed poisoned-store
+      error instead of continuing to serve from the in-memory index or
+      attempting another physical write. A failure before the physical
+      write (serialization) does not poison. Poisoning is instance-wide,
+      not scoped to the `strategy_instance_id` whose write failed.
+      Recovery is a process restart (a fresh instance replays the file),
+      not an in-process unpoison operation.
+- [x] 2.6 Add a test that fails the actual physical write path (e.g. a
+      monkeypatched `os.fsync` raising), not just serialization, and
+      asserts: the triggering call's exception propagates; every
+      subsequent call on that instance raises the poisoned-store error;
+      a separate test confirms a serialization-only failure does not
+      poison and the repository keeps serving normally afterward.
 
 ## 3. Startup Replay and Integrity
 
