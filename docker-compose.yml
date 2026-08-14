@@ -10,6 +10,7 @@ services:
       RUNTIME_PORT: "8093"
       RUNTIME_SPECS_PATH: /runtime/specs
       RUNTIME_JOURNAL_PATH: /runtime/journal/runtime.jsonl
+      RUNTIME_STATE_PATH: /runtime/state/runtime_state.jsonl
       RUNTIME_STRATEGY_ENGINE_BASE_URL: ${RUNTIME_STRATEGY_ENGINE_BASE_URL:-http://engine:8094}
       RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS: ${RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS:-5}
       RUNTIME_ABI_BASE_URL: ${RUNTIME_ABI_BASE_URL:-http://abi:8095}
@@ -25,3 +26,6 @@ services:
       - type: bind
         source: ${BBB_DATA_ROOT:?BBB_DATA_ROOT must be set}/strategy-runtime/journal
         target: /runtime/journal
+      - type: bind
+        source: ${BBB_DATA_ROOT:?BBB_DATA_ROOT must be set}/strategy-runtime/state
+        target: /runtime/state

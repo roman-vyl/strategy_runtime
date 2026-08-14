@@ -11,7 +11,13 @@ from fastapi.testclient import TestClient
 
 import strategy_runtime.bootstrap.application as application_module
 from strategy_runtime.bootstrap.application import build_application
+from strategy_runtime.infrastructure.runtime_state import (
+    JsonlStrategyInstanceRuntimeStateRepository,
+)
 from strategy_runtime.runtime.orchestrator.orchestrator import StrategyRuntimeOrchestrator
+from strategy_runtime.runtime.state.models import (
+    GetOrCreateStrategyInstanceRuntimeStateRequest,
+)
 from strategy_runtime.utility.committed_bar.models import StrategyBarProcessingUnit
 
 
@@ -21,6 +27,7 @@ def _valid_environ(tmp_path: Path) -> dict[str, str]:
     return {
         "RUNTIME_SPECS_PATH": str(specs_path),
         "RUNTIME_JOURNAL_PATH": str(tmp_path / "journal" / "runtime.jsonl"),
+        "RUNTIME_STATE_PATH": str(tmp_path / "state" / "runtime_state.jsonl"),
         "RUNTIME_STRATEGY_ENGINE_BASE_URL": "http://engine.invalid",
         "RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS": "5",
         "RUNTIME_ABI_BASE_URL": "http://abi.invalid",
@@ -130,7 +137,7 @@ def test_shares_single_repository_and_mutex_registry_instance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repository_instances = _count_constructions(
-        monkeypatch, "InMemoryStrategyInstanceRuntimeStateRepository"
+        monkeypatch, "JsonlStrategyInstanceRuntimeStateRepository"
     )
     mutex_instances = _count_constructions(monkeypatch, "StrategyInstanceKeyedMutexRegistry")
     orchestrator_kwargs = _record_kwargs(monkeypatch, "StrategyRuntimeOrchestrator")
@@ -366,3 +373,72 @@ def test_default_dispatcher_is_the_real_strategy_runtime_orchestrator(
 
     assert len(process_calls) == 1
     assert process_calls[0].deployment.source_path == "selected.json"
+
+
+# ---------------------------------------------------------------------------
+# Durable state replay gates ready composition fail-closed.
+# ---------------------------------------------------------------------------
+
+
+def test_ready_composition_selects_the_durable_repository(tmp_path: Path) -> None:
+    app = build_application(_valid_environ(tmp_path))
+
+    assert app.state.ready is True
+    assert isinstance(app.state.state_repository, JsonlStrategyInstanceRuntimeStateRepository)
+
+
+def test_ready_composition_replays_prior_durable_state(tmp_path: Path) -> None:
+    env = _valid_environ(tmp_path)
+    seed_repository = JsonlStrategyInstanceRuntimeStateRepository(Path(env["RUNTIME_STATE_PATH"]))
+    seed_repository.get_or_create(
+        GetOrCreateStrategyInstanceRuntimeStateRequest(
+            strategy_instance_id="ema_pullback:pre-existing",
+            strategy_id="ema_pullback",
+            instrument="BTCUSDT.P",
+            base_timeframe="5m",
+            raw_spec={"ema": 200},
+            source_path="ema-pullback.json",
+        )
+    )
+
+    app = build_application(env)
+
+    assert app.state.ready is True
+    recovered = app.state.state_repository.get("ema_pullback:pre-existing")
+    assert recovered is not None
+    assert recovered.risk_multiplier == "1"
+
+
+def test_a_corrupted_durable_state_file_fails_composition_closed(tmp_path: Path) -> None:
+    env = _valid_environ(tmp_path)
+    state_path = Path(env["RUNTIME_STATE_PATH"])
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text("not json\nnot json either\n", encoding="utf-8")
+
+    app = build_application(env)
+
+    assert app.state.ready is False
+
+
+def test_a_syntactically_truncated_last_line_does_not_fail_composition(tmp_path: Path) -> None:
+    env = _valid_environ(tmp_path)
+    state_path = Path(env["RUNTIME_STATE_PATH"])
+    seed_repository = JsonlStrategyInstanceRuntimeStateRepository(state_path)
+    seeded = seed_repository.get_or_create(
+        GetOrCreateStrategyInstanceRuntimeStateRequest(
+            strategy_instance_id="ema_pullback:pre-existing",
+            strategy_id="ema_pullback",
+            instrument="BTCUSDT.P",
+            base_timeframe="5m",
+            raw_spec={"ema": 200},
+            source_path="ema-pullback.json",
+        )
+    )
+    with state_path.open("a", encoding="utf-8") as handle:
+        handle.write("{truncated by a crash mid-appen")
+
+    app = build_application(env)
+
+    assert app.state.ready is True
+    recovered = app.state.state_repository.get("ema_pullback:pre-existing")
+    assert recovered == seeded

@@ -105,7 +105,7 @@ same Runtime repository
 first-fill state transition
 ```
 
-`StrategyRuntimeOrchestrator` и `AbiExecutionEventOrchestrator` получают один и тот же `StrategyInstanceKeyedMutexRegistry` и один и тот же `InMemoryStrategyInstanceRuntimeStateRepository`. Closed-bar processing и ABI callback не могут одновременно изменять состояние одного `strategy_instance_id`. Повтор того же first-fill идемпотентен; противоречащий timestamp отклоняется без изменения state.
+`StrategyRuntimeOrchestrator` и `AbiExecutionEventOrchestrator` получают один и тот же `StrategyInstanceKeyedMutexRegistry` и один и тот же `JsonlStrategyInstanceRuntimeStateRepository`. Closed-bar processing и ABI callback не могут одновременно изменять состояние одного `strategy_instance_id`. Повтор того же first-fill идемпотентен; противоречащий timestamp отклоняется без изменения state.
 
 ## Один closed-bar cycle по шагам
 
@@ -261,15 +261,15 @@ Outbound relationships:
 
 ## Concurrency и operational boundaries V1
 
-- Runtime state хранится в одном `InMemoryStrategyInstanceRuntimeStateRepository` и теряется при restart.
-- Closed-bar intake — bounded process-local FIFO; принятые, но не завершённые события не переживают restart и не восстанавливаются из JSONL journal.
+- Runtime state хранится в одном `JsonlStrategyInstanceRuntimeStateRepository` — общий append-only JSONL файл (`RUNTIME_STATE_PATH`), каждый `save()` уже `fsync`'нут перед возвратом, и переживает restart/recreate процесса. `InMemoryStrategyInstanceRuntimeStateRepository` остаётся только для tests и других explicitly ephemeral compositions.
+- Closed-bar intake — bounded process-local FIFO; принятые, но не завершённые события не переживают restart и не восстанавливаются из JSONL journal. Это отдельная граница от durable state repository: она осталась non-durable V1 limitation.
 - Очередь обслуживает ровно один `CommittedBarIntakeWorker`; worker count не настраивается.
 - Keyed mutex сериализует closed-bar cycle и first-fill callback одного `strategy_instance_id` только внутри процесса.
-- Production topology V1 — один process, один worker и одна replica. Между процессами нет distributed lock, repository CAS или другой координации.
+- Production topology V1 — один process, один worker и одна replica. Между процессами нет distributed lock, repository CAS или другой координации; durable state store рассчитан ровно на один пишущий процесс.
 - Каждый outbound HTTP adapter выполняет одну bounded попытку без retry и без follow redirects. Автоматического recovery workflow нет.
-- JSONL processing journal фиксирует orchestration outcomes, но не является durable queue или state repository.
+- JSONL processing journal фиксирует orchestration outcomes best-effort и остаётся отдельным файлом с отдельными correctness semantics — он не используется для восстановления state.
 
-Это operational boundary текущего V1: безопасное продолжение stateful lifecycle после потери процесса не заявляется.
+Это operational boundary текущего V1: strategy-instance state переживает restart, но closed-bar intake queue и любой inflight-webhook, ещё не обработанный worker'ом на момент потери процесса, — нет.
 
 ## Configuration
 
@@ -280,6 +280,7 @@ Runtime:
 - `RUNTIME_HOST`, `RUNTIME_PORT` — bind address;
 - `RUNTIME_SPECS_PATH` — flat deployment catalog;
 - `RUNTIME_JOURNAL_PATH` — JSONL processing journal;
+- `RUNTIME_STATE_PATH` — durable strategy-instance state store (JSONL);
 - `RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY` — ёмкость intake queue.
 
 Strategy Engine:
@@ -294,7 +295,7 @@ ABI:
 - `RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS`;
 - `RUNTIME_ABI_POSITION_MANAGEMENT_TIMEOUT_SECONDS`.
 
-Все base URLs и timeouts обязательны для ready application. Host, port, specs path и journal path имеют локальные defaults; queue capacity обязательна.
+Все base URLs и timeouts обязательны для ready application. Host, port, specs path, journal path и state path имеют локальные defaults; queue capacity обязательна.
 
 ## Запуск и проверка
 
@@ -328,8 +329,9 @@ from Runtime environment configuration; this repository builds and runs
 only the Strategy Runtime container, never Engine, ABI, or MDS.
 
 The container is designed to run with `--read-only` (or Compose's
-`read_only: true`): the only writable path it needs is the
-`RUNTIME_JOURNAL_PATH` mount for the processing journal.
+`read_only: true`): the two writable paths it needs are the
+`RUNTIME_JOURNAL_PATH` mount for the processing journal and the
+`RUNTIME_STATE_PATH` mount for the durable strategy-instance state store.
 `RUNTIME_SPECS_PATH` is read-only.
 
 Example build:
@@ -346,6 +348,7 @@ docker run --rm \
   -p 127.0.0.1:8093:8093 \
   -e RUNTIME_SPECS_PATH=/runtime/specs \
   -e RUNTIME_JOURNAL_PATH=/runtime/journal/runtime.jsonl \
+  -e RUNTIME_STATE_PATH=/runtime/state/runtime_state.jsonl \
   -e RUNTIME_STRATEGY_ENGINE_BASE_URL=http://engine:8094 \
   -e RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS=5 \
   -e RUNTIME_ABI_BASE_URL=http://abi:8095 \
@@ -355,15 +358,21 @@ docker run --rm \
   -e RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY=256 \
   --mount type=bind,src="${BBB_DATA_ROOT}/strategy-runtime/specs",dst=/runtime/specs,readonly \
   --mount type=bind,src="${BBB_DATA_ROOT}/strategy-runtime/journal",dst=/runtime/journal \
+  --mount type=bind,src="${BBB_DATA_ROOT}/strategy-runtime/state",dst=/runtime/state \
   strategy-runtime:local
 ```
 
 `BBB_DATA_ROOT` is the shared BBB data root host-side convention: Market
 Data Service already stores its data at `${BBB_DATA_ROOT}/market-data`;
-Strategy Runtime uses `${BBB_DATA_ROOT}/strategy-runtime/specs` and
-`${BBB_DATA_ROOT}/strategy-runtime/journal` for the same reason — host
+Strategy Runtime uses `${BBB_DATA_ROOT}/strategy-runtime/specs`,
+`${BBB_DATA_ROOT}/strategy-runtime/journal`, and
+`${BBB_DATA_ROOT}/strategy-runtime/state` for the same reason — host
 storage lives outside any one service's repository. Container-internal
-paths (`/runtime/specs`, `/runtime/journal`) are unchanged.
+paths (`/runtime/specs`, `/runtime/journal`, `/runtime/state`) are
+unchanged. `RUNTIME_STATE_PATH` names a file inside the `/runtime/state`
+mount, exactly like `RUNTIME_JOURNAL_PATH` names a file inside
+`/runtime/journal` — the mount is the directory, the env var is the file
+within it.
 
 `RUNTIME_HOST` and `RUNTIME_PORT` are omitted above because the image
 already defaults them to `0.0.0.0`/`8093`; only override them if a
@@ -381,15 +390,16 @@ docker compose up --build
 The bundled compose file runs only the Runtime service — no Engine, ABI,
 or MDS containers. It publishes `127.0.0.1:8093:8093`, sets
 `read_only: true`, mounts `${BBB_DATA_ROOT}/strategy-runtime/specs`
-read-only and `${BBB_DATA_ROOT}/strategy-runtime/journal` writable, and
-reads Engine/ABI URLs from the shell environment (with local-loopback
-defaults for `docker compose up` without any override). `BBB_DATA_ROOT`
-has no default and must be set in the environment; it is the same
-shared-data-root convention Market Data Service already uses for
-`${BBB_DATA_ROOT}/market-data`. The repository's own `./var/specs` and
-`./var/journal` directories are local dev-only scratch paths — they are
-not used by the Compose file or by any documented `docker run`
-invocation.
+read-only and `${BBB_DATA_ROOT}/strategy-runtime/journal` and
+`${BBB_DATA_ROOT}/strategy-runtime/state` writable, and reads Engine/ABI
+URLs from the shell environment (with local-loopback defaults for
+`docker compose up` without any override). `BBB_DATA_ROOT` has no default
+and must be set in the environment; it is the same shared-data-root
+convention Market Data Service already uses for
+`${BBB_DATA_ROOT}/market-data`. The repository's own `./var/specs`,
+`./var/journal`, and `./var/state` directories are local dev-only scratch
+paths — they are not used by the Compose file or by any documented
+`docker run` invocation.
 
 Container mount contract:
 
@@ -401,8 +411,13 @@ Container mount contract:
   restart — as long as the same host path (or named volume) is reused.
   In Compose/production, the host source is
   `${BBB_DATA_ROOT}/strategy-runtime/journal`.
+- `RUNTIME_STATE_PATH` should point at a writable mounted path so the
+  durable strategy-instance state store survives container removal,
+  recreate, and restart — as long as the same host path (or named
+  volume) is reused. In Compose/production, the host source is
+  `${BBB_DATA_ROOT}/strategy-runtime/state`.
 - No other writable filesystem path is required; the container runs
-  correctly with a read-only root filesystem plus these two mounts.
+  correctly with a read-only root filesystem plus these three mounts.
 - `/health/live` and `/health/ready` remain the container-facing probes;
   the image healthcheck uses `/health/ready`, matching the existing
   readiness semantics — no separate Docker-only health contract is
@@ -419,7 +434,7 @@ src/strategy_runtime/
 ├── adapters/          inbound HTTP adapters
 ├── bootstrap/         production composition root and executable entrypoint
 ├── config/            environment model, loader and startup path checks
-├── infrastructure/    concrete Engine and ABI HTTP adapters
+├── infrastructure/    concrete Engine/ABI HTTP adapters and the durable state repository
 ├── runtime/           live state, routing and semantic orchestration
 ├── shared/            small cross-cutting value helpers
 └── utility/           deployment selection, bar fan-out and journal

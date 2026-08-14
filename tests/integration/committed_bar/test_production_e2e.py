@@ -94,6 +94,7 @@ def _build_app(
     env = {
         "RUNTIME_SPECS_PATH": str(tmp_path / "specs"),
         "RUNTIME_JOURNAL_PATH": str(tmp_path / "journal" / "runtime.jsonl"),
+        "RUNTIME_STATE_PATH": str(tmp_path / "state" / "runtime_state.jsonl"),
         "RUNTIME_STRATEGY_ENGINE_BASE_URL": engine_base_url,
         "RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS": str(engine_timeout),
         "RUNTIME_ABI_BASE_URL": abi_base_url,
