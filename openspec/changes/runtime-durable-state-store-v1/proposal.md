@@ -1,0 +1,87 @@
+## Why
+
+`StrategyInstanceRuntimeState` — canonical `risk_multiplier`, `CurrentTradeCycle`,
+and the applied entry package / frozen first-fill context inside it — lives only
+in `InMemoryStrategyInstanceRuntimeStateRepository`. Every Runtime stop, restart,
+or container recreate loses it, forcing manual reconstruction of in-flight trade
+cycles before Runtime can safely resume. This change makes that state survive
+restart so Runtime resumes each strategy instance's lifecycle unattended.
+
+This is not general Runtime durability. Only the strategy-instance state
+aggregate becomes durable. `CommittedBarIntakeBoundary`, webhook/FIFO delivery,
+redelivery of closed bars, and MDS catch-up remain non-durable and out of scope.
+
+## What Changes
+
+- introduce `JsonlStrategyInstanceRuntimeStateRepository`: a file-backed
+  `StrategyInstanceRuntimeStateRepository` implementation backed by one shared
+  append-only JSONL file, keyed by `strategy_instance_id`, where the latest
+  valid record for a key is that key's current state;
+- guarantee that a successful `save(...)` has already been serialized,
+  appended, flushed, and `fsync`'d before returning — durability is
+  correctness-critical, not best-effort;
+- replay the durable file to restore every strategy instance's latest valid
+  snapshot before Runtime reports ready, with no ABI- or Engine-derived
+  reconstruction;
+- validate every replayed record against the full state schema; fail closed
+  on a corrupt record found before the last line, while tolerating exactly
+  one case — a truncated final line left by a crash mid-append — by discarding
+  it and keeping that key's last complete prior snapshot;
+- keep `processing_journal` a separate, still-best-effort observability file;
+  this durable store is a different file with different correctness semantics
+  and is never recovered from journal content;
+- keep the existing `get_or_create` / `get` / `save` port contract, its
+  full-snapshot (no diff/patch/merge) `save` semantics, and the existing
+  `StrategyInstanceKeyedMutexRegistry` business-level per-instance
+  serialization unchanged — the durable repository adds physical
+  serialization of file appends underneath it, not a replacement for it;
+- switch production composition from
+  `InMemoryStrategyInstanceRuntimeStateRepository` to
+  `JsonlStrategyInstanceRuntimeStateRepository`; keep the in-memory
+  implementation for tests and other explicitly ephemeral compositions;
+- add `RUNTIME_STATE_PATH` configuration and a third writable Docker mount,
+  sourced from `${BBB_DATA_ROOT}/strategy-runtime/state`, alongside the
+  existing read-only specs mount and writable journal mount, compatible with
+  a read-only container root filesystem;
+- scope V1 to a single Runtime process/writer, with no distributed
+  coordination, compare-and-swap, or multi-replica contract;
+- scope V1 to append-only growth, with no rotation, compaction, or retention;
+- ship first rollout against clean operational state (flat exchange, no
+  active trade cycles); no migration of existing in-memory state into the new
+  file.
+
+## Capabilities
+
+### New Capabilities
+
+- `runtime-durable-state-store`: File-backed, fsync-durable, replay-recovered
+  storage for `StrategyInstanceRuntimeState`, keyed by `strategy_instance_id`
+  in one shared append-only JSONL file.
+
+### Modified Capabilities
+
+- `runtime-production-composition`: production composition selects the
+  durable file-backed repository instead of the in-memory repository; the
+  existing "non-durable Live V1 limitation" requirement no longer holds for
+  strategy-instance state (it still holds for the committed-bar intake
+  queue, which stays in scope of that capability, unchanged).
+- `strategy-runtime-docker`: adds the third writable `RUNTIME_STATE_PATH`
+  mount sourced from `${BBB_DATA_ROOT}/strategy-runtime/state`; removes the
+  existing "no other writable path" and "state remains non-durable, lost on
+  restart" claims, which this change makes false.
+
+## Impact
+
+- New repository implementation under
+  `src/strategy_runtime/infrastructure/runtime_state/`.
+- `src/strategy_runtime/config/model.py`, `loader.py`, `startup.py`: add
+  `RUNTIME_STATE_PATH` following the existing `RUNTIME_JOURNAL_PATH` pattern.
+- `src/strategy_runtime/bootstrap/application.py`: construct and wire the
+  durable repository in place of the in-memory one; run startup replay before
+  readiness.
+- `docker-compose.yml`, `Dockerfile`, `README.md`: third bind mount and
+  documented `docker run`/Compose invocation.
+- No change to `StrategyInstanceRuntimeStateRepository`'s port contract, to
+  `StrategyInstanceKeyedMutexRegistry`, to `StrategyInstanceRuntimeState`'s
+  shape, to `processing_journal`, to the ABI/Engine/webhook contracts, or to
+  `CommittedBarIntakeBoundary` durability.

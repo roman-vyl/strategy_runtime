@@ -1,0 +1,153 @@
+## ADDED Requirements
+
+### Requirement: Strategy-instance state is stored in one shared append-only JSONL file
+`JsonlStrategyInstanceRuntimeStateRepository` SHALL persist every
+`StrategyInstanceRuntimeState` as one complete JSON line appended to one
+shared file at a configured path, keyed by `strategy_instance_id`, where the
+latest valid line for a key is that key's current durable state.
+
+#### Scenario: One line per save, one file for every instance
+- **WHEN** the repository creates or replaces state for any
+  `strategy_instance_id`
+- **THEN** it appends exactly one complete JSON line to the one configured
+  file
+- **AND** no separate file or directory is created per strategy instance
+
+#### Scenario: Later valid record for a key supersedes an earlier one
+- **WHEN** the file contains more than one valid line for the same
+  `strategy_instance_id`
+- **THEN** the line appearing later in the file is that key's current state
+- **AND** earlier lines for that key are superseded, not merged
+
+#### Scenario: A line is a complete snapshot, never a diff
+- **WHEN** the repository appends a line
+- **THEN** that line contains the complete aggregate exactly as
+  `save()`/`get_or_create()` received or produced it
+- **AND** no partial-field or diff/patch line is ever written
+
+### Requirement: A successful save is already physically durable
+`JsonlStrategyInstanceRuntimeStateRepository.save(...)` (and the creation
+path of `get_or_create(...)`) SHALL NOT return successfully until the
+serialized record has been appended, flushed, and `fsync`'d to the
+underlying file.
+
+#### Scenario: Save completes only after fsync
+- **WHEN** `save(...)` is called with a valid aggregate
+- **THEN** the repository serializes the aggregate, appends it, flushes the
+  write buffer, and calls `fsync` on the file descriptor before returning
+  the stored aggregate
+- **AND** no step of that sequence is deferred to a background thread or
+  batched with another call
+
+#### Scenario: A failure during the durability sequence does not update in-memory state
+- **WHEN** serialization, the append write, the flush, or the `fsync` call
+  raises
+- **THEN** `save(...)` propagates the exception
+- **AND** the repository's in-memory index for that `strategy_instance_id`
+  is not updated to the failed value
+
+### Requirement: Physical appends are serialized independently of business-level coordination
+`JsonlStrategyInstanceRuntimeStateRepository` SHALL serialize its physical
+append operations, across every `strategy_instance_id`, through its own
+internal lock, distinct from `StrategyInstanceKeyedMutexRegistry`.
+
+#### Scenario: Two different instances' appends never interleave mid-line
+- **WHEN** saves for two different `strategy_instance_id` values are
+  physically appended around the same time
+- **THEN** each append's line is written as one complete, non-interleaved
+  write
+- **AND** the file never contains a line formed from two different saves
+
+#### Scenario: The repository lock does not replace keyed business coordination
+- **WHEN** a caller has not acquired
+  `StrategyInstanceKeyedMutexRegistry.hold(strategy_instance_id)` before
+  calling `save(...)`
+- **THEN** the repository's internal append lock alone does not decide
+  whether that caller held the correct business-level critical section —
+  that responsibility remains the caller's, unchanged from the existing
+  `strategy-instance-runtime-state-repository` contract
+
+### Requirement: Startup replay recovers the latest valid snapshot per strategy instance
+`JsonlStrategyInstanceRuntimeStateRepository` SHALL, at construction, replay
+its configured file and populate its in-memory index with the latest valid
+record for every `strategy_instance_id` found, before the repository serves
+any `get_or_create`, `get`, or `save` call.
+
+#### Scenario: Replay restores prior state without external reconstruction
+- **WHEN** the repository is constructed against a file containing valid
+  prior records
+- **THEN** `get(strategy_instance_id)` for a previously saved instance
+  returns that instance's latest saved aggregate immediately after
+  construction, with no call to ABI, Strategy Engine, or the exchange
+  during replay
+
+#### Scenario: Replay of an empty or absent file yields no state
+- **WHEN** the configured file is empty or does not yet exist
+- **THEN** replay completes with an empty in-memory index
+- **AND** no error is raised solely because no prior records exist
+
+### Requirement: Replay fails closed on corrupted state, except a truncated final line
+Replay SHALL validate every line against
+`StrategyInstanceRuntimeState`'s full schema and domain validation. A line
+other than the file's last line that fails to parse or fails validation
+SHALL abort replay with a fail-closed error. The file's last line, and only
+the last line, MAY fail to parse or fail validation and still be
+tolerated — as a truncated write left by a crash mid-append — by
+discarding it and keeping the prior valid record for that key, if any.
+
+#### Scenario: A corrupted record before the last line fails closed
+- **WHEN** a line other than the last line cannot be parsed as JSON or does
+  not satisfy `StrategyInstanceRuntimeState` validation
+- **THEN** replay raises a fail-closed error
+- **AND** the repository does not become ready to serve requests
+
+#### Scenario: A truncated last line is discarded, not fatal
+- **WHEN** the file's last line cannot be parsed as JSON or does not satisfy
+  validation, and every prior line replayed successfully
+- **THEN** replay discards that last line
+- **AND** the affected key's state is whatever its last valid prior record
+  was — null if it had none
+- **AND** replay otherwise completes successfully
+
+#### Scenario: A fully valid last line is applied normally
+- **WHEN** the file's last line parses and validates successfully
+- **THEN** it is applied exactly like any other valid record, with no
+  special-cased leniency
+
+### Requirement: The durable state store is independent of the processing journal
+`JsonlStrategyInstanceRuntimeStateRepository` SHALL use a file, code path,
+and correctness semantics entirely separate from `processing_journal`, and
+strategy-instance state recovery SHALL NOT read the processing journal.
+
+#### Scenario: Distinct files and distinct guarantees
+- **WHEN** both the durable state store and the processing journal are
+  configured
+- **THEN** they write to two different configured paths
+- **AND** a processing-journal write failure (silently absorbed, per
+  `processing-journal`'s best-effort requirement) has no effect on whether
+  a state `save()` is considered durable
+
+#### Scenario: State recovery never falls back to journal content
+- **WHEN** the durable state file is replayed at startup
+- **THEN** no processing-journal event is read, parsed, or used to
+  reconstruct any part of `StrategyInstanceRuntimeState`
+
+### Requirement: V1 is a single-process, non-compacting store
+`JsonlStrategyInstanceRuntimeStateRepository` SHALL be designed for exactly
+one writing Runtime process, SHALL grow its file only by appending, and
+SHALL provide no compaction, rotation, retention, or distributed
+coordination (no compare-and-swap, no distributed lock, no leader
+election).
+
+#### Scenario: No compaction is performed
+- **WHEN** the file accumulates superseded records for the same
+  `strategy_instance_id` over time
+- **THEN** the repository does not rewrite, truncate, or compact the file
+  to remove superseded records
+
+#### Scenario: No cross-process coordination is claimed
+- **WHEN** more than one process opens the same configured file for
+  writing
+- **THEN** the repository provides no detection of, or protection against,
+  that condition — this remains a documented single-process-writer
+  deployment constraint, not a capability of the store itself
