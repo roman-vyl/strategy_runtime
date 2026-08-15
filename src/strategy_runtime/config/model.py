@@ -10,6 +10,7 @@ class RuntimeConfig:
     port: int = 8093
     journal_path: Path = Path("var/journal/runtime.jsonl")
     specs_path: Path = Path("var/specs")
+    state_path: Path = Path("var/state/runtime_state.jsonl")
     # The seven fields below have no meaningful default: `load_runtime_config`
     # always requires their environment variables and never falls back to
     # the placeholder values here. The placeholders exist only so this
@@ -33,6 +34,8 @@ class RuntimeConfig:
             raise ValueError("RUNTIME_JOURNAL_PATH must not be empty")
         if not str(self.specs_path).strip():
             raise ValueError("RUNTIME_SPECS_PATH must not be empty")
+        if not str(self.state_path).strip():
+            raise ValueError("RUNTIME_STATE_PATH must not be empty")
         capacity = self.committed_bar_queue_capacity
         if type(capacity) is not int or capacity <= 0:
             raise ValueError("RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY must be a positive integer")

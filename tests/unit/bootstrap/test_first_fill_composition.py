@@ -21,6 +21,7 @@ def _valid_environ(tmp_path: Path) -> dict[str, str]:
     return {
         "RUNTIME_SPECS_PATH": str(specs_path),
         "RUNTIME_JOURNAL_PATH": str(tmp_path / "journal" / "runtime.jsonl"),
+        "RUNTIME_STATE_PATH": str(tmp_path / "state" / "runtime_state.jsonl"),
         "RUNTIME_STRATEGY_ENGINE_BASE_URL": "http://engine.invalid",
         "RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS": "5",
         "RUNTIME_ABI_BASE_URL": "http://abi.invalid",
@@ -65,7 +66,7 @@ def test_orchestrator_constructed_once_over_the_exact_shared_instances(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repository_instances = _count_constructions(
-        monkeypatch, "InMemoryStrategyInstanceRuntimeStateRepository"
+        monkeypatch, "JsonlStrategyInstanceRuntimeStateRepository"
     )
     mutex_instances = _count_constructions(monkeypatch, "StrategyInstanceKeyedMutexRegistry")
     abi_orchestrator_instances = _count_constructions(monkeypatch, "AbiExecutionEventOrchestrator")

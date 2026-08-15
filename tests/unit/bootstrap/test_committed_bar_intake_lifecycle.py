@@ -23,6 +23,7 @@ def _valid_environ(tmp_path: Path) -> dict[str, str]:
     return {
         "RUNTIME_SPECS_PATH": str(specs_path),
         "RUNTIME_JOURNAL_PATH": str(tmp_path / "journal" / "runtime.jsonl"),
+        "RUNTIME_STATE_PATH": str(tmp_path / "state" / "runtime_state.jsonl"),
         "RUNTIME_STRATEGY_ENGINE_BASE_URL": "http://engine.invalid",
         "RUNTIME_STRATEGY_ENGINE_TIMEOUT_SECONDS": "5",
         "RUNTIME_ABI_BASE_URL": "http://abi.invalid",

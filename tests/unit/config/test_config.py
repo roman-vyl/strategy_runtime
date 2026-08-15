@@ -4,7 +4,11 @@ import pytest
 
 from strategy_runtime.config.loader import load_runtime_config
 from strategy_runtime.config.model import RuntimeConfig
-from strategy_runtime.config.startup import prepare_journal_path, prepare_specs_path
+from strategy_runtime.config.startup import (
+    prepare_journal_path,
+    prepare_specs_path,
+    prepare_state_path,
+)
 
 _REQUIRED_OUTBOUND_ENV = {
     "RUNTIME_STRATEGY_ENGINE_BASE_URL": "http://engine.internal",
@@ -23,6 +27,7 @@ def test_loads_defaults() -> None:
     assert config.port == 8093
     assert config.journal_path == Path("var/journal/runtime.jsonl")
     assert config.specs_path == Path("var/specs")
+    assert config.state_path == Path("var/state/runtime_state.jsonl")
 
 
 def test_environment_overrides() -> None:
@@ -33,10 +38,12 @@ def test_environment_overrides() -> None:
             "RUNTIME_PORT": "9000",
             "RUNTIME_JOURNAL_PATH": "tmp/events.jsonl",
             "RUNTIME_SPECS_PATH": "tmp/specs",
+            "RUNTIME_STATE_PATH": "tmp/state.jsonl",
         }
     )
     assert config.port == 9000
     assert config.specs_path == Path("tmp/specs")
+    assert config.state_path == Path("tmp/state.jsonl")
 
 
 def test_loads_required_outbound_fields() -> None:
@@ -175,6 +182,19 @@ def test_prepare_specs_path_creates_directory(tmp_path: Path) -> None:
     path = tmp_path / "nested" / "specs"
     prepare_specs_path(path)
     assert path.is_dir()
+
+
+def test_rejects_empty_state_path() -> None:
+    with pytest.raises(ValueError):
+        load_runtime_config({"RUNTIME_STATE_PATH": " "})
+
+
+def test_prepare_state_path_preserves_existing_content(tmp_path: Path) -> None:
+    path = tmp_path / "nested" / "runtime_state.jsonl"
+    path.parent.mkdir()
+    path.write_text("existing\n", encoding="utf-8")
+    prepare_state_path(path)
+    assert path.read_text(encoding="utf-8") == "existing\n"
 
 
 def _parse_env_example(path: Path) -> dict[str, str]:

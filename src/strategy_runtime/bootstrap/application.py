@@ -10,11 +10,18 @@ from fastapi import FastAPI
 
 from strategy_runtime.adapters.http.app import create_http_app
 from strategy_runtime.config.loader import load_runtime_config
-from strategy_runtime.config.startup import prepare_journal_path, prepare_specs_path
+from strategy_runtime.config.startup import (
+    prepare_journal_path,
+    prepare_specs_path,
+    prepare_state_path,
+)
 from strategy_runtime.infrastructure.abi import (
     HttpxAbiEntryPackageAdapter,
     HttpxAbiOpenPositionLookupAdapter,
     HttpxAbiPositionManagementAdapter,
+)
+from strategy_runtime.infrastructure.runtime_state import (
+    JsonlStrategyInstanceRuntimeStateRepository,
 )
 from strategy_runtime.infrastructure.strategy_engine import (
     HttpxStrategyEngineLiveEntryAdapter,
@@ -43,9 +50,6 @@ from strategy_runtime.runtime.position_management_orchestrator import (
 from strategy_runtime.runtime.routing.router import StrategyUseCaseRouter
 from strategy_runtime.runtime.state.identity import new_trade_cycle_id
 from strategy_runtime.runtime.state.models import StrategyInstanceRuntimeState
-from strategy_runtime.runtime.state.repository import (
-    InMemoryStrategyInstanceRuntimeStateRepository,
-)
 from strategy_runtime.shared.identifiers import new_identifier, utc_timestamp
 from strategy_runtime.utility.committed_bar import (
     CommittedBarOrchestrator,
@@ -125,6 +129,7 @@ def build_application(
         config = load_runtime_config(environ)
         prepare_journal_path(config.journal_path)
         prepare_specs_path(config.specs_path)
+        prepare_state_path(config.state_path)
 
         catalog = FilesystemDeploymentCatalog(config.specs_path)
         selector = CommittedBarDeploymentSelector()
@@ -172,7 +177,7 @@ def build_application(
             open_trade_engine=open_trade_client,
         )
         entry_execution_bridge = AbiEntryPackageExecutionBridge(entry_package_client)
-        state_repository = InMemoryStrategyInstanceRuntimeStateRepository()
+        state_repository = JsonlStrategyInstanceRuntimeStateRepository(config.state_path)
         keyed_mutex_registry = StrategyInstanceKeyedMutexRegistry()
         entry_reconciliation_orchestrator = EntryReconciliationOrchestrator(
             new_trade_cycle_id,

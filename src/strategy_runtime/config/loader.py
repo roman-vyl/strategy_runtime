@@ -12,10 +12,13 @@ def load_runtime_config(environ: Mapping[str, str] | None = None) -> RuntimeConf
     port_text = values.get("RUNTIME_PORT", "8093")
     journal_text = values.get("RUNTIME_JOURNAL_PATH", "var/journal/runtime.jsonl")
     specs_text = values.get("RUNTIME_SPECS_PATH", "var/specs")
+    state_text = values.get("RUNTIME_STATE_PATH", "var/state/runtime_state.jsonl")
     if not journal_text.strip():
         raise ValueError("RUNTIME_JOURNAL_PATH must not be empty")
     if not specs_text.strip():
         raise ValueError("RUNTIME_SPECS_PATH must not be empty")
+    if not state_text.strip():
+        raise ValueError("RUNTIME_STATE_PATH must not be empty")
     try:
         port = int(port_text)
     except ValueError as exc:
@@ -42,6 +45,7 @@ def load_runtime_config(environ: Mapping[str, str] | None = None) -> RuntimeConf
         port=port,
         journal_path=Path(journal_text),
         specs_path=Path(specs_text),
+        state_path=Path(state_text),
         strategy_engine_base_url=strategy_engine_base_url,
         strategy_engine_timeout_seconds=strategy_engine_timeout_seconds,
         abi_base_url=abi_base_url,

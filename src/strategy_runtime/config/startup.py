@@ -11,6 +11,14 @@ def prepare_journal_path(path: Path) -> None:
         pass
 
 
+def prepare_state_path(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and not path.is_file():
+        raise ValueError("RUNTIME_STATE_PATH must identify a file")
+    with path.open("a", encoding="utf-8"):
+        pass
+
+
 def prepare_specs_path(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
     if not path.is_dir():
