@@ -72,18 +72,25 @@ and only if `recovery_state` is `position_open`.
   values
 - **THEN** the adapter raises a typed protocol error
 
-### Requirement: A missing trade-cycle binding is a distinct, typed public error
+### Requirement: A missing trade-cycle binding is a distinct, typed public error, never a fabricated recovery_state
 The adapter SHALL decode ABI's `422 unknown_trade_cycle_binding` response as
-a distinct typed public error, not as any `recovery_state` value, and SHALL
-document that the resolver may treat it as equivalent to
-`terminal_without_fill` for resolution purposes — that equivalence is a
-resolver-level decision, not something the adapter fabricates as a fake
-success response.
+a distinct typed public error, not as any `recovery_state` value. The adapter
+SHALL NOT document, imply, or provide any helper that treats this error as
+equivalent to `terminal_without_fill` or any other `recovery_state` — Runtime
+draws no inference at all from a missing binding. If ABI can safely prove
+absence for a trade cycle it does not recognize, that proof must be surfaced
+as one of ABI's own documented `recovery_state` values by the paired ABI
+capability (`abi-entry-cycle-recovery-v1`), not derived by Runtime from this
+HTTP status.
 
 #### Scenario: Decode unknown_trade_cycle_binding
 - **WHEN** ABI returns `422` with `error.code = "unknown_trade_cycle_binding"`
 - **THEN** the adapter raises a typed public error carrying that code
 - **AND** does not return a `RecoveryStateResponse`
+- **AND** the caller (`uncertain-exchange-state-resolver`) treats this raised
+  error identically to a transport or availability failure — leaving
+  `pending_entry_recovery` untouched — never as evidence of
+  `terminal_without_fill`
 
 ### Requirement: A documented 500 internal_error response is an availability failure
 The adapter SHALL treat a documented `500 internal_error` response the same

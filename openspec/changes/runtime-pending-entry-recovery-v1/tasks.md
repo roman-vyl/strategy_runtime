@@ -12,7 +12,7 @@
 
 ## 2. Durable persistence
 
-- [ ] 2.1 Add `list_ids_with_pending_entry_mutation() -> tuple[str, ...]` to the
+- [ ] 2.1 Add `list_ids_with_pending_entry_recovery() -> tuple[str, ...]` to the
       `StrategyInstanceRuntimeStateRepository` protocol and both implementations
       (in-memory, JSONL) as an O(n) filter over the already-resident in-memory index.
 - [ ] 2.2 Bump the durable codec to `schema_version = 2`: `pending_entry_recovery` becomes
@@ -49,7 +49,13 @@
       conventions.
 - [ ] 5.2 Decode the five `recovery_state` values and the conditional
       `applied_entry_package`/fill-fact fields per the ABI wire contract.
-- [ ] 5.3 Add a client method for the one corrective action (resend CANCEL for the
+- [ ] 5.3 Decode ABI's `422 unknown_trade_cycle_binding` as its own typed public error,
+      distinct from any `recovery_state` — the resolver treats it identically to a
+      transport/availability failure (`pending_entry_recovery` untouched), never as
+      evidence of `terminal_without_fill`. If ABI can safely prove absence for a missing
+      binding, that must be expressed as one of ABI's own documented `recovery_state`
+      values, not inferred by Runtime from the HTTP status.
+- [ ] 5.4 Add a client method for the one corrective action (resend CANCEL for the
       recovery-target trade cycle), reusing the existing entry-package client where
       possible rather than introducing a second write path.
 
@@ -59,10 +65,10 @@
       `keyed_mutex_registry.hold(...)`, the Runtime-side 24h backstop check, the ABI
       recovery-state query, and the resolution table from design.md Decision 5.
 - [ ] 6.2 Implement the background worker (own thread, `_State` enum, `start()`/
-      `stop_once()`, bounded interval with backoff), modeled on
-      `CommittedBarIntakeWorker`.
+      `stop_once()`, fixed bounded polling interval, no adaptive/exponential backoff),
+      modeled on `CommittedBarIntakeWorker`.
 - [ ] 6.3 Each interval, enumerate pending instances via
-      `list_ids_with_pending_entry_mutation()` and call `attempt(...)` for each,
+      `list_ids_with_pending_entry_recovery()` and call `attempt(...)` for each,
       catching and logging per-instance failures without stopping the loop.
 - [ ] 6.4 Log an operator-visible event (not a state mutation) when either horizon
       (Runtime backstop or ABI's `recovery_horizon_exceeded`) is reached.
@@ -87,12 +93,16 @@
 - [ ] 8.4 Resolver: each of the five ABI recovery states, for both the uncertain-Apply and
       uncertain-Cancel cases, including the `entry_order_live`-while-removal-intended
       resend-CANCEL path.
-- [ ] 8.5 Resolver: Runtime's own 24h backstop fires without an ABI call once exceeded,
-      and never fires before ABI's own horizon would have applied.
+- [ ] 8.5 Resolver: Runtime's own 24h backstop fires without an ABI call once exceeded; it
+      may fire slightly before ABI's own horizon would have (Runtime's clock is always
+      earlier than or equal to ABI's for the same mutation) — this is the intended,
+      conservative direction and is not a defect to assert against.
 - [ ] 8.6 Codec: `schema_version = 1` records decode with `pending_entry_recovery = None`;
       `schema_version = 2` records require the key; every new write is `schema_version = 2`.
 - [ ] 8.7 Orchestrator guard: a committed bar for an instance with
       `pending_entry_recovery` set does not call the use-case router or Strategy Engine.
+- [ ] 8.8 Resolver: ABI's `422 unknown_trade_cycle_binding` leaves `pending_entry_recovery`
+      untouched — it is never treated as `terminal_without_fill`.
 
 ## 9. Verification
 

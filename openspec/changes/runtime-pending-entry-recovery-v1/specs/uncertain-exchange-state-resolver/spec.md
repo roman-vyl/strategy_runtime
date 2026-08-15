@@ -58,13 +58,18 @@ elapsed, the resolver SHALL NOT query ABI, SHALL NOT modify
 - **AND** `pending_entry_recovery` remains exactly as it was
 - **AND** an operator-visible event is logged
 
-#### Scenario: Backstop never fires before ABI's own horizon would apply
+#### Scenario: Runtime's backstop may fire slightly before ABI's own horizon, by design
 - **WHEN** at most 24 hours have elapsed since
   `pending_entry_recovery.created_at_ms`
 - **THEN** the resolver proceeds to query ABI, whose own horizon (anchored on
-  `current_binding_started_at`, always at or after Runtime's
+  `current_binding_started_at`, written strictly later than Runtime's
   `created_at_ms` for the same mutation) governs whether that specific query
   can resolve
+- **AND** because Runtime's anchor is always earlier than or equal to ABI's,
+  Runtime's backstop can only trigger `recovery_horizon_exceeded`-equivalent
+  behavior at or before the point ABI's own horizon would — never after; this
+  is a deliberately conservative property, not a coordination guarantee to
+  keep the two horizons in lockstep
 
 ### Requirement: An uncertain Apply resolves by the four ABI-reported states
 When `pending_entry_recovery` is non-null and `current_trade_cycle` is null,
@@ -128,18 +133,31 @@ table.
 - **THEN** the resolver does not modify `pending_entry_recovery`
 - **AND** logs an operator-visible event
 
-### Requirement: A transport or availability failure changes nothing
-When the ABI recovery-state query itself fails (timeout, network failure,
-protocol error, or an ABI-reported availability failure distinct from
-`recovery_horizon_exceeded`), the resolver SHALL NOT modify
-`pending_entry_recovery` and SHALL NOT treat the failure as evidence of any
-`recovery_state`.
+### Requirement: A transport, availability, or unknown-binding failure changes nothing
+When the ABI recovery-state query itself fails — a timeout, network failure,
+protocol error, an ABI-reported availability failure distinct from
+`recovery_horizon_exceeded`, or ABI's `422 unknown_trade_cycle_binding` public
+error — the resolver SHALL NOT modify `pending_entry_recovery` and SHALL NOT
+treat any of these as evidence of any `recovery_state`, including
+`terminal_without_fill`. `unknown_trade_cycle_binding` is deliberately not
+special-cased into `terminal_without_fill` on the Runtime side: if ABI can
+safely prove absence for a binding it does not recognize, that proof must be
+expressed as one of ABI's own documented `recovery_state` values (see the
+paired ABI capability), not inferred by Runtime from an HTTP status.
 
 #### Scenario: A failed query leaves the marker untouched
-- **WHEN** the ABI recovery-state client raises for this attempt
+- **WHEN** the ABI recovery-state client raises for this attempt, for any of
+  the reasons above
 - **THEN** the resolver durably changes nothing
 - **AND** the same instance is eligible for another attempt on the next
   interval
+
+#### Scenario: An unknown trade-cycle binding is not treated as terminal_without_fill
+- **WHEN** ABI returns `422 unknown_trade_cycle_binding` for the queried
+  `trade_cycle_id`
+- **THEN** the resolver treats this identically to any other failed query
+- **AND** does not save `current_trade_cycle = null` or
+  `pending_entry_recovery = null` on the basis of this response alone
 
 ### Requirement: The resolver never initiates Engine evaluation or position management
 The resolver SHALL NOT call `StrategyUseCaseRouter`, Strategy Engine,
@@ -160,22 +178,28 @@ pipeline's responsibility.
 
 ### Requirement: The background worker follows the existing intake-worker lifecycle shape
 Strategy Runtime SHALL provide a background worker that drives resolution
-attempts on a bounded, non-busy interval with backoff on repeated failure,
-using the same lifecycle shape as `CommittedBarIntakeWorker`: an explicit
-state machine, `start()`/`stop_once()` with `join()`, and per-attempt
-exception isolation that logs and continues rather than stopping the loop.
+attempts on a fixed, bounded polling interval, using the same lifecycle shape
+as `CommittedBarIntakeWorker`: an explicit state machine, `start()`/
+`stop_once()` with `join()`, and per-attempt exception isolation that logs
+and continues rather than stopping the loop. No adaptive or exponential
+backoff is required for V1; a generic retry/backoff framework is out of
+scope for this component.
 
 #### Scenario: One tick attempts every currently pending instance
 - **WHEN** the worker's interval elapses
 - **THEN** it enumerates pending instances via
-  `list_ids_with_pending_entry_mutation()` and attempts resolution for each
+  `list_ids_with_pending_entry_recovery()` and attempts resolution for each
 - **AND** a failure resolving one instance does not prevent attempting the
   others in the same tick
 
 #### Scenario: No tight busy-loop
 - **WHEN** the worker is running
-- **THEN** it sleeps for a bounded interval between ticks
-- **AND** repeated failures increase that interval rather than tightening it
+- **THEN** it sleeps for a fixed, bounded interval between ticks
+- **AND** that interval does not shrink to zero or otherwise become a tight
+  poll, regardless of how many instances are pending or how many attempts
+  failed on the previous tick
+- **AND** the interval does not grow or shrink adaptively between ticks —
+  a fixed interval is sufficient for V1
 
 #### Scenario: Startup requires no separate recovery step
 - **WHEN** the process starts

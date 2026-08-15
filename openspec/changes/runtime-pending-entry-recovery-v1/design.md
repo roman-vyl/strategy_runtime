@@ -150,10 +150,13 @@ if now_ms() - pending_entry_recovery.created_at_ms > HORIZON_MS:
 ```
 
 Because `pending_entry_recovery.created_at_ms` is written before the first ABI call for
-that trade cycle, and ABI's own `current_binding_started_at` is written before *its* first
-exchange call for the same generation, Runtime's clock is always earlier than or equal to
-ABI's. The backstop can never fire before ABI's own horizon logic would already have
-applied — it only adds coverage for the case ABI's own check can't reach.
+that trade cycle, and ABI's own `current_binding_started_at` is written strictly later
+(before *its* first exchange call for the same generation), Runtime's backstop can fire
+slightly *earlier* than ABI's own horizon logic would have. This is deliberately
+conservative, not a bug to reconcile away: it never fires *later* than ABI's own horizon,
+so the two checks never disagree in the unsafe direction — Runtime's ≤24h guarantee can
+only end up stricter than ABI's, never looser, and it is the one enforcement point that
+still holds when ABI itself is unreachable for the whole window.
 
 ### 5. The resolver only ever observes or resends CANCEL
 
@@ -226,7 +229,8 @@ observability improvement, not required for this change's correctness goals.
 `UncertainExchangeStateResolver`'s worker is a second background thread constructed and
 lifecycle-managed in `bootstrap/application.py` exactly like `CommittedBarIntakeWorker`:
 own `_State` enum, `start()`/`stop_once()` with `join()`, bounded per-attempt work, no
-tight busy-loop (fixed interval with backoff on repeated failure). It reads
+tight busy-loop — a fixed polling interval between ticks, with no adaptive or exponential
+backoff; a generic retry/backoff framework is explicitly out of scope for this V1. It reads
 `pending_entry_recovery` durably restored by `JsonlStrategyInstanceRuntimeStateRepository`'s
 existing startup replay — no separate recovery-of-recovery-state step exists or is needed.
 Readiness does not wait for outstanding `pending_entry_recovery` to resolve; the process is

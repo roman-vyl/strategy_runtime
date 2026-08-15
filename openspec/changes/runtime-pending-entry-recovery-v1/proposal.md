@@ -47,7 +47,7 @@ strategy," not "an earlier command's outcome is now known."
   and the first-fill webhook path already use — asks ABI's new recovery-state endpoint
   what actually happened, then resolves the pending marker or leaves it untouched.
 - Add a narrow enumeration method to `StrategyInstanceRuntimeStateRepository`:
-  `list_ids_with_pending_entry_mutation() -> tuple[str, ...]`, a read-only filter over the
+  `list_ids_with_pending_entry_recovery() -> tuple[str, ...]`, a read-only filter over the
   repository's already-resident in-memory index. No new durable structure is introduced;
   `pending_entry_recovery` inside the existing durable aggregate remains the only source
   of truth.
@@ -74,9 +74,11 @@ strategy," not "an earlier command's outcome is now known."
   than 24 hours, ABI can never compute or return its own horizon response, and Runtime's
   guarantee that automatic recovery is bounded to 24 hours would otherwise depend entirely
   on ABI's availability rather than being a property Runtime can itself enforce. Because
-  `pending_entry_recovery.created_at_ms` is written before ABI is ever contacted, it is
-  always earlier than or equal to ABI's own anchor, so this backstop never fires before
-  ABI's own horizon would have applied.
+  `pending_entry_recovery.created_at_ms` is written before ABI is ever contacted, and
+  ABI's own `current_binding_started_at` is written strictly later (before ABI's first
+  exchange call for the same mutation), Runtime's backstop can fire slightly *earlier*
+  than ABI's own horizon would have. This is deliberately conservative and accepted: it
+  never fires *later*, so it can only make the ≤24h guarantee stricter, never looser.
 - Past the horizon (either Runtime's own backstop, or ABI's `recovery_horizon_exceeded`
   response), the resolver leaves `pending_entry_recovery` untouched and logs an
   operator-visible event. The affected instance remains blocked on the normal bar path
@@ -103,7 +105,7 @@ strategy," not "an earlier command's outcome is now known."
   replace" transition is removed; a changed desired entry clears `current_trade_cycle`
   through the same path as `Cancel`.
 - `strategy-instance-runtime-state-repository`: adds
-  `list_ids_with_pending_entry_mutation()`.
+  `list_ids_with_pending_entry_recovery()`.
 - `runtime-durable-state-store`: `schema_version` gains a validated `2` in addition to the
   existing `1`; the envelope's exact-key-set gains the required `pending_entry_recovery`
   key for `2`.
