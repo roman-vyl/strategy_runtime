@@ -168,11 +168,11 @@ election).
 ### Requirement: Decoding enforces the exact key set of every persisted structure except `raw_spec`
 Decoding a durable JSONL line SHALL reject, as a schema/domain validation
 failure, any field not in the exact allowed set for the envelope,
-`CurrentTradeCycle`, `AppliedEntryPackage`, `DesiredEntry`,
-`FrozenExecutedEntryContext`, and `DesiredProtection`, and SHALL equally
-reject any of those structures' fields being absent — including a
-nullable field such as `current_trade_cycle`, `frozen_entry_context`,
-`latest_confirmed_management_protection`, or
+`RegisteredSpecSnapshot`, `CurrentTradeCycle`, `AppliedEntryPackage`,
+`DesiredEntry`, `FrozenExecutedEntryContext`, and `DesiredProtection`, and
+SHALL equally reject any of those structures' fields being absent —
+including a nullable field such as `current_trade_cycle`,
+`frozen_entry_context`, `latest_confirmed_management_protection`, or
 `DesiredProtection.take_price`. A record is a complete snapshot: a
 nullable field MUST still be present with an explicit JSON `null`;
 omitting the key is a schema violation, not an implicit null, and decoding
@@ -190,8 +190,8 @@ itself within `registered_spec_snapshot`.
   closed on any line, and fail closed even when confined to the last line
 
 #### Scenario: An unrecognized field inside a nested structure fails closed
-- **WHEN** `current_trade_cycle`, `applied_entry_package`,
-  `desired_entry`, `frozen_entry_context`, or
+- **WHEN** `registered_spec_snapshot`, `current_trade_cycle`,
+  `applied_entry_package`, `desired_entry`, `frozen_entry_context`, or
   `latest_confirmed_management_protection` contains a field outside that
   structure's exact allowed set
 - **THEN** decoding raises a schema/domain validation failure, with the
