@@ -77,23 +77,25 @@ caller without a state transition.
 
 ### Requirement: Durable recovery marker is saved before every entry mutation side effect
 Before invoking the execution port for `Apply` or `Cancel`, the orchestrator
-SHALL durably save `pending_entry_recovery = {trade_cycle_id, created_at_ms}`
-on the source state, using the same `trade_cycle_id` the command carries (the
-freshly reserved identity for `Apply`, the existing current-cycle identity for
-`Cancel`). This save SHALL complete before any request reaches ABI.
+SHALL durably save `pending_entry_recovery = {trade_cycle_id}` on the source
+state, using the same `trade_cycle_id` the command carries (the freshly
+reserved identity for `Apply`, the existing current-cycle identity for
+`Cancel`). This save SHALL complete before any request reaches ABI. The
+marker carries no timestamp — it records only which trade cycle is uncertain,
+not when the uncertainty began.
 
 #### Scenario: Marker precedes the Apply side effect
 - **WHEN** the orchestrator is about to invoke the execution port for a valid
   `Apply` command
 - **THEN** it first durably saves `pending_entry_recovery` with the reserved
-  `apply_trade_cycle_id` and the current wall-clock time
+  `apply_trade_cycle_id`
 - **AND** only then invokes the execution port
 
 #### Scenario: Marker precedes the Cancel side effect
 - **WHEN** the orchestrator is about to invoke the execution port for a valid
   `Cancel` command
 - **THEN** it first durably saves `pending_entry_recovery` with the acknowledged
-  current cycle's `trade_cycle_id` and the current wall-clock time
+  current cycle's `trade_cycle_id`
 - **AND** only then invokes the execution port
 
 #### Scenario: A successful confirmation clears the marker in the same transition

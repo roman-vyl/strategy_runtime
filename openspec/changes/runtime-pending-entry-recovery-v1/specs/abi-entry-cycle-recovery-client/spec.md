@@ -31,14 +31,18 @@ format validation, consistent with `abi-open-position-lookup-client`.
   UTF-8 path segment
 - **AND** ABI receives the exact original decoded value for each segment
 
-### Requirement: The five recovery_state values decode strictly, with conditional fields enforced
+### Requirement: The four recovery_state values decode strictly, with conditional fields enforced
 The adapter SHALL decode a `200` response's `recovery_state` as exactly one
-of `entry_order_live`, `position_open`, `terminal_without_fill`,
-`terminal_after_fill`, or `recovery_horizon_exceeded`, and SHALL enforce the
-same cross-field invariant ABI's contract defines: `applied_entry_package`
-non-null if and only if `recovery_state` is `entry_order_live` or
-`position_open`; `first_fill_at_ms`/`average_entry_price` both non-null if
-and only if `recovery_state` is `position_open`.
+of `entry_order_live`, `position_open`, `terminal_without_fill`, or
+`terminal_after_fill`, and SHALL enforce the same cross-field invariant
+ABI's contract defines: `applied_entry_package` non-null if and only if
+`recovery_state` is `entry_order_live` or `position_open`;
+`first_fill_at_ms`/`average_entry_price` both non-null if and only if
+`recovery_state` is `position_open`. There is no fifth, time-based
+`recovery_state` value — ABI reports insufficient positive evidence through
+its existing `500 internal_error` availability-failure shape (see "A
+documented 500 internal_error response is an availability failure"), not
+through a distinct `200` state.
 
 #### Scenario: Decode entry_order_live
 - **WHEN** HTTP `200` reports `recovery_state: "entry_order_live"` with a
@@ -52,10 +56,10 @@ and only if `recovery_state` is `position_open`.
 - **THEN** the adapter returns a `RecoveryStateResponse` of kind
   `position_open` carrying the applied entry package and fill facts
 
-#### Scenario: Decode terminal_without_fill, terminal_after_fill, or recovery_horizon_exceeded
-- **WHEN** HTTP `200` reports one of `terminal_without_fill`,
-  `terminal_after_fill`, or `recovery_horizon_exceeded`, with
-  `applied_entry_package` null and both fill facts null
+#### Scenario: Decode terminal_without_fill or terminal_after_fill
+- **WHEN** HTTP `200` reports `terminal_without_fill` or
+  `terminal_after_fill`, with `applied_entry_package` null and both fill
+  facts null
 - **THEN** the adapter returns a `RecoveryStateResponse` of the matching kind
   carrying no applied entry package or fill facts
 
@@ -68,7 +72,7 @@ and only if `recovery_state` is `position_open`.
 - **AND** does not return a `RecoveryStateResponse`
 
 #### Scenario: Reject an unrecognized recovery_state value
-- **WHEN** `recovery_state` is present but not one of the five documented
+- **WHEN** `recovery_state` is present but not one of the four documented
   values
 - **THEN** the adapter raises a typed protocol error
 
@@ -92,15 +96,23 @@ HTTP status.
   `pending_entry_recovery` untouched — never as evidence of
   `terminal_without_fill`
 
-### Requirement: A documented 500 internal_error response is an availability failure
+### Requirement: A documented 500 internal_error response is an availability failure, covering both genuine query failure and insufficient positive evidence
 The adapter SHALL treat a documented `500 internal_error` response the same
 way `abi-open-position-lookup-client` treats it for the open-position lookup:
 as an availability failure, not a public error and not any `recovery_state`.
+This single response shape covers two situations ABI's own contract
+deliberately does not distinguish for the caller: a genuine query failure,
+and a query that completed cleanly but could not positively establish any of
+the four `recovery_state` outcomes. The adapter and its caller treat both
+identically — there is no way to tell them apart from this response, and no
+need to.
 
 #### Scenario: Classify a documented 500 as unavailable
 - **WHEN** ABI returns `500` with the documented `internal_error` envelope
 - **THEN** the adapter raises a typed availability failure
 - **AND** returns no `RecoveryStateResponse`
+- **AND** the caller treats this identically whether the underlying cause
+  was a query failure or ABI's inability to positively establish an outcome
 
 ### Requirement: The adapter exposes one corrective-action call, distinct from the query
 The adapter SHALL expose a second operation for the resolver's one corrective

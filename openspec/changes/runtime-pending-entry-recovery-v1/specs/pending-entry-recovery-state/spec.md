@@ -17,12 +17,13 @@ null means no entry mutation is currently uncertain for that instance.
 - **THEN** exactly one `PendingEntryRecovery` is present
 - **AND** the aggregate cannot contain a second concurrent pending marker
 
-### Requirement: PendingEntryRecovery has only the minimal fields needed to ask ABI and bound recovery
+### Requirement: PendingEntryRecovery has only the one field needed to ask ABI which trade cycle is uncertain
 `PendingEntryRecovery` SHALL contain exactly one non-empty `trade_cycle_id:
-str` and one `created_at_ms: int` (the Runtime wall-clock time the marker was
-durably saved, strictly before the first ABI call for that mutation
-attempt). It SHALL contain no `action` discriminator, no `desired_entry`, no
-retry counter, and no command identifier.
+str` and no other field. It SHALL contain no `action` discriminator, no
+`desired_entry`, no timestamp, no retry counter, and no command identifier.
+There is no wall-clock recovery horizon in this design (see the paired
+`uncertain-exchange-state-resolver` capability), so no field exists to
+measure elapsed time against.
 
 #### Scenario: Require a non-empty trade-cycle identity
 - **WHEN** `PendingEntryRecovery` is constructed
@@ -30,11 +31,10 @@ retry counter, and no command identifier.
 - **AND** construction fails before the value can enter aggregate or
   repository state if it is empty or not a string
 
-#### Scenario: Require a positive creation timestamp
+#### Scenario: No timestamp is stored
 - **WHEN** `PendingEntryRecovery` is constructed
-- **THEN** `created_at_ms` is a strictly positive integer
-- **AND** construction fails before the value can enter aggregate or
-  repository state otherwise
+- **THEN** it contains no creation time, last-attempt time, or any other
+  clock-derived field
 
 #### Scenario: No desired entry is stored
 - **WHEN** `PendingEntryRecovery` is constructed

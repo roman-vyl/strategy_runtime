@@ -74,8 +74,8 @@ values of the envelope's `schema_version` field: `1` and `2`. A
 which SHALL be treated as `pending_entry_recovery = None` on the decoded
 aggregate. A `schema_version = 2` line requires the `pending_entry_recovery`
 key to be present, holding either `null` or a complete `PendingEntryRecovery`
-object (`trade_cycle_id`, `created_at_ms`). Every new write (`save`, and the
-creation path of `get_or_create`) SHALL encode `schema_version = 2`. Any
+object (`trade_cycle_id` only — no timestamp field). Every new write (`save`,
+and the creation path of `get_or_create`) SHALL encode `schema_version = 2`. Any
 other `schema_version` value SHALL fail closed exactly like any other
 schema/domain validation failure.
 
@@ -99,11 +99,10 @@ schema/domain validation failure.
 
 #### Scenario: A schema_version 2 line with a present marker decodes it
 - **WHEN** replay encounters a line with `schema_version: 2` and
-  `pending_entry_recovery` holding a complete `{trade_cycle_id,
-  created_at_ms}` object
+  `pending_entry_recovery` holding a complete `{trade_cycle_id}` object
 - **THEN** decoding succeeds
 - **AND** the decoded aggregate's `pending_entry_recovery` holds that exact
-  `trade_cycle_id` and `created_at_ms`
+  `trade_cycle_id`
 
 #### Scenario: Every new write is schema_version 2
 - **WHEN** `save(...)` or the creation path of `get_or_create(...)` encodes a

@@ -44,32 +44,21 @@ CANCEL call.
   `pending_entry_recovery`
 - **THEN** their resolution attempts do not block each other
 
-### Requirement: Runtime's own 24-hour backstop is checked before any ABI call
-For each attempt, before querying ABI, the resolver SHALL compare the current
-time to `pending_entry_recovery.created_at_ms`. If more than 24 hours have
-elapsed, the resolver SHALL NOT query ABI, SHALL NOT modify
-`pending_entry_recovery`, and SHALL emit an operator-visible log event.
+### Requirement: Resolution applies no wall-clock gate of any kind
+The resolver SHALL NOT compare any timestamp to the current time, SHALL NOT
+compute an age or elapsed duration for `pending_entry_recovery`, and SHALL
+NOT withhold, skip, or alter an ABI query on the basis of how long a marker
+has been pending. Whether an attempt can resolve depends entirely on ABI's
+response — specifically, whether it is one of the four positive
+`recovery_state` values below — never on elapsed time.
 
-#### Scenario: Backstop fires without an ABI call
-- **WHEN** more than 24 hours have elapsed since
-  `pending_entry_recovery.created_at_ms`
-- **THEN** the resolver does not call the ABI recovery-state client for this
-  attempt
-- **AND** `pending_entry_recovery` remains exactly as it was
-- **AND** an operator-visible event is logged
-
-#### Scenario: Runtime's backstop may fire slightly before ABI's own horizon, by design
-- **WHEN** at most 24 hours have elapsed since
-  `pending_entry_recovery.created_at_ms`
-- **THEN** the resolver proceeds to query ABI, whose own horizon (anchored on
-  `current_binding_started_at`, written strictly later than Runtime's
-  `created_at_ms` for the same mutation) governs whether that specific query
-  can resolve
-- **AND** because Runtime's anchor is always earlier than or equal to ABI's,
-  Runtime's backstop can only trigger `recovery_horizon_exceeded`-equivalent
-  behavior at or before the point ABI's own horizon would — never after; this
-  is a deliberately conservative property, not a coordination guarantee to
-  keep the two horizons in lockstep
+#### Scenario: Every attempt queries ABI regardless of how long the marker has been pending
+- **WHEN** the resolver attempts to resolve an instance whose
+  `pending_entry_recovery` has persisted across many prior unresolved
+  attempts
+- **THEN** the resolver queries ABI exactly the same way it would for a
+  marker set moments ago — no different code path, no skipped query, no
+  escalation to a different outcome based on elapsed time
 
 ### Requirement: An uncertain Apply resolves by the four ABI-reported states
 When `pending_entry_recovery` is non-null and `current_trade_cycle` is null,
@@ -95,11 +84,6 @@ the resolver SHALL apply the following resolution table to ABI's
   revive the original desired entry
 - **AND** a later committed bar's ordinary reconciliation decides afresh
   whether to apply a new entry
-
-#### Scenario: recovery_horizon_exceeded leaves the marker untouched
-- **WHEN** ABI reports `recovery_horizon_exceeded`
-- **THEN** the resolver does not modify `pending_entry_recovery`
-- **AND** logs an operator-visible event
 
 ### Requirement: An uncertain removal resolves by the four ABI-reported states, with one corrective action
 When `pending_entry_recovery` is non-null and `current_trade_cycle` holds the
@@ -128,29 +112,32 @@ table.
 - **AND** issues no other command (no CREATE, no amend, no resend of any
   desired entry)
 
-#### Scenario: recovery_horizon_exceeded leaves the marker untouched
-- **WHEN** ABI reports `recovery_horizon_exceeded`
-- **THEN** the resolver does not modify `pending_entry_recovery`
-- **AND** logs an operator-visible event
+### Requirement: A transport failure, availability failure, inconclusive-evidence response, or unknown-binding response all change nothing
+When the ABI recovery-state query itself does not return one of the four
+positive `recovery_state` values — a timeout, network failure, protocol
+error, an ABI-reported availability failure, ABI's own safe-error response
+for insufficient positive evidence (see `entry-cycle-recovery-resolution`:
+absence of evidence is never treated as evidence of absence), or ABI's `422
+unknown_trade_cycle_binding` public error — the resolver SHALL NOT modify
+`pending_entry_recovery` and SHALL NOT treat any of these as evidence of any
+`recovery_state`, including `terminal_without_fill`. All of these are
+handled by exactly the same code path: leave the marker untouched, retry
+next tick. `unknown_trade_cycle_binding` is deliberately not special-cased
+into `terminal_without_fill` on the Runtime side: if ABI can safely prove
+absence for a binding it does not recognize, that proof must be expressed as
+one of ABI's own documented `recovery_state` values (see the paired ABI
+capability), not inferred by Runtime from an HTTP status.
 
-### Requirement: A transport, availability, or unknown-binding failure changes nothing
-When the ABI recovery-state query itself fails — a timeout, network failure,
-protocol error, an ABI-reported availability failure distinct from
-`recovery_horizon_exceeded`, or ABI's `422 unknown_trade_cycle_binding` public
-error — the resolver SHALL NOT modify `pending_entry_recovery` and SHALL NOT
-treat any of these as evidence of any `recovery_state`, including
-`terminal_without_fill`. `unknown_trade_cycle_binding` is deliberately not
-special-cased into `terminal_without_fill` on the Runtime side: if ABI can
-safely prove absence for a binding it does not recognize, that proof must be
-expressed as one of ABI's own documented `recovery_state` values (see the
-paired ABI capability), not inferred by Runtime from an HTTP status.
-
-#### Scenario: A failed query leaves the marker untouched
-- **WHEN** the ABI recovery-state client raises for this attempt, for any of
-  the reasons above
+#### Scenario: A failed or inconclusive query leaves the marker untouched
+- **WHEN** the ABI recovery-state client raises for this attempt, or returns
+  its safe-error response instead of a `recovery_state`, for any of the
+  reasons above
 - **THEN** the resolver durably changes nothing
 - **AND** the same instance is eligible for another attempt on the next
   interval
+- **AND** the resolver does not distinguish "ABI could not be reached" from
+  "ABI answered but could not positively establish an outcome" — both leave
+  `pending_entry_recovery` exactly as it was
 
 #### Scenario: An unknown trade-cycle binding is not treated as terminal_without_fill
 - **WHEN** ABI returns `422 unknown_trade_cycle_binding` for the queried

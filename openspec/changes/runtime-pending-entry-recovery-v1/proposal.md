@@ -23,14 +23,15 @@ strategy," not "an earlier command's outcome is now known."
 ## What Changes
 
 - Add `pending_entry_recovery: PendingEntryRecovery | None` as a sibling of
-  `current_trade_cycle` on `StrategyInstanceRuntimeState`. Before Runtime ever causes an
+  `current_trade_cycle` on `StrategyInstanceRuntimeState`. `PendingEntryRecovery` holds
+  exactly one field, `trade_cycle_id: str` — no timestamp. Before Runtime ever causes an
   ABI-side effect for a trade cycle (a new CREATE, or a CANCEL serving either an explicit
   Cancel decision or what was previously a Replace decision), it durably saves
-  `pending_entry_recovery = {trade_cycle_id, created_at_ms}` first. If the ABI call
-  succeeds, Runtime clears it in the same transition that applies the confirmed outcome.
-  If the call is ambiguous (exception, or any outcome other than a clean success), the
-  pending marker survives untouched — the trade cycle is never lost and no competing new
-  entry decision is made for that instance.
+  `pending_entry_recovery = {trade_cycle_id}` first. If the ABI call succeeds, Runtime
+  clears it in the same transition that applies the confirmed outcome. If the call is
+  ambiguous (exception, or any outcome other than a clean success), the pending marker
+  survives untouched — the trade cycle is never lost and no competing new entry decision
+  is made for that instance.
 - Collapse the `Replace` entry-reconciliation decision into `Cancel`. Since
   `abi-entry-cycle-recovery-v1` makes physical replace CANCEL-only on the ABI side (no
   in-place amend, no atomic cancel-and-create), a changed desired entry for an existing
@@ -67,29 +68,32 @@ strategy," not "an earlier command's outcome is now known."
   (`abi-entry-cycle-recovery-client`), following the same opaque-path-encoding,
   strict-decoding, and typed-failure conventions as the existing open-position lookup
   client.
-- Enforce, on the Runtime side, an independent 24-hour recovery horizon anchored on
-  `pending_entry_recovery.created_at_ms` — Runtime's own wall clock, checked *before*
-  calling ABI. This is a deliberate backstop distinct from ABI's own horizon (anchored on
-  its `current_binding_started_at`): if ABI or Bybit connectivity itself is down for more
-  than 24 hours, ABI can never compute or return its own horizon response, and Runtime's
-  guarantee that automatic recovery is bounded to 24 hours would otherwise depend entirely
-  on ABI's availability rather than being a property Runtime can itself enforce. Because
-  `pending_entry_recovery.created_at_ms` is written before ABI is ever contacted, and
-  ABI's own `current_binding_started_at` is written strictly later (before ABI's first
-  exchange call for the same mutation), Runtime's backstop can fire slightly *earlier*
-  than ABI's own horizon would have. This is deliberately conservative and accepted: it
-  never fires *later*, so it can only make the ≤24h guarantee stricter, never looser.
-- Past the horizon (either Runtime's own backstop, or ABI's `recovery_horizon_exceeded`
-  response), the resolver leaves `pending_entry_recovery` untouched and logs an
-  operator-visible event. The affected instance remains blocked on the normal bar path
-  indefinitely; unblocking it is an explicit operator action, out of scope for this
-  change.
+- Enforce no wall-clock recovery horizon. There is no 24-hour (or any other) time limit
+  on `pending_entry_recovery`, no `created_at_ms` field to measure one from, and no
+  clock-ordering reasoning between Runtime and ABI. Instead, correctness rests entirely on
+  one evidentiary rule the paired ABI capability (`abi-entry-cycle-recovery-v1`) enforces:
+  **absence of evidence is never treated as evidence of absence.** ABI's recovery-state
+  endpoint returns `terminal_without_fill` or `terminal_after_fill` only when it has
+  positively established that outcome (a definitively observed terminal-without-fill
+  order status, or a definitively observed fill); a query that comes back clean-but-empty
+  everywhere (no live order, no history match, no position) is treated identically to a
+  query failure — a safe error, not a resolved state.
+- If ABI's recovery-state query fails, or returns its safe-error response because it
+  cannot positively establish an outcome, the resolver leaves `pending_entry_recovery`
+  untouched and simply retries on the next polling tick. If positive evidence never
+  becomes available — for example after a very long outage, once the underlying exchange
+  evidence needed to establish the trade cycle's fate is no longer accessible — the
+  affected instance remains blocked on the normal bar path indefinitely. This is a
+  deliberate, accepted V1 limitation, not a defect to be automatically healed:
+  **automatic reconciliation targets short-lived ambiguous exchange outcomes; long-outage
+  or disaster-recovery scenarios that would require reasoning from stale or absent
+  evidence are explicitly out of scope, and are an operator/manual action instead.**
 
 ## Capabilities
 
 ### New Capabilities
 - `pending-entry-recovery-state`: the minimal `PendingEntryRecovery` sibling aggregate
-  field (`trade_cycle_id`, `created_at_ms`) and its relationship to `current_trade_cycle`.
+  field (`trade_cycle_id` only) and its relationship to `current_trade_cycle`.
 - `uncertain-exchange-state-resolver`: the background worker that resolves
   `pending_entry_recovery` against ABI's recovery-state endpoint, independent of
   committed-bar cadence, under the shared keyed mutex.
