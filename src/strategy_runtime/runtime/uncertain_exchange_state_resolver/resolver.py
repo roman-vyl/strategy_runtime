@@ -94,9 +94,7 @@ class UncertainExchangeStateResolver:
             self._state_repository.save(reconstructed)
             return
 
-        if isinstance(
-            response, (TerminalWithoutFillRecoveryState, TerminalAfterFillRecoveryState)
-        ):
+        if isinstance(response, (TerminalWithoutFillRecoveryState, TerminalAfterFillRecoveryState)):
             self._state_repository.save(
                 replace(state, current_trade_cycle=None, pending_entry_recovery=None)
             )
@@ -107,9 +105,7 @@ class UncertainExchangeStateResolver:
         current_cycle: CurrentTradeCycle,
         response: RecoveryStateResponse,
     ) -> None:
-        if isinstance(
-            response, (TerminalWithoutFillRecoveryState, TerminalAfterFillRecoveryState)
-        ):
+        if isinstance(response, (TerminalWithoutFillRecoveryState, TerminalAfterFillRecoveryState)):
             self._state_repository.save(
                 replace(state, current_trade_cycle=None, pending_entry_recovery=None)
             )

@@ -519,9 +519,7 @@ def test_repeated_failed_attempts_never_escalate_or_give_up() -> None:
         current_trade_cycle=None,
         pending_entry_recovery=PendingEntryRecovery("cycle-new"),
     )
-    port = FakeAbiEntryCycleRecoveryPort(
-        query_error=AbiEntryCycleRecoveryUnavailable("boom")
-    )
+    port = FakeAbiEntryCycleRecoveryPort(query_error=AbiEntryCycleRecoveryUnavailable("boom"))
     resolver = _make_resolver(repository, port)
 
     for _ in range(50):
