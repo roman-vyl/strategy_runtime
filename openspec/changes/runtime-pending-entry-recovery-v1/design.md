@@ -214,9 +214,8 @@ UncertainExchangeStateResolver.attempt(strategy_instance_id):
               match cancel_result:
                 case EntryPackageAbsent(strategy_instance_id, A.trade_cycle_id):  # exact identity
                     # The corrective cancel itself already positively confirmed
-                    # the absence — do not wait for a later recovery-state GET
-                    # to confirm the same fact (see the note below on why that
-                    # would deadlock).
+                    # the absence — completing immediately avoids an unnecessary
+                    # later polling round (see the note below).
                     save(current_trade_cycle=None, pending_entry_recovery=None)
                 case _:  # public error, transport/protocol exception, unexpected
                          # EntryPackageApplied, identity mismatch, or anything else
@@ -231,20 +230,22 @@ while removal was intended) where ABI's own contract guarantees it is safe (ABI'
 recovery-state endpoint is read-only for every other response and never causes an
 exchange side effect itself).
 
-**Why the corrective cancel's own result — not a later recovery-state GET — must
-clear the marker:** the paired ABI capability's entry-package PUT, on a confirmed
-absent result, durably clears the record's exchange order-link binding
-(`order_link_id = null`). ABI's recovery-state GET deliberately fails safe
-(its documented `500` availability response) whenever the current record's
-`order_link_id` is null — the same fail-safe rule Decision 4 relies on
-elsewhere. So once the corrective cancel above succeeds, every subsequent
-recovery-state query for that trade cycle is permanently unable to return a
-positive `recovery_state`: waiting for one would leave
-`pending_entry_recovery` set forever, and the guarded bar path blocked
-forever, even though the cancel already succeeded. The resolver therefore
-treats an exact, formally matching `EntryPackageAbsent` from the cancel call
-itself as the positive evidence — never inferring success from HTTP
-transport completion alone, only from that one exact confirmed shape.
+**Why the corrective cancel's own result — not a later recovery-state GET — clears
+the marker:** the corrective cancel's `EntryPackageAbsent` response, once its identity
+is checked to exactly match the instance and the pending trade cycle, is already exact
+positive confirmation of the same fact a later recovery-state GET would otherwise be
+waited on to independently reconfirm. Consuming it immediately avoids one unnecessary
+later polling round — there is no reason to discard a success ABI has already returned
+in favor of re-deriving the identical fact through a second read. (The paired ABI
+capability separately guarantees that a later recovery-state GET for the same trade
+cycle would itself resolve `terminal_without_fill` directly from ABI's own durable
+`absent` record, without needing to requery the exchange — see
+`abi-entry-cycle-recovery-v1` design.md Decision 6 — so this is a latency optimization,
+not a correctness dependency: an attempt that, for whatever reason, does not observe
+the corrective cancel's own result still resolves correctly on its next observation.)
+The resolver still never infers success from HTTP transport completion alone — only
+that one exact, formally matching `EntryPackageAbsent` confirmation clears either
+field; every other outcome is left for a later attempt.
 
 ### 6. `terminal_after_fill` for an uncertain CREATE needs no special state
 

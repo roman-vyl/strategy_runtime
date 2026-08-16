@@ -117,13 +117,15 @@ table.
 - **THEN** the resolver durably saves `current_trade_cycle = null`,
   `pending_entry_recovery = null` in the same attempt — it does not wait for
   a later recovery-state observation to confirm the same fact
-- **AND** this is required, not optional: the paired ABI capability's
-  entry-package PUT clears the record's exchange order-link binding on a
-  confirmed absent result, after which the recovery-state endpoint fails
-  safe (its documented `500` availability response) for that trade cycle
-  forever — waiting for a later recovery-state GET to positively resolve
-  what the corrective cancel already positively confirmed would deadlock the
-  instance's bar path indefinitely
+- **AND** this reflects that the confirmation is already exact positive
+  evidence: completing immediately avoids an unnecessary later polling round,
+  and there is no reason to discard a success ABI has already returned in
+  favor of re-deriving the identical fact through a second read. This is a
+  latency optimization, not a correctness dependency — the paired ABI
+  capability's own durable-status resolution (see
+  `abi-entry-cycle-recovery-v1`) means a later recovery-state GET for the
+  same trade cycle resolves `terminal_without_fill` correctly on its own if
+  this immediate path is ever skipped
 
 #### Scenario: Any other corrective-cancel outcome leaves the marker untouched
 - **WHEN** the corrective CANCEL raises a transport, network, or protocol
