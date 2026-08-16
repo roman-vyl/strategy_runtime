@@ -10,6 +10,7 @@ from strategy_runtime.runtime.state.models import (
     CurrentTradeCycle,
     FrozenExecutedEntryContext,
     GetOrCreateStrategyInstanceRuntimeStateRequest,
+    PendingEntryRecovery,
     RegisteredSpecSnapshot,
     StrategyInstanceRuntimeState,
 )
@@ -246,4 +247,87 @@ def test_registration_request_contains_no_risk_multiplier() -> None:
             risk_multiplier="1",
             raw_spec={},
             source_path="a.json",
+        )
+
+
+# ---------------------------------------------------------------------------
+# PendingEntryRecovery: the minimal one-field sibling marker.
+# ---------------------------------------------------------------------------
+
+
+def _base_state(
+    *,
+    current_trade_cycle: CurrentTradeCycle | None = None,
+    pending_entry_recovery: PendingEntryRecovery | None = None,
+) -> StrategyInstanceRuntimeState:
+    return StrategyInstanceRuntimeState(
+        strategy_instance_id="instance",
+        strategy_id="strategy",
+        registered_spec_snapshot=RegisteredSpecSnapshot("BTCUSDT.P", "5m", {}, "a.json"),
+        risk_multiplier="1",
+        current_trade_cycle=current_trade_cycle,
+        pending_entry_recovery=pending_entry_recovery,
+    )
+
+
+def test_pending_entry_recovery_has_only_trade_cycle_id() -> None:
+    marker = PendingEntryRecovery("cycle-1")
+
+    assert tuple(field.name for field in fields(marker)) == ("trade_cycle_id",)
+    assert marker.trade_cycle_id == "cycle-1"
+    assert not hasattr(marker, "action")
+    assert not hasattr(marker, "desired_entry")
+    assert not hasattr(marker, "created_at_ms")
+    assert not hasattr(marker, "retry_count")
+
+
+@pytest.mark.parametrize("value", [None, 1, ""])
+def test_pending_entry_recovery_rejects_invalid_trade_cycle_id(value: object) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        PendingEntryRecovery(cast("str", value))
+
+
+def test_state_accepts_null_pending_entry_recovery_by_default() -> None:
+    state = _base_state()
+
+    assert state.pending_entry_recovery is None
+
+
+def test_state_accepts_pending_entry_recovery_for_an_uncertain_create_with_no_current_cycle() -> (
+    None
+):
+    state = _base_state(pending_entry_recovery=PendingEntryRecovery("cycle-new"))
+
+    assert state.current_trade_cycle is None
+    assert state.pending_entry_recovery == PendingEntryRecovery("cycle-new")
+
+
+def test_state_accepts_pending_entry_recovery_matching_the_current_cycle_identity() -> None:
+    cycle = CurrentTradeCycle("cycle-1", applied_package())
+    state = _base_state(
+        current_trade_cycle=cycle,
+        pending_entry_recovery=PendingEntryRecovery("cycle-1"),
+    )
+
+    assert state.pending_entry_recovery == PendingEntryRecovery("cycle-1")
+
+
+def test_state_rejects_pending_entry_recovery_targeting_a_different_cycle() -> None:
+    cycle = CurrentTradeCycle("cycle-1", applied_package())
+
+    with pytest.raises(ValueError, match="must match current_trade_cycle"):
+        _base_state(
+            current_trade_cycle=cycle,
+            pending_entry_recovery=PendingEntryRecovery("cycle-other"),
+        )
+
+
+def test_state_rejects_invalid_pending_entry_recovery_type() -> None:
+    with pytest.raises(TypeError, match="pending_entry_recovery must be"):
+        StrategyInstanceRuntimeState(
+            strategy_instance_id="instance",
+            strategy_id="strategy",
+            registered_spec_snapshot=RegisteredSpecSnapshot("BTCUSDT.P", "5m", {}, "a.json"),
+            risk_multiplier="1",
+            pending_entry_recovery=cast("PendingEntryRecovery", object()),
         )

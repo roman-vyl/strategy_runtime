@@ -13,7 +13,6 @@ from strategy_runtime.runtime.entry_reconciliation.models import (
     EntryAppliedConfirmation,
     EntryReconciliationCommand,
     NoOp,
-    Replace,
 )
 from strategy_runtime.runtime.entry_reconciliation.state_applier import (
     apply_success_confirmation,
@@ -122,26 +121,6 @@ def test_apply_creates_complete_cycle_only_after_matching_confirmation() -> None
     )
 
 
-def test_replace_preserves_cycle_identity_and_atomically_replaces_package() -> None:
-    original = desired_entry()
-    updated = desired_entry(planned_entry_price="101")
-    state = runtime_state(applied_entry=original)
-    snapshot = replace(state)
-
-    result = apply_success_confirmation(
-        state,
-        Replace("cycle-1", updated),
-        command(trade_cycle_id="cycle-1", entry=updated),
-        applied_confirmation(trade_cycle_id="cycle-1", entry=updated, quantity="2.5000"),
-    )
-
-    assert state == snapshot
-    assert result.current_trade_cycle == CurrentTradeCycle(
-        "cycle-1",
-        AppliedEntryPackage(updated, "2.5000"),
-    )
-
-
 def test_cancel_clears_complete_cycle() -> None:
     state = runtime_state(applied_entry=desired_entry())
 
@@ -163,17 +142,13 @@ def test_cancel_clears_complete_cycle() -> None:
             EntryAbsentConfirmation("instance", "cycle-new"),
         ),
         (
-            Replace("cycle-1", desired_entry(planned_entry_price="101")),
-            EntryAbsentConfirmation("instance", "cycle-1"),
-        ),
-        (
             Cancel("cycle-1"),
             applied_confirmation(trade_cycle_id="cycle-1", entry=desired_entry()),
         ),
     ],
 )
 def test_wrong_success_variant_fails_closed(
-    decision: Apply | Replace | Cancel,
+    decision: Apply | Cancel,
     confirmation: EntryAppliedConfirmation | EntryAbsentConfirmation,
 ) -> None:
     entry = getattr(decision, "desired_entry", None)
@@ -268,38 +243,18 @@ def test_apply_rejects_ownership_and_identity_mismatch(
 @pytest.mark.parametrize(
     ("decision", "sent_cycle_id", "confirmed_cycle_id"),
     [
-        (Replace("stale", desired_entry(planned_entry_price="101")), "stale", "stale"),
-        (
-            Replace("cycle-1", desired_entry(planned_entry_price="101")),
-            "other",
-            "other",
-        ),
-        (
-            Replace("cycle-1", desired_entry(planned_entry_price="101")),
-            "cycle-1",
-            "other",
-        ),
         (Cancel("stale"), "stale", "stale"),
         (Cancel("cycle-1"), "other", "other"),
         (Cancel("cycle-1"), "cycle-1", "other"),
     ],
 )
-def test_replace_and_cancel_reject_every_target_cycle_mismatch(
-    decision: Replace | Cancel,
+def test_cancel_rejects_every_target_cycle_mismatch(
+    decision: Cancel,
     sent_cycle_id: str,
     confirmed_cycle_id: str,
 ) -> None:
     original = desired_entry()
-    updated = getattr(decision, "desired_entry", None)
-    sent_entry = updated if isinstance(decision, Replace) else None
-    confirmation = (
-        applied_confirmation(
-            trade_cycle_id=confirmed_cycle_id,
-            entry=cast("DesiredEntry", updated),
-        )
-        if isinstance(decision, Replace)
-        else EntryAbsentConfirmation("instance", confirmed_cycle_id)
-    )
+    confirmation = EntryAbsentConfirmation("instance", confirmed_cycle_id)
     state = runtime_state(applied_entry=original)
     snapshot = replace(state)
 
@@ -307,7 +262,7 @@ def test_replace_and_cancel_reject_every_target_cycle_mismatch(
         apply_success_confirmation(
             state,
             decision,
-            command(trade_cycle_id=sent_cycle_id, entry=sent_entry),
+            command(trade_cycle_id=sent_cycle_id, entry=None),
             confirmation,
         )
 
@@ -377,30 +332,13 @@ def test_applier_rejects_incoherent_source_state() -> None:
         )
 
     empty_state = runtime_state()
-    with pytest.raises(EntryReconciliationInvariantError, match="REPLACE requires"):
+    with pytest.raises(EntryReconciliationInvariantError, match="CANCEL requires"):
         apply_success_confirmation(
             empty_state,
-            Replace("cycle-1", entry),
-            command(trade_cycle_id="cycle-1", entry=entry),
-            applied_confirmation(trade_cycle_id="cycle-1", entry=entry),
+            Cancel("cycle-1"),
+            command(trade_cycle_id="cycle-1", entry=None),
+            EntryAbsentConfirmation("instance", "cycle-1"),
         )
-
-
-def test_replace_rejects_sent_desired_entry_mismatch() -> None:
-    original = desired_entry()
-    updated = desired_entry(planned_entry_price="101")
-    state = runtime_state(applied_entry=original)
-    snapshot = replace(state)
-
-    with pytest.raises(EntryReconciliationInvariantError, match="desired entry"):
-        apply_success_confirmation(
-            state,
-            Replace("cycle-1", updated),
-            command(trade_cycle_id="cycle-1", entry=original),
-            applied_confirmation(trade_cycle_id="cycle-1", entry=updated),
-        )
-
-    assert state == snapshot
 
 
 def test_applier_rejects_no_op_instead_of_returning_a_failure_result() -> None:
@@ -408,11 +346,11 @@ def test_applier_rejects_no_op_instead_of_returning_a_failure_result() -> None:
 
     with pytest.raises(
         EntryReconciliationInvariantError,
-        match="requires APPLY, REPLACE, or CANCEL",
+        match="requires APPLY or CANCEL",
     ):
         apply_success_confirmation(
             state,
-            cast("Apply | Replace | Cancel", NoOp()),
+            cast("Apply | Cancel", NoOp()),
             command(trade_cycle_id="cycle-new", entry=desired_entry()),
             applied_confirmation(trade_cycle_id="cycle-new", entry=desired_entry()),
         )

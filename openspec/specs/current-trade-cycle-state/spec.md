@@ -156,7 +156,12 @@ existence.
 `StrategyInstanceRuntimeState.current_trade_cycle` SHALL change for entry
 reconciliation only after a successful confirmation matches the expected
 action, ownership identities, originating command, and source-state
-preconditions.
+preconditions. `Replace` no longer exists as a decision or confirmation
+variant: a changed applied desired entry is served by `Cancel`, identically
+to the applied desired entry becoming absent — Runtime never atomically
+replaces the `AppliedEntryPackage` in place. A trade cycle whose desired
+entry changed reaches its next entry only through a later, independent
+`Apply` with a new `trade_cycle_id`.
 
 #### Scenario: Create a cycle after successful apply
 - **WHEN** `Apply` receives a matching `EntryAppliedConfirmation`
@@ -172,23 +177,17 @@ preconditions.
 - **AND** the caller-selected trade-cycle identity is not inserted into the
   aggregate merely because it was reserved or sent
 
-#### Scenario: Replace the complete package after successful replace
-- **WHEN** `Replace` receives a matching `EntryAppliedConfirmation` for the
-  acknowledged current cycle
-- **THEN** Runtime retains the existing `trade_cycle_id`
-- **AND** atomically replaces the entire `AppliedEntryPackage` with the
-  acknowledged desired entry and calculated quantity
-- **AND** does not create a new trade cycle
-
 #### Scenario: Clear the complete cycle after successful cancel
 - **WHEN** `Cancel` receives a matching `EntryAbsentConfirmation` for the
   acknowledged current cycle
 - **THEN** Runtime sets `current_trade_cycle` to null
 - **AND** does not construct or retain a `CurrentTradeCycle` with a null applied
   package
+- **AND** this holds identically whether the `Cancel` decision arose from a
+  null new desired entry or from a changed one
 
 #### Scenario: Every valid transition preserves the non-empty-cycle invariant
-- **WHEN** `Apply`, `Replace`, or `Cancel` completes successfully
+- **WHEN** `Apply` or `Cancel` completes successfully
 - **THEN** resulting state contains either null `current_trade_cycle` or one
   complete cycle with one required `AppliedEntryPackage`
 - **AND** no valid transition produces an empty current cycle

@@ -32,12 +32,14 @@ def imported_modules() -> set[str]:
 def test_application_package_has_only_approved_direct_dependencies() -> None:
     assert tuple(PACKAGE_ROOT.glob("*.py"))
     allowed_prefixes = (
+        "dataclasses",
         "typing",
         "strategy_runtime.runtime.entry_reconciliation",
         "strategy_runtime.runtime.entry_reconciliation_orchestrator",
         "strategy_runtime.runtime.routing.models",
         "strategy_runtime.runtime.state.identity",
         "strategy_runtime.runtime.state.models",
+        "strategy_runtime.runtime.state.repository",
     )
 
     assert all(

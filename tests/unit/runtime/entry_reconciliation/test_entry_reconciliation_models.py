@@ -12,7 +12,6 @@ from strategy_runtime.runtime.entry_reconciliation.models import (
     EntryAppliedConfirmation,
     EntryReconciliationCommand,
     NoOp,
-    Replace,
 )
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
 
@@ -26,10 +25,6 @@ def test_decision_variants_have_exact_payload_shapes() -> None:
 
     assert tuple(field.name for field in fields(NoOp())) == ()
     assert tuple(field.name for field in fields(Apply(entry))) == ("desired_entry",)
-    assert tuple(field.name for field in fields(Replace("cycle-1", entry))) == (
-        "trade_cycle_id",
-        "desired_entry",
-    )
     assert tuple(field.name for field in fields(Cancel("cycle-1"))) == ("trade_cycle_id",)
 
 
@@ -69,7 +64,6 @@ def test_confirmation_variants_have_exact_fact_shapes() -> None:
     "factory",
     [
         lambda: Apply(cast("DesiredEntry", object())),
-        lambda: Replace("cycle-1", cast("DesiredEntry", object())),
         lambda: EntryReconciliationCommand(
             "instance", "cycle-1", "BTCUSDT.P", cast("DesiredEntry", object())
         ),

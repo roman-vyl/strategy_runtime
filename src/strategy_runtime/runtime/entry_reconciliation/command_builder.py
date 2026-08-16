@@ -9,7 +9,6 @@ from strategy_runtime.runtime.entry_reconciliation.models import (
     EntryReconciliationCommand,
     EntryReconciliationDecision,
     NoOp,
-    Replace,
 )
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
 from strategy_runtime.runtime.state.models import StrategyInstanceRuntimeState
@@ -40,10 +39,6 @@ def build_entry_reconciliation_command(
 
     if apply_trade_cycle_id is not None:
         raise EntryReconciliationInvariantError("only APPLY accepts apply_trade_cycle_id")
-
-    if type(decision) is Replace:
-        _require_current_cycle(state, decision.trade_cycle_id, "REPLACE")
-        return _command(state, decision.trade_cycle_id, decision.desired_entry)
 
     if type(decision) is Cancel:
         _require_current_cycle(state, decision.trade_cycle_id, "CANCEL")

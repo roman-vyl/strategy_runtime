@@ -12,7 +12,6 @@ from strategy_runtime.runtime.entry_reconciliation import (
     EntryAppliedConfirmation,
     EntryReconciliationCommand,
     EntryReconciliationInvariantError,
-    Replace,
     SuccessfulEntryConfirmation,
     apply_success_confirmation,
     build_entry_reconciliation_command,
@@ -33,8 +32,12 @@ from strategy_runtime.runtime.state.models import (
     AppliedEntryPackage,
     CurrentTradeCycle,
     FrozenExecutedEntryContext,
-    RegisteredSpecSnapshot,
+    GetOrCreateStrategyInstanceRuntimeStateRequest,
+    PendingEntryRecovery,
     StrategyInstanceRuntimeState,
+)
+from strategy_runtime.runtime.state.repository import (
+    InMemoryStrategyInstanceRuntimeStateRepository,
 )
 from strategy_runtime.utility.committed_bar.models import (
     CommittedBarEvent,
@@ -56,30 +59,34 @@ def desired_entry(*, price: str = "100", side: str = "long") -> DesiredEntry:
     )
 
 
-def runtime_state(
+def seeded_repository(
     *,
     applied_entry: DesiredEntry | None = None,
-) -> StrategyInstanceRuntimeState:
-    current_trade_cycle = (
-        None
-        if applied_entry is None
-        else CurrentTradeCycle(
-            "cycle-1",
-            AppliedEntryPackage(applied_entry, "0.01"),
-        )
-    )
-    return StrategyInstanceRuntimeState(
-        strategy_instance_id="instance",
-        strategy_id="strategy",
-        registered_spec_snapshot=RegisteredSpecSnapshot(
+) -> tuple[InMemoryStrategyInstanceRuntimeStateRepository, StrategyInstanceRuntimeState]:
+    """Register one instance in a fresh in-memory repository, optionally with a current cycle."""
+    repository = InMemoryStrategyInstanceRuntimeStateRepository()
+    state = repository.get_or_create(
+        GetOrCreateStrategyInstanceRuntimeStateRequest(
+            strategy_instance_id="instance",
+            strategy_id="strategy",
             instrument="BTCUSDT.P",
             base_timeframe="5m",
             raw_spec={},
             source_path="a.json",
-        ),
-        risk_multiplier="1",
-        current_trade_cycle=current_trade_cycle,
+        )
     )
+    if applied_entry is None:
+        return repository, state
+    state = repository.save(
+        replace(
+            state,
+            current_trade_cycle=CurrentTradeCycle(
+                "cycle-1",
+                AppliedEntryPackage(applied_entry, "0.01"),
+            ),
+        )
+    )
+    return repository, state
 
 
 def projection(
@@ -160,7 +167,7 @@ def test_both_no_op_cases_preserve_source_value_and_bypass_command_work(
     acknowledged: DesiredEntry | None,
     projected: DesiredEntry | None,
 ) -> None:
-    source_state = runtime_state(applied_entry=acknowledged)
+    repository, source_state = seeded_repository(applied_entry=acknowledged)
     snapshot = replace(source_state)
     item = projection(source_state, projected)
     id_factory = RecordingIdFactory()
@@ -183,6 +190,7 @@ def test_both_no_op_cases_preserve_source_value_and_bypass_command_work(
         result = EntryReconciliationOrchestrator(
             id_factory,
             execution_port,
+            repository,
         ).execute(item)
 
     assert result == snapshot
@@ -194,10 +202,12 @@ def test_both_no_op_cases_preserve_source_value_and_bypass_command_work(
     builder.assert_not_called()
     assert execution_port.calls == []
     applier.assert_not_called()
+    # NoOp never durably saves a pending-recovery marker.
+    assert repository.get("instance") == snapshot
 
 
 def test_apply_reserves_once_and_forwards_exact_command_and_source_snapshot() -> None:
-    source_state = runtime_state()
+    repository, source_state = seeded_repository()
     snapshot = replace(source_state)
     entry = desired_entry()
     item = projection(source_state, entry)
@@ -223,6 +233,7 @@ def test_apply_reserves_once_and_forwards_exact_command_and_source_snapshot() ->
         result = EntryReconciliationOrchestrator(
             id_factory,
             execution_port,
+            repository,
         ).execute(item)
 
     assert id_factory.calls == 1
@@ -242,7 +253,8 @@ def test_apply_reserves_once_and_forwards_exact_command_and_source_snapshot() ->
     )
     applier.assert_called_once()
     applier_args = applier.call_args.args
-    assert applier_args[0] is source_state
+    assert applier_args[0].pending_entry_recovery == PendingEntryRecovery("cycle-new")
+    assert applier_args[0].current_trade_cycle == source_state.current_trade_cycle
     assert applier_args[1] == Apply(entry)
     assert applier_args[2] is command
     assert applier_args[3] is confirmation
@@ -252,20 +264,16 @@ def test_apply_reserves_once_and_forwards_exact_command_and_source_snapshot() ->
         "cycle-new",
         AppliedEntryPackage(entry, "0.25"),
     )
+    assert result.pending_entry_recovery is None
 
 
-def test_replace_reuses_cycle_and_returns_complete_replacement_aggregate() -> None:
+def test_changed_desired_entry_also_decides_cancel_and_sends_no_desired_entry() -> None:
     original = desired_entry()
     updated = desired_entry(price="101")
-    source_state = runtime_state(applied_entry=original)
+    repository, source_state = seeded_repository(applied_entry=original)
     snapshot = replace(source_state)
     item = projection(source_state, updated)
-    confirmation = EntryAppliedConfirmation(
-        "instance",
-        "cycle-1",
-        updated,
-        "0.50",
-    )
+    confirmation = EntryAbsentConfirmation("instance", "cycle-1")
     id_factory = RecordingIdFactory()
     execution_port = FakeExecutionPort(confirmation)
 
@@ -282,30 +290,29 @@ def test_replace_reuses_cycle_and_returns_complete_replacement_aggregate() -> No
         result = EntryReconciliationOrchestrator(
             id_factory,
             execution_port,
+            repository,
         ).execute(item)
 
     assert id_factory.calls == 0
     builder.assert_called_once()
     builder_args = builder.call_args.args
     assert builder_args[0] is source_state
-    assert builder_args[1] == Replace("cycle-1", updated)
+    assert builder_args[1] == Cancel("cycle-1")
     assert builder_args[2] is None
     assert len(execution_port.calls) == 1
     command, executed_state = execution_port.calls[0]
     assert command.trade_cycle_id == "cycle-1"
-    assert command.desired_entry is updated
+    assert command.desired_entry is None
     assert executed_state is source_state
     applier.assert_called_once()
     assert applier.call_args.args[2] is command
     assert source_state == snapshot
-    assert result.current_trade_cycle == CurrentTradeCycle(
-        "cycle-1",
-        AppliedEntryPackage(updated, "0.50"),
-    )
+    assert result.current_trade_cycle is None
+    assert result.pending_entry_recovery is None
 
 
 def test_cancel_reuses_cycle_and_clears_the_complete_current_cycle() -> None:
-    source_state = runtime_state(applied_entry=desired_entry())
+    repository, source_state = seeded_repository(applied_entry=desired_entry())
     snapshot = replace(source_state)
     item = projection(source_state, None)
     confirmation = EntryAbsentConfirmation("instance", "cycle-1")
@@ -325,6 +332,7 @@ def test_cancel_reuses_cycle_and_clears_the_complete_current_cycle() -> None:
         result = EntryReconciliationOrchestrator(
             id_factory,
             execution_port,
+            repository,
         ).execute(item)
 
     assert id_factory.calls == 0
@@ -342,6 +350,7 @@ def test_cancel_reuses_cycle_and_clears_the_complete_current_cycle() -> None:
     assert applier.call_args.args[2] is command
     assert source_state == snapshot
     assert result.current_trade_cycle is None
+    assert result.pending_entry_recovery is None
 
 
 def test_operation_and_command_contracts_remain_narrow() -> None:
@@ -358,7 +367,7 @@ def test_operation_and_command_contracts_remain_narrow() -> None:
 
 
 def test_id_factory_failure_propagates_before_command_or_execution() -> None:
-    source_state = runtime_state()
+    repository, source_state = seeded_repository()
     snapshot = replace(source_state)
     error = RuntimeError("identity source unavailable")
     id_factory = RecordingIdFactory(error=error)
@@ -375,7 +384,7 @@ def test_id_factory_failure_propagates_before_command_or_execution() -> None:
         ) as applier,
         pytest.raises(RuntimeError) as raised,
     ):
-        EntryReconciliationOrchestrator(id_factory, execution_port).execute(
+        EntryReconciliationOrchestrator(id_factory, execution_port, repository).execute(
             projection(source_state, desired_entry())
         )
 
@@ -385,13 +394,15 @@ def test_id_factory_failure_propagates_before_command_or_execution() -> None:
     assert execution_port.calls == []
     applier.assert_not_called()
     assert source_state == snapshot
+    # No command was ever built, so no pending marker was ever saved.
+    assert repository.get("instance") == snapshot
 
 
 @pytest.mark.parametrize("invalid_id", ["", cast("str", None), cast("str", 7)])
 def test_invalid_reserved_id_fails_closed_before_external_execution(
     invalid_id: str,
 ) -> None:
-    source_state = runtime_state()
+    repository, source_state = seeded_repository()
     snapshot = replace(source_state)
     id_factory = RecordingIdFactory(result=invalid_id)
     execution_port = FakeExecutionPort(object())
@@ -403,7 +414,7 @@ def test_invalid_reserved_id_fails_closed_before_external_execution(
         ) as applier,
         pytest.raises(EntryReconciliationInvariantError, match="non-empty"),
     ):
-        EntryReconciliationOrchestrator(id_factory, execution_port).execute(
+        EntryReconciliationOrchestrator(id_factory, execution_port, repository).execute(
             projection(source_state, desired_entry())
         )
 
@@ -411,10 +422,11 @@ def test_invalid_reserved_id_fails_closed_before_external_execution(
     assert execution_port.calls == []
     applier.assert_not_called()
     assert source_state == snapshot
+    assert repository.get("instance") == snapshot
 
 
 def test_command_builder_invariant_failure_propagates_without_execution() -> None:
-    source_state = runtime_state()
+    repository, source_state = seeded_repository()
     snapshot = replace(source_state)
     error = EntryReconciliationInvariantError("forged builder failure")
     id_factory = RecordingIdFactory()
@@ -431,7 +443,7 @@ def test_command_builder_invariant_failure_propagates_without_execution() -> Non
         ) as applier,
         pytest.raises(EntryReconciliationInvariantError) as raised,
     ):
-        EntryReconciliationOrchestrator(id_factory, execution_port).execute(
+        EntryReconciliationOrchestrator(id_factory, execution_port, repository).execute(
             projection(source_state, desired_entry())
         )
 
@@ -441,21 +453,18 @@ def test_command_builder_invariant_failure_propagates_without_execution() -> Non
     assert execution_port.calls == []
     applier.assert_not_called()
     assert source_state == snapshot
+    assert repository.get("instance") == snapshot
 
 
-@pytest.mark.parametrize("decision", ["apply", "replace", "cancel"])
-def test_execution_exception_propagates_once_without_retry_or_state_transition(
+@pytest.mark.parametrize("decision", ["apply", "cancel"])
+def test_execution_exception_propagates_once_and_preserves_the_saved_pending_marker(
     decision: str,
 ) -> None:
     original = desired_entry()
-    source_state = runtime_state() if decision == "apply" else runtime_state(applied_entry=original)
-    projected = (
-        desired_entry()
-        if decision == "apply"
-        else desired_entry(price="101")
-        if decision == "replace"
-        else None
+    repository, source_state = seeded_repository(
+        applied_entry=None if decision == "apply" else original
     )
+    projected = desired_entry() if decision == "apply" else None
     snapshot = replace(source_state)
     error = RuntimeError(f"{decision} execution failed")
     id_factory = RecordingIdFactory()
@@ -468,7 +477,7 @@ def test_execution_exception_propagates_once_without_retry_or_state_transition(
         ) as applier,
         pytest.raises(RuntimeError) as raised,
     ):
-        EntryReconciliationOrchestrator(id_factory, execution_port).execute(
+        EntryReconciliationOrchestrator(id_factory, execution_port, repository).execute(
             projection(source_state, projected)
         )
 
@@ -477,14 +486,16 @@ def test_execution_exception_propagates_once_without_retry_or_state_transition(
     applier.assert_not_called()
     assert id_factory.calls == (1 if decision == "apply" else 0)
     assert source_state == snapshot
+    expected_trade_cycle_id = "cycle-new" if decision == "apply" else "cycle-1"
+    durable_state = repository.get("instance")
+    assert durable_state is not None
+    assert durable_state.pending_entry_recovery == PendingEntryRecovery(expected_trade_cycle_id)
     if decision == "apply":
-        assert source_state.current_trade_cycle is None
-        assert not hasattr(source_state, "pending_command")
-        assert not hasattr(source_state, "reserved_trade_cycle_id")
+        assert durable_state.current_trade_cycle is None
 
 
 def test_forged_non_success_result_is_rejected_before_application() -> None:
-    source_state = runtime_state()
+    repository, source_state = seeded_repository()
     snapshot = replace(source_state)
     execution_port = FakeExecutionPort(object())
 
@@ -501,6 +512,7 @@ def test_forged_non_success_result_is_rejected_before_application() -> None:
         EntryReconciliationOrchestrator(
             RecordingIdFactory(),
             execution_port,
+            repository,
         ).execute(projection(source_state, desired_entry()))
 
     assert len(execution_port.calls) == 1
@@ -523,7 +535,7 @@ def test_forged_non_success_result_is_rejected_before_application() -> None:
 def test_representative_confirmation_invariants_propagate_without_second_execution(
     confirmation: SuccessfulEntryConfirmation,
 ) -> None:
-    source_state = runtime_state()
+    repository, source_state = seeded_repository()
     snapshot = replace(source_state)
     execution_port = FakeExecutionPort(confirmation)
 
@@ -531,6 +543,7 @@ def test_representative_confirmation_invariants_propagate_without_second_executi
         EntryReconciliationOrchestrator(
             RecordingIdFactory(),
             execution_port,
+            repository,
         ).execute(projection(source_state, desired_entry()))
 
     assert len(execution_port.calls) == 1
@@ -539,7 +552,7 @@ def test_representative_confirmation_invariants_propagate_without_second_executi
 
 def test_frozen_entry_context_stops_reconciliation_before_any_execution() -> None:
     entry = desired_entry()
-    source_state = runtime_state(applied_entry=entry)
+    repository, source_state = seeded_repository(applied_entry=entry)
     assert source_state.current_trade_cycle is not None
     frozen_current_cycle = replace(
         source_state.current_trade_cycle,
@@ -549,7 +562,7 @@ def test_frozen_entry_context_stops_reconciliation_before_any_execution() -> Non
             entry_bar_open_time_ms=900,
         ),
     )
-    source_state = replace(source_state, current_trade_cycle=frozen_current_cycle)
+    source_state = repository.save(replace(source_state, current_trade_cycle=frozen_current_cycle))
     snapshot = replace(source_state)
     item = projection(source_state, desired_entry(price="101"))
     execution_port = FakeExecutionPort(object())
@@ -558,6 +571,7 @@ def test_frozen_entry_context_stops_reconciliation_before_any_execution() -> Non
         EntryReconciliationOrchestrator(
             RecordingIdFactory(),
             execution_port,
+            repository,
         ).execute(item)
 
     assert execution_port.calls == []

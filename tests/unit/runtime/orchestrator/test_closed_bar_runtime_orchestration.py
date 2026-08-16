@@ -455,6 +455,7 @@ class TestSequencingAndPersistence:
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_FakeExecutionPort(),
+                state_repository=repo,
             ),
         )
 
@@ -487,6 +488,7 @@ class TestSequencingAndPersistence:
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=execution_port,
+                state_repository=repo,
             ),
         )
 
@@ -496,7 +498,10 @@ class TestSequencingAndPersistence:
         assert resolver.lock_states == [True]
         assert router.lock_states == [True]
         assert execution_port.lock_states == [True]
-        assert repo.save_lock_states == [True]
+        # Two saves under the same held lock: the durable pending-recovery
+        # marker written before execute(), then the confirmed replacement
+        # aggregate written by the top-level orchestrator after execute().
+        assert repo.save_lock_states == [True, True]
         assert _is_key_locked(registry, _SID) is False
 
     def test_live_entry_invokes_nested_orchestrator_exactly_once_with_exact_projection(
@@ -508,10 +513,12 @@ class TestSequencingAndPersistence:
         item = PositionResolvedStrategyInstance(unit, resolved)
         projected = LiveEntryProjectedStrategyInstance(item, _desired_entry())
 
+        repo = _FakeRepository(state)
         ep = _FakeExecutionPort()
         entry_orch = EntryReconciliationOrchestrator(
             trade_cycle_id_factory=lambda: "tc-id",
             execution_port=ep,
+            state_repository=repo,
         )
         original_execute = entry_orch.execute
         call_args: list[Any] = []
@@ -522,7 +529,6 @@ class TestSequencingAndPersistence:
 
         entry_orch.execute = _tracked_execute  # type: ignore[method-assign]
 
-        repo = _FakeRepository(state)
         orch = StrategyRuntimeOrchestrator(
             state_repository=repo,
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
@@ -556,6 +562,7 @@ class TestSequencingAndPersistence:
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_FakeExecutionPort(),
+                state_repository=repo,
             ),
         )
 
@@ -615,14 +622,21 @@ class TestSequencingAndPersistence:
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_ApplyExecutionPort(),
+                state_repository=repo,
             ),
         )
 
         result = orch.process(unit)
         assert result != state
         assert result.current_trade_cycle is not None
-        assert len(repo.save_calls) == 1
-        assert repo.save_calls[0] == result
+        # Two saves: the durable pending-recovery marker written before
+        # execute(), then the confirmed replacement aggregate written by the
+        # top-level orchestrator after execute() returns.
+        assert len(repo.save_calls) == 2
+        assert repo.save_calls[0].pending_entry_recovery is not None
+        assert repo.save_calls[0].current_trade_cycle is None
+        assert repo.save_calls[1] == result
+        assert repo.save_calls[1] is result
 
     def test_value_equal_result_as_different_object_yields_zero_saves(self) -> None:
         state = _runtime_state()
@@ -679,6 +693,7 @@ class TestSequencingAndPersistence:
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_ApplyExecutionPort(),
+                state_repository=repo,
             ),
         )
 
@@ -752,6 +767,7 @@ class TestConcurrencyAndRelease:
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_FakeExecutionPort(),
+                state_repository=repo,
             ),
         )
 
@@ -786,6 +802,7 @@ class TestConcurrencyAndRelease:
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_ApplyExecutionPort(),
+                state_repository=repo,
             ),
         )
 
@@ -847,6 +864,7 @@ class TestConcurrencyAndRelease:
         entry_orch = EntryReconciliationOrchestrator(
             trade_cycle_id_factory=lambda: "tc-id",
             execution_port=ep,
+            state_repository=repo,
         )
         position_management_orchestrator = MagicMock()
         if error_label == "position_management":
@@ -1135,6 +1153,7 @@ class TestTypedBranchAndErrorBoundary:
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_FakeExecutionPort(),
+                state_repository=repo,
             ),
         )
 
@@ -1184,6 +1203,7 @@ class TestTypedBranchAndErrorBoundary:
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=ep,
+                state_repository=repo,
             ),
         )
 
@@ -1330,6 +1350,7 @@ class TestTypedBranchAndErrorBoundary:
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_ApplyExecutionPort(),
+                state_repository=repo,
             ),
         )
 
@@ -1356,6 +1377,7 @@ class TestTypedBranchAndErrorBoundary:
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_FakeExecutionPort(),
+                state_repository=repo,
             ),
         )
 
@@ -1379,6 +1401,7 @@ class TestTypedBranchAndErrorBoundary:
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_FakeExecutionPort(),
+                state_repository=repo,
             ),
         )
 
@@ -1608,6 +1631,7 @@ class TestProcessReturnsFinalState:
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_FakeExecutionPort(),
+                state_repository=repo,
             ),
         )
 
@@ -1633,6 +1657,7 @@ class TestProcessReturnsFinalState:
             entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                 trade_cycle_id_factory=lambda: "tc-id",
                 execution_port=_FakeExecutionPort(),
+                state_repository=repo,
             ),
         )
 

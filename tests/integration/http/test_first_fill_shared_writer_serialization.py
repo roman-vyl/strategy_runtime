@@ -434,6 +434,7 @@ def _make_real_semantic_harness(
     entry_reconciliation_orchestrator = EntryReconciliationOrchestrator(
         lambda: _TRADE_CYCLE_ID,
         _FakeEntryReconciliationExecutionPort(),
+        repo,  # type: ignore[arg-type]
     )
     strategy_runtime_orchestrator = StrategyRuntimeOrchestrator(
         state_repository=repo,  # type: ignore[arg-type]

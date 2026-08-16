@@ -1,5 +1,7 @@
 """Application sequencing for desired-entry reconciliation."""
 
+from dataclasses import replace
+
 from strategy_runtime.runtime.entry_reconciliation import (
     Apply,
     Cancel,
@@ -8,7 +10,6 @@ from strategy_runtime.runtime.entry_reconciliation import (
     EntryReconciliationCommand,
     EntryReconciliationInvariantError,
     NoOp,
-    Replace,
     apply_success_confirmation,
     build_entry_reconciliation_command,
     decide_entry_reconciliation,
@@ -18,7 +19,8 @@ from strategy_runtime.runtime.entry_reconciliation_orchestrator.ports import (
 )
 from strategy_runtime.runtime.routing.models import LiveEntryProjectedStrategyInstance
 from strategy_runtime.runtime.state.identity import TradeCycleIdFactory
-from strategy_runtime.runtime.state.models import StrategyInstanceRuntimeState
+from strategy_runtime.runtime.state.models import PendingEntryRecovery, StrategyInstanceRuntimeState
+from strategy_runtime.runtime.state.repository import StrategyInstanceRuntimeStateRepository
 
 
 class EntryReconciliationOrchestrator:
@@ -28,9 +30,11 @@ class EntryReconciliationOrchestrator:
         self,
         trade_cycle_id_factory: TradeCycleIdFactory,
         execution_port: EntryReconciliationExecutionPort,
+        state_repository: StrategyInstanceRuntimeStateRepository,
     ) -> None:
         self._trade_cycle_id_factory = trade_cycle_id_factory
         self._execution_port = execution_port
+        self._state_repository = state_repository
 
     def execute(
         self,
@@ -56,15 +60,22 @@ class EntryReconciliationOrchestrator:
                 "command-bearing reconciliation decision must produce a command"
             )
 
+        pending_state = self._state_repository.save(
+            replace(
+                source_state,
+                pending_entry_recovery=PendingEntryRecovery(command.trade_cycle_id),
+            )
+        )
+
         confirmation = self._execution_port.execute(command, source_state)
         if type(confirmation) not in {EntryAppliedConfirmation, EntryAbsentConfirmation}:
             raise EntryReconciliationInvariantError(
                 "execution port must return a successful entry confirmation"
             )
 
-        if isinstance(decision, (Apply, Replace, Cancel)):
+        if isinstance(decision, (Apply, Cancel)):
             return apply_success_confirmation(
-                source_state,
+                pending_state,
                 decision,
                 command,
                 confirmation,

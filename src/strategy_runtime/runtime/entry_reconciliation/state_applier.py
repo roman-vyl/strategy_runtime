@@ -11,7 +11,6 @@ from strategy_runtime.runtime.entry_reconciliation.models import (
     EntryAbsentConfirmation,
     EntryAppliedConfirmation,
     EntryReconciliationCommand,
-    Replace,
     SuccessfulEntryConfirmation,
 )
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
@@ -25,7 +24,7 @@ from strategy_runtime.shared.decimal_text import is_exact_decimal_text
 
 def apply_success_confirmation(
     state: StrategyInstanceRuntimeState,
-    decision: Apply | Replace | Cancel,
+    decision: Apply | Cancel,
     sent_command: EntryReconciliationCommand,
     confirmation: SuccessfulEntryConfirmation,
 ) -> StrategyInstanceRuntimeState:
@@ -35,13 +34,9 @@ def apply_success_confirmation(
 
     if type(decision) is Apply:
         return _apply(state, decision, sent_command, confirmation)
-    if type(decision) is Replace:
-        return _replace(state, decision, sent_command, confirmation)
     if type(decision) is Cancel:
         return _cancel(state, decision, sent_command, confirmation)
-    raise EntryReconciliationInvariantError(
-        "confirmation application requires APPLY, REPLACE, or CANCEL"
-    )
+    raise EntryReconciliationInvariantError("confirmation application requires APPLY or CANCEL")
 
 
 def _apply(
@@ -62,31 +57,7 @@ def _apply(
     return replace(
         state,
         current_trade_cycle=_confirmed_cycle(applied),
-    )
-
-
-def _replace(
-    state: StrategyInstanceRuntimeState,
-    decision: Replace,
-    sent_command: EntryReconciliationCommand,
-    confirmation: SuccessfulEntryConfirmation,
-) -> StrategyInstanceRuntimeState:
-    current_cycle = _require_current_cycle(state, "REPLACE")
-    applied = _require_applied_confirmation(confirmation, "REPLACE")
-    _require_cycle_identity(current_cycle.trade_cycle_id, decision.trade_cycle_id)
-    _require_cycle_identity(decision.trade_cycle_id, sent_command.trade_cycle_id)
-    _require_cycle_identity(sent_command.trade_cycle_id, applied.trade_cycle_id)
-    _require_matching_desired_entries(
-        decision.desired_entry,
-        sent_command.desired_entry,
-        applied.applied_desired_entry,
-    )
-    return replace(
-        state,
-        current_trade_cycle=CurrentTradeCycle(
-            trade_cycle_id=current_cycle.trade_cycle_id,
-            applied_entry_package=_confirmed_package(applied),
-        ),
+        pending_entry_recovery=None,
     )
 
 
@@ -106,12 +77,12 @@ def _cancel(
         raise EntryReconciliationInvariantError(
             "CANCEL requires sent command desired_entry to be null"
         )
-    return replace(state, current_trade_cycle=None)
+    return replace(state, current_trade_cycle=None, pending_entry_recovery=None)
 
 
 def _require_input_types(
     state: StrategyInstanceRuntimeState,
-    decision: Apply | Replace | Cancel,
+    decision: Apply | Cancel,
     sent_command: EntryReconciliationCommand,
     confirmation: SuccessfulEntryConfirmation,
 ) -> None:
@@ -119,10 +90,8 @@ def _require_input_types(
         raise EntryReconciliationInvariantError(
             "confirmation application requires StrategyInstanceRuntimeState"
         )
-    if type(decision) not in {Apply, Replace, Cancel}:
-        raise EntryReconciliationInvariantError(
-            "confirmation application requires APPLY, REPLACE, or CANCEL"
-        )
+    if type(decision) not in {Apply, Cancel}:
+        raise EntryReconciliationInvariantError("confirmation application requires APPLY or CANCEL")
     if type(sent_command) is not EntryReconciliationCommand:
         raise EntryReconciliationInvariantError(
             "confirmation application requires EntryReconciliationCommand"

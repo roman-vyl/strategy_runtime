@@ -15,7 +15,6 @@ from strategy_runtime.runtime.entry_reconciliation.models import (
     Cancel,
     EntryReconciliationCommand,
     NoOp,
-    Replace,
 )
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
 from strategy_runtime.runtime.state.models import (
@@ -86,23 +85,6 @@ def test_apply_builds_i3_command_with_caller_reserved_identity() -> None:
     assert state.current_trade_cycle is None
 
 
-def test_replace_uses_only_decision_payload_and_current_state() -> None:
-    state = runtime_state(with_cycle=True)
-    entry = desired_entry(price="101")
-
-    result = build_entry_reconciliation_command(
-        state,
-        Replace("cycle-1", entry),
-    )
-
-    assert result == EntryReconciliationCommand(
-        strategy_instance_id="instance",
-        trade_cycle_id="cycle-1",
-        ticker="BTCUSDT.P",
-        desired_entry=entry,
-    )
-
-
 def test_cancel_builds_explicit_absence_command() -> None:
     state = runtime_state(with_cycle=True)
 
@@ -130,33 +112,15 @@ def test_cancel_builds_explicit_absence_command() -> None:
         ),
         (
             runtime_state(with_cycle=True),
-            Replace("cycle-1", desired_entry()),
-            "cycle-new",
-            "only APPLY accepts",
-        ),
-        (
-            runtime_state(with_cycle=True),
             Cancel("cycle-1"),
             "cycle-new",
             "only APPLY accepts",
-        ),
-        (
-            runtime_state(),
-            Replace("cycle-1", desired_entry()),
-            None,
-            "REPLACE requires an acknowledged",
         ),
         (
             runtime_state(),
             Cancel("cycle-1"),
             None,
             "CANCEL requires an acknowledged",
-        ),
-        (
-            runtime_state(with_cycle=True),
-            Replace("stale", desired_entry()),
-            None,
-            "does not match current",
         ),
         (
             runtime_state(with_cycle=True),
@@ -168,7 +132,7 @@ def test_cancel_builds_explicit_absence_command() -> None:
 )
 def test_incoherent_builder_inputs_fail_closed_without_state_mutation(
     state: StrategyInstanceRuntimeState,
-    decision: NoOp | Apply | Replace | Cancel,
+    decision: NoOp | Apply | Cancel,
     apply_id: str | None,
     message: str,
 ) -> None:

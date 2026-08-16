@@ -16,6 +16,7 @@ from strategy_runtime.runtime.state.models import (
     AppliedEntryPackage,
     CurrentTradeCycle,
     GetOrCreateStrategyInstanceRuntimeStateRequest,
+    PendingEntryRecovery,
     RegisteredSpecSnapshot,
     StrategyInstanceRuntimeState,
 )
@@ -270,3 +271,34 @@ def _complete_cycle(trade_cycle_id: str, *, quantity: str) -> CurrentTradeCycle:
             calculated_quantity=quantity,
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# list_ids_with_pending_entry_recovery(): a read-only filter over the
+# resident index, no ABI call, no mutex, no resolution logic.
+# ---------------------------------------------------------------------------
+
+
+def test_list_ids_with_pending_entry_recovery_is_empty_when_nothing_is_pending() -> None:
+    repository = InMemoryStrategyInstanceRuntimeStateRepository()
+    repository.get_or_create(make_request(strategy_instance_id="a"))
+
+    assert repository.list_ids_with_pending_entry_recovery() == ()
+
+
+def test_list_ids_with_pending_entry_recovery_returns_only_pending_instances() -> None:
+    repository = InMemoryStrategyInstanceRuntimeStateRepository()
+    pending = repository.get_or_create(make_request(strategy_instance_id="pending"))
+    repository.get_or_create(make_request(strategy_instance_id="not-pending"))
+    repository.save(replace(pending, pending_entry_recovery=PendingEntryRecovery("cycle-1")))
+
+    assert repository.list_ids_with_pending_entry_recovery() == ("pending",)
+
+
+def test_list_ids_with_pending_entry_recovery_omits_a_cleared_marker() -> None:
+    repository = InMemoryStrategyInstanceRuntimeStateRepository()
+    state = repository.get_or_create(make_request(strategy_instance_id="a"))
+    state = repository.save(replace(state, pending_entry_recovery=PendingEntryRecovery("cycle-1")))
+    repository.save(replace(state, pending_entry_recovery=None))
+
+    assert repository.list_ids_with_pending_entry_recovery() == ()

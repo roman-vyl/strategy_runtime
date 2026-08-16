@@ -14,7 +14,6 @@ from strategy_runtime.runtime.entry_reconciliation.models import (
     EntryReconciliationCommand,
     EntryReconciliationDecision,
     NoOp,
-    Replace,
     SuccessfulEntryConfirmation,
 )
 from strategy_runtime.runtime.entry_reconciliation.reconciliation import (
@@ -35,7 +34,6 @@ __all__ = (
     "EntryReconciliationDecision",
     "EntryReconciliationInvariantError",
     "NoOp",
-    "Replace",
     "SuccessfulEntryConfirmation",
     "apply_success_confirmation",
     "build_entry_reconciliation_command",

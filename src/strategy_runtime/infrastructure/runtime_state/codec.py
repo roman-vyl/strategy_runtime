@@ -31,13 +31,14 @@ from strategy_runtime.runtime.state.models import (
     AppliedEntryPackage,
     CurrentTradeCycle,
     FrozenExecutedEntryContext,
+    PendingEntryRecovery,
     RegisteredSpecSnapshot,
     StrategyInstanceRuntimeState,
 )
 
-_SCHEMA_VERSION: Final = 1
+_SCHEMA_VERSION: Final = 2
 
-_ENVELOPE_KEYS: Final = frozenset(
+_ENVELOPE_KEYS_V1: Final = frozenset(
     {
         "schema_version",
         "strategy_instance_id",
@@ -47,6 +48,8 @@ _ENVELOPE_KEYS: Final = frozenset(
         "current_trade_cycle",
     }
 )
+_ENVELOPE_KEYS_V2: Final = _ENVELOPE_KEYS_V1 | {"pending_entry_recovery"}
+_PENDING_ENTRY_RECOVERY_KEYS: Final = frozenset({"trade_cycle_id"})
 _SNAPSHOT_KEYS: Final = frozenset({"instrument", "base_timeframe", "raw_spec", "source_path"})
 _CYCLE_KEYS: Final = frozenset(
     {
@@ -114,7 +117,16 @@ def _encode_aggregate(state: StrategyInstanceRuntimeState) -> dict[str, Any]:
             if state.current_trade_cycle is not None
             else None
         ),
+        "pending_entry_recovery": (
+            _encode_pending_entry_recovery(state.pending_entry_recovery)
+            if state.pending_entry_recovery is not None
+            else None
+        ),
     }
+
+
+def _encode_pending_entry_recovery(marker: PendingEntryRecovery) -> dict[str, Any]:
+    return {"trade_cycle_id": marker.trade_cycle_id}
 
 
 def _encode_snapshot(snapshot: RegisteredSpecSnapshot) -> dict[str, Any]:
@@ -190,13 +202,27 @@ def _reject_unknown_keys(data: dict[str, Any], allowed: frozenset[str], *, where
 def _decode_envelope(envelope: Any) -> StrategyInstanceRuntimeState:
     if not isinstance(envelope, dict):
         raise TypeError("record must be a JSON object")
-    _reject_unknown_keys(envelope, _ENVELOPE_KEYS, where="envelope")
-    if envelope.get("schema_version") != _SCHEMA_VERSION:
-        raise ValueError("unsupported or missing schema_version")
-    return _decode_aggregate(envelope)
+    schema_version = envelope.get("schema_version")
+    if schema_version == 1:
+        _reject_unknown_keys(envelope, _ENVELOPE_KEYS_V1, where="envelope")
+        return _decode_aggregate(envelope, pending_entry_recovery=None)
+    if schema_version == 2:
+        _reject_unknown_keys(envelope, _ENVELOPE_KEYS_V2, where="envelope")
+        pending_entry_recovery_data = envelope["pending_entry_recovery"]
+        return _decode_aggregate(
+            envelope,
+            pending_entry_recovery=(
+                _decode_pending_entry_recovery(pending_entry_recovery_data)
+                if pending_entry_recovery_data is not None
+                else None
+            ),
+        )
+    raise ValueError("unsupported or missing schema_version")
 
 
-def _decode_aggregate(data: dict[str, Any]) -> StrategyInstanceRuntimeState:
+def _decode_aggregate(
+    data: dict[str, Any], *, pending_entry_recovery: PendingEntryRecovery | None
+) -> StrategyInstanceRuntimeState:
     current_trade_cycle_data = data["current_trade_cycle"]
     return StrategyInstanceRuntimeState(
         strategy_instance_id=data["strategy_instance_id"],
@@ -208,7 +234,15 @@ def _decode_aggregate(data: dict[str, Any]) -> StrategyInstanceRuntimeState:
             if current_trade_cycle_data is not None
             else None
         ),
+        pending_entry_recovery=pending_entry_recovery,
     )
+
+
+def _decode_pending_entry_recovery(data: Any) -> PendingEntryRecovery:
+    if not isinstance(data, dict):
+        raise TypeError("pending_entry_recovery must be a JSON object")
+    _reject_unknown_keys(data, _PENDING_ENTRY_RECOVERY_KEYS, where="pending_entry_recovery")
+    return PendingEntryRecovery(trade_cycle_id=data["trade_cycle_id"])
 
 
 def _decode_snapshot(data: Any) -> RegisteredSpecSnapshot:
