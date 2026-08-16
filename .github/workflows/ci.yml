@@ -11,6 +11,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Checkout abi_executor_bot (sibling, for contract tests)
+        uses: actions/checkout@v4
+        with:
+          repository: roman-vyl/abi_executor_bot
+          path: ../abi_executor_bot
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
