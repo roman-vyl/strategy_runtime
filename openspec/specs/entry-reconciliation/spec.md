@@ -47,9 +47,14 @@ equivalent if and only if all six domain fields are equal.
 - **AND** relies on the canonical values established by `DesiredEntry`
   construction
 
-### Requirement: Reconciliation produces the complete four-way decision table
+### Requirement: Reconciliation produces the complete three-way decision table
 Runtime SHALL produce exactly one closed payload-bearing decision variant from
-`NoOp`, `Apply`, `Replace`, and `Cancel`.
+`NoOp`, `Apply`, and `Cancel`. `Replace` no longer exists as a decision
+variant: any change to the acknowledged applied desired entry decides
+`Cancel`, identically to the applied desired entry becoming absent, because
+physical replace is served exclusively by cancellation (see
+`current-trade-cycle-state` and the paired ABI capability
+`entry-package-execution`).
 
 #### Scenario: No new or applied entry
 - **WHEN** the new desired entry is null
@@ -72,9 +77,11 @@ Runtime SHALL produce exactly one closed payload-bearing decision variant from
 #### Scenario: Applied desired entry changed
 - **WHEN** the new desired entry is non-null
 - **AND** it is not equivalent to the acknowledged applied desired entry
-- **THEN** the decision is `Replace`
-- **AND** carries the new desired entry
+- **THEN** the decision is `Cancel`
 - **AND** carries the acknowledged current `trade_cycle_id`
+- **AND** does not carry the new desired entry — it is discarded at the
+  decision level; a later bar's fresh reconciliation is the only path by
+  which any new desired entry is ever applied
 
 #### Scenario: Applied desired entry became absent
 - **WHEN** the new desired entry is null
@@ -88,7 +95,7 @@ exactly `strategy_instance_id`, `trade_cycle_id`, `ticker`, and
 `desired_entry: DesiredEntry | null`.
 
 #### Scenario: Represent a present package command
-- **WHEN** an `Apply` or `Replace` command is constructed
+- **WHEN** an `Apply` command is constructed
 - **THEN** `desired_entry` is the canonical domain value carried by the
   decision
 - **AND** no client request or wire DTO is constructed
@@ -119,14 +126,6 @@ for a valid `NoOp`.
 - **AND** copies `state.registered_spec_snapshot.instrument` as ticker
 - **AND** uses the supplied apply cycle identity without generating one
 
-#### Scenario: Build a replace command
-- **WHEN** the decision is `Replace` carrying a desired entry and cycle identity
-- **AND** `apply_trade_cycle_id` is null
-- **AND** the decision cycle identity equals the acknowledged current cycle
-- **THEN** the command carries the decision desired entry unchanged
-- **AND** uses the decision cycle identity
-- **AND** copies the state strategy-instance identity and registered instrument
-
 #### Scenario: Build a cancel command
 - **WHEN** the decision is `Cancel` carrying a cycle identity
 - **AND** `apply_trade_cycle_id` is null
@@ -134,11 +133,14 @@ for a valid `NoOp`.
 - **THEN** the command contains `desired_entry: null`
 - **AND** uses the decision cycle identity
 - **AND** copies the state strategy-instance identity and registered instrument
+- **AND** this holds identically whether `Cancel` arose from a null new
+  desired entry or from a changed one — the command never carries a changed
+  desired entry
 
 #### Scenario: Fail explicitly for an incoherent required command
-- **WHEN** `Apply` lacks a valid apply-only cycle identity, `NoOp`, `Replace`,
-  or `Cancel` receives an apply-only identity, or a decision contradicts its
-  required source state
+- **WHEN** `Apply` lacks a valid apply-only cycle identity, `NoOp` or `Cancel`
+  receives an apply-only identity, or a decision contradicts its required
+  source state
 - **THEN** command construction raises
   `EntryReconciliationInvariantError`
 - **AND** returns neither null nor an `EntryReconciliationCommand`
@@ -151,15 +153,18 @@ for a valid `NoOp`.
 - **AND** it does not repeat desired-entry reconciliation
 
 #### Scenario: Produce no fallback action
-- **WHEN** construction of an `Apply`, `Replace`, or `Cancel` command fails
-- **THEN** Runtime constructs no alternative cancel, apply, replace, or no-op
-  result
+- **WHEN** construction of an `Apply` or `Cancel` command fails
+- **THEN** Runtime constructs no alternative cancel, apply, or no-op result
 - **AND** Runtime performs no immediate retry
 
 #### Scenario: Leave the next bar on the ordinary path
 - **WHEN** required command construction raises
   `EntryReconciliationInvariantError`
 - **THEN** Runtime stores no pending, suppression, fallback, or retry state
+  in this pure component — the durable `pending_entry_recovery` marker
+  (`pending-entry-recovery-state`) is a distinct, application-level concern
+  owned by `entry-reconciliation-orchestrator`, not by this invariant-failure
+  path
 - **AND** a later closed bar remains eligible to derive reconciliation again
   through the ordinary pipeline
 
@@ -192,10 +197,6 @@ client or transport outcomes part of that input.
 - **WHEN** the decision variant is `Apply`
 - **THEN** only `EntryAppliedConfirmation` is action-compatible
 
-#### Scenario: Replace uses only applied confirmation
-- **WHEN** the decision variant is `Replace`
-- **THEN** only `EntryAppliedConfirmation` is action-compatible
-
 #### Scenario: Cancel uses only absent confirmation
 - **WHEN** the decision variant is `Cancel`
 - **THEN** only `EntryAbsentConfirmation` is action-compatible
@@ -218,7 +219,7 @@ decision variant, originating command, ownership identities, decision desired
 entry, and source-state preconditions before constructing replacement state.
 
 #### Scenario: Accept matching applied confirmation
-- **WHEN** `Apply` or `Replace` receives `EntryAppliedConfirmation`
+- **WHEN** `Apply` receives `EntryAppliedConfirmation`
 - **AND** its strategy-instance and trade-cycle identities match the aggregate,
   decision, and sent command
 - **AND** its desired entry is exactly domain-equivalent to the desired entry
@@ -244,8 +245,8 @@ entry, and source-state preconditions before constructing replacement state.
   to its pre-call snapshot
 
 #### Scenario: Reject a wrong success variant
-- **WHEN** `Apply` or `Replace` receives `EntryAbsentConfirmation`, or
-  `Cancel` receives `EntryAppliedConfirmation`
+- **WHEN** `Apply` receives `EntryAbsentConfirmation`, or `Cancel` receives
+  `EntryAppliedConfirmation`
 - **THEN** confirmation application raises
   `EntryReconciliationInvariantError`
 - **AND** the input aggregate remains unmodified and domain-value-equivalent
@@ -283,8 +284,8 @@ entry, and source-state preconditions before constructing replacement state.
 - **AND** no partial state is constructed or retained
 
 #### Scenario: Reject incoherent source state
-- **WHEN** source state does not satisfy the supplied `Apply`, `Replace`, or
-  `Cancel` variant's preconditions
+- **WHEN** source state does not satisfy the supplied `Apply` or `Cancel`
+  variant's preconditions
 - **THEN** confirmation application raises
   `EntryReconciliationInvariantError`
 - **AND** no partial state is constructed or retained
@@ -310,18 +311,14 @@ confirmation that passes every invariant check.
 - **AND** stores the confirmed desired entry and exact
   `calculated_quantity`
 
-#### Scenario: Replace retains cycle identity
-- **WHEN** a valid `Replace` confirmation is applied
-- **AND** source `current_trade_cycle` contains its required applied package
-- **THEN** Runtime retains the existing `trade_cycle_id`
-- **AND** atomically replaces the complete `AppliedEntryPackage`
-- **AND** stores the confirmed desired entry and exact `calculated_quantity`
-
 #### Scenario: Cancel clears the complete cycle
 - **WHEN** a valid `Cancel` confirmation is applied
 - **AND** source `current_trade_cycle` contains its required applied package
 - **THEN** Runtime sets `current_trade_cycle` to null
 - **AND** does not retain an empty cycle
+- **AND** this holds identically whether the `Cancel` decision arose from a
+  null new desired entry or from a changed one — no variant of `Cancel`
+  retains or replaces the prior `AppliedEntryPackage`
 
 ### Requirement: Pure reconciliation has no orchestration or external dependencies
 The reconciliation, command-building, and success-transition components
@@ -338,11 +335,11 @@ SHALL remain free of external calls and production-flow dependencies.
 - **WHEN** command construction or confirmation application executes
 - **THEN** it does not invoke `TradeCycleIdFactory`
 - **AND** uses only the caller-reserved apply identity or the existing cycle
-  identity carried by `Replace` or `Cancel`
+  identity carried by `Cancel`
 
 ### Requirement: Reconciliation fails closed once the entry context is frozen
 `decide_entry_reconciliation(new_desired_entry, current_trade_cycle)` SHALL
-raise `EntryReconciliationInvariantError` before evaluating the four-way
+raise `EntryReconciliationInvariantError` before evaluating the three-way
 decision table when `current_trade_cycle` is not null and
 `current_trade_cycle.frozen_entry_context` is not null. This check runs
 before any desired-entry equivalence comparison, so no `EntryReconciliationCommand`
@@ -363,7 +360,7 @@ a trade cycle's entry context is frozen.
   acknowledged applied desired entry
 - **THEN** `decide_entry_reconciliation` raises
   `EntryReconciliationInvariantError`
-- **AND** it does not return `Replace`
+- **AND** it does not return `Cancel`
 
 #### Scenario: Reject a null desired entry once frozen
 - **WHEN** `current_trade_cycle.frozen_entry_context` is not null
