@@ -16,7 +16,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install (python)
-        run: pip install -e '.[dev]'
+        run: make install-dev
 
       - name: Verify (lint + format-check + typecheck + test)
         run: make verify
