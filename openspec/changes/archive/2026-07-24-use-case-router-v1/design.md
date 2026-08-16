@@ -44,8 +44,7 @@ class StrategyUseCaseRouterPort(Protocol):
     def route(
         self,
         item: PositionResolvedStrategyInstance,
-    ) -> StrategyUseCaseProjectedInstance:
-        ...
+    ) -> StrategyUseCaseProjectedInstance: ...
 ```
 
 `StrategyRuntimeOrchestrator.process(...)` calls repository, resolver, and router

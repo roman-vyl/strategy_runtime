@@ -46,8 +46,7 @@ class OpenPositionResolverPort(Protocol):
     def resolve(
         self,
         state: StrategyInstanceRuntimeState,
-    ) -> PositionResolvedStrategyInstanceRuntimeState:
-        ...
+    ) -> PositionResolvedStrategyInstanceRuntimeState: ...
 ```
 
 Fan-out is owned by the upstream utility orchestrator. This semantic operation
