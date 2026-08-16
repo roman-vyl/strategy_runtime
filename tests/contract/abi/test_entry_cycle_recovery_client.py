@@ -368,9 +368,7 @@ def test_timeout_must_be_finite_and_positive(timeout_seconds: float) -> None:
         )
 
 
-def query(
-    fake: FakeAbi, *, strategy_instance_id: str, trade_cycle_id: str
-) -> object:
+def query(fake: FakeAbi, *, strategy_instance_id: str, trade_cycle_id: str) -> object:
     with HttpxAbiEntryCycleRecoveryAdapter(
         base_url="http://abi.test",
         timeout_seconds=0.25,

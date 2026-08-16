@@ -95,6 +95,4 @@ class HttpxAbiEntryCycleRecoveryAdapter:
 def _recovery_state_path(strategy_instance_id: str, trade_cycle_id: str) -> str:
     strategy_segment = encode_opaque_path_segment(strategy_instance_id)
     cycle_segment = encode_opaque_path_segment(trade_cycle_id)
-    return (
-        f"/v1/strategy-instances/{strategy_segment}/trade-cycles/{cycle_segment}/recovery-state"
-    )
+    return f"/v1/strategy-instances/{strategy_segment}/trade-cycles/{cycle_segment}/recovery-state"
