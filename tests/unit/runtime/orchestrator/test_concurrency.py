@@ -259,6 +259,7 @@ def _run_same_instance_pair() -> _SameInstancePairResult:
         entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
             trade_cycle_id_factory=lambda: "tc-id",
             execution_port=execution_port,
+            state_repository=repo,
         ),
         position_management_orchestrator=MagicMock(),
     )
@@ -324,10 +325,11 @@ class TestSameInstanceSerialization:
             i for i, e in enumerate(result.events) if e.endswith(f":{result.loser_name}")
         ]
         # Winner applies the desired entry (get_or_create, resolve, route,
-        # reconcile, save). The loser observes that already-applied entry via
-        # the fresh post-save state (5.2) and reconciles to an idempotent
-        # NoOp, so it never reaches the execution port or save.
-        assert len(winner_indices) == 5
+        # save-pending-recovery-marker, reconcile, save-confirmed-result).
+        # The loser observes that already-applied entry via the fresh
+        # post-save state (5.2) and reconciles to an idempotent NoOp, so it
+        # never reaches the execution port or save.
+        assert len(winner_indices) == 6
         assert len(loser_indices) == 3
         assert max(winner_indices) < min(loser_indices)
 
@@ -344,8 +346,14 @@ class TestSameInstanceFreshStateAfterWait:
 
         assert len(result.resolver_received_states) == 2
         winner_received, loser_received = result.resolver_received_states
-        assert len(result.save_results) == 1
-        saved_by_winner = result.save_results[0]
+        # Two backing saves from the winner: the durable pending-recovery
+        # marker written before execute(), then the confirmed replacement
+        # aggregate written by the top-level orchestrator after execute().
+        assert len(result.save_results) == 2
+        pending_marker_save, confirmed_save = result.save_results
+        assert pending_marker_save.pending_entry_recovery is not None
+        assert pending_marker_save.current_trade_cycle is None
+        saved_by_winner = confirmed_save
 
         assert winner_received.current_trade_cycle is None
         assert loser_received == saved_by_winner
@@ -399,6 +407,7 @@ class TestDifferentInstanceOverlap:
                 entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
                     trade_cycle_id_factory=lambda: "tc-id",
                     execution_port=_UnusedExecutionPort(),
+                    state_repository=repo,
                 ),
                 position_management_orchestrator=MagicMock(),
             )

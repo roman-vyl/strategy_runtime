@@ -10,7 +10,6 @@ from strategy_runtime.runtime.entry_reconciliation.models import (
     Apply,
     Cancel,
     NoOp,
-    Replace,
 )
 from strategy_runtime.runtime.entry_reconciliation.reconciliation import (
     decide_entry_reconciliation,
@@ -60,7 +59,7 @@ def cycle(entry: DesiredEntry, *, trade_cycle_id: str = "cycle-1") -> CurrentTra
         (
             desired_entry(planned_entry_price="101"),
             cycle(desired_entry()),
-            Replace("cycle-1", desired_entry(planned_entry_price="101")),
+            Cancel("cycle-1"),
         ),
         (None, cycle(desired_entry()), Cancel("cycle-1")),
     ],
@@ -68,7 +67,7 @@ def cycle(entry: DesiredEntry, *, trade_cycle_id: str = "cycle-1") -> CurrentTra
 def test_complete_reconciliation_table(
     new_entry: DesiredEntry | None,
     current_cycle: CurrentTradeCycle | None,
-    expected: NoOp | Apply | Replace | Cancel,
+    expected: NoOp | Apply | Cancel,
 ) -> None:
     assert decide_entry_reconciliation(new_entry, current_cycle) == expected
 
@@ -97,7 +96,7 @@ def test_every_desired_entry_field_participates_in_exact_equivalence(
     original = desired_entry()
 
     assert not desired_entries_equivalent(original, changed)
-    assert decide_entry_reconciliation(changed, cycle(original)) == Replace("cycle-1", changed)
+    assert decide_entry_reconciliation(changed, cycle(original)) == Cancel("cycle-1")
 
 
 def test_equivalence_uses_canonical_domain_value_without_tolerance() -> None:

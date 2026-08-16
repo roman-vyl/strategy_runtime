@@ -16,6 +16,7 @@ from strategy_runtime.config.startup import (
     prepare_state_path,
 )
 from strategy_runtime.infrastructure.abi import (
+    HttpxAbiEntryCycleRecoveryAdapter,
     HttpxAbiEntryPackageAdapter,
     HttpxAbiOpenPositionLookupAdapter,
     HttpxAbiPositionManagementAdapter,
@@ -50,6 +51,10 @@ from strategy_runtime.runtime.position_management_orchestrator import (
 from strategy_runtime.runtime.routing.router import StrategyUseCaseRouter
 from strategy_runtime.runtime.state.identity import new_trade_cycle_id
 from strategy_runtime.runtime.state.models import StrategyInstanceRuntimeState
+from strategy_runtime.runtime.uncertain_exchange_state_resolver import (
+    UncertainExchangeStateResolver,
+    UncertainExchangeStateResolverWorker,
+)
 from strategy_runtime.shared.identifiers import new_identifier, utc_timestamp
 from strategy_runtime.utility.committed_bar import (
     CommittedBarOrchestrator,
@@ -109,7 +114,7 @@ def build_application(
 
     A `ready=True` result always has the complete graph constructed: the
     utility contour, the shared state repository and keyed-mutex registry,
-    all five outbound HTTP clients, and the semantic core wired directly as
+    all six outbound HTTP clients, and the semantic core wired directly as
     the strategy-cycle dispatcher. There is no parameter that returns a
     partial or utility-only ready result.
 
@@ -125,6 +130,7 @@ def build_application(
     runtime_logger = logger or logging.getLogger("strategy_runtime")
     lifecycle = _OutboundHttpClientLifecycle(runtime_logger)
     intake_worker: CommittedBarIntakeWorker | None = None
+    resolver_worker: UncertainExchangeStateResolverWorker | None = None
     try:
         config = load_runtime_config(environ)
         prepare_journal_path(config.journal_path)
@@ -164,6 +170,13 @@ def build_application(
                 timeout_seconds=config.abi_entry_package_timeout_seconds,
             )
         )
+        entry_cycle_recovery_client = lifecycle.add(
+            HttpxAbiEntryCycleRecoveryAdapter(
+                base_url=config.abi_base_url,
+                timeout_seconds=config.abi_open_position_timeout_seconds,
+                entry_package_port=entry_package_client,
+            )
+        )
         position_management_client = lifecycle.add(
             HttpxAbiPositionManagementAdapter(
                 base_url=config.abi_base_url,
@@ -182,9 +195,15 @@ def build_application(
         entry_reconciliation_orchestrator = EntryReconciliationOrchestrator(
             new_trade_cycle_id,
             entry_execution_bridge,
+            state_repository,
         )
         position_management_orchestrator = PositionManagementOrchestrator(
             execution_port=position_management_client
+        )
+        uncertain_exchange_state_resolver = UncertainExchangeStateResolver(
+            state_repository=state_repository,
+            keyed_mutex_registry=keyed_mutex_registry,
+            abi_entry_cycle_recovery=entry_cycle_recovery_client,
         )
         strategy_runtime_orchestrator = StrategyRuntimeOrchestrator(
             state_repository=state_repository,
@@ -213,16 +232,23 @@ def build_application(
 
         committed_bar_intake = CommittedBarIntakeBoundary(config.committed_bar_queue_capacity)
         intake_worker = CommittedBarIntakeWorker(committed_bar_intake, orchestrator, runtime_logger)
+        resolver_worker = UncertainExchangeStateResolverWorker(
+            state_repository=state_repository,
+            resolver=uncertain_exchange_state_resolver,
+            logger=runtime_logger,
+        )
 
         @asynccontextmanager
         async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
             assert intake_worker is not None
             try:
                 intake_worker.start()
+                resolver_worker.start()
                 yield
             finally:
                 committed_bar_intake.stop_accepting()
                 await asyncio.to_thread(intake_worker.stop_once)
+                await asyncio.to_thread(resolver_worker.stop_once)
                 lifecycle.close_all_once()
 
         app = create_http_app(
@@ -237,11 +263,14 @@ def build_application(
         app.state.outbound_http_client_lifecycle = lifecycle
         app.state.outbound_http_clients = lifecycle.clients
         app.state.committed_bar_intake_worker = intake_worker
+        app.state.uncertain_exchange_state_resolver_worker = resolver_worker
 
     except Exception:
         runtime_logger.exception("Runtime startup readiness failed")
         if intake_worker is not None:
             intake_worker.stop_once()
+        if resolver_worker is not None:
+            resolver_worker.stop_once()
         lifecycle.close_all_once()
         return create_http_app(
             ready=False,

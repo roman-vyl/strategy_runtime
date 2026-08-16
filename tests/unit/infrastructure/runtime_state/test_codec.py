@@ -15,6 +15,7 @@ from strategy_runtime.runtime.state.models import (
     CurrentTradeCycle,
     FrozenExecutedEntryContext,
     GetOrCreateStrategyInstanceRuntimeStateRequest,
+    PendingEntryRecovery,
     StrategyInstanceRuntimeState,
 )
 from strategy_runtime.runtime.state.repository import (
@@ -244,3 +245,69 @@ def test_decode_accepts_explicit_null_take_price() -> None:
     protection = decoded.current_trade_cycle.latest_confirmed_management_protection
     assert protection is not None
     assert protection.take_price is None
+
+
+# ---------------------------------------------------------------------------
+# schema_version 1 <-> 2: pending_entry_recovery (see task 8.6).
+# ---------------------------------------------------------------------------
+
+
+def test_every_new_write_encodes_schema_version_2_with_pending_entry_recovery_key() -> None:
+    envelope = json.loads(encode_state_line(_bare_state()))
+
+    assert envelope["schema_version"] == 2
+    assert envelope["pending_entry_recovery"] is None
+
+
+def test_round_trip_with_pending_entry_recovery_set() -> None:
+    state = replace(_bare_state(), pending_entry_recovery=PendingEntryRecovery("cycle-1"))
+
+    decoded = decode_state_line(encode_state_line(state))
+
+    assert decoded == state
+    assert decoded.pending_entry_recovery == PendingEntryRecovery("cycle-1")
+
+
+def test_schema_version_1_line_decodes_with_no_pending_recovery_marker() -> None:
+    envelope = json.loads(encode_state_line(_bare_state()))
+    del envelope["pending_entry_recovery"]
+    envelope["schema_version"] = 1
+
+    decoded = decode_state_line(json.dumps(envelope))
+
+    assert decoded.pending_entry_recovery is None
+
+
+def test_schema_version_1_line_rejects_an_unexpected_pending_entry_recovery_key() -> None:
+    envelope = json.loads(encode_state_line(_bare_state()))
+    envelope["schema_version"] = 1
+
+    with pytest.raises(StateRecordDecodeError):
+        decode_state_line(json.dumps(envelope))
+
+
+def test_schema_version_2_line_requires_the_pending_entry_recovery_key() -> None:
+    envelope = json.loads(encode_state_line(_bare_state()))
+    del envelope["pending_entry_recovery"]
+
+    with pytest.raises(StateRecordDecodeError):
+        decode_state_line(json.dumps(envelope))
+
+
+def test_schema_version_2_line_decodes_a_present_pending_entry_recovery_marker() -> None:
+    state = replace(_bare_state(), pending_entry_recovery=PendingEntryRecovery("cycle-7"))
+    envelope = json.loads(encode_state_line(state))
+    assert envelope["schema_version"] == 2
+
+    decoded = decode_state_line(json.dumps(envelope))
+
+    assert decoded.pending_entry_recovery == PendingEntryRecovery("cycle-7")
+
+
+def test_decode_rejects_unknown_field_in_pending_entry_recovery() -> None:
+    state = replace(_bare_state(), pending_entry_recovery=PendingEntryRecovery("cycle-1"))
+    envelope = json.loads(encode_state_line(state))
+    envelope["pending_entry_recovery"]["unexpected_field"] = "surprise"
+
+    with pytest.raises(StateRecordDecodeError):
+        decode_state_line(json.dumps(envelope))

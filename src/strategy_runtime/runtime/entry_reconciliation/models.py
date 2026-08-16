@@ -22,18 +22,6 @@ class Apply:
 
 
 @dataclass(frozen=True, slots=True)
-class Replace:
-    """Replace the package on an acknowledged current cycle."""
-
-    trade_cycle_id: str
-    desired_entry: DesiredEntry
-
-    def __post_init__(self) -> None:
-        _require_non_empty_string(self.trade_cycle_id, "trade_cycle_id")
-        _require_desired_entry(self.desired_entry, "desired_entry")
-
-
-@dataclass(frozen=True, slots=True)
 class Cancel:
     """Remove the package on an acknowledged current cycle."""
 
@@ -43,7 +31,7 @@ class Cancel:
         _require_non_empty_string(self.trade_cycle_id, "trade_cycle_id")
 
 
-EntryReconciliationDecision = NoOp | Apply | Replace | Cancel
+EntryReconciliationDecision = NoOp | Apply | Cancel
 
 
 @dataclass(frozen=True, slots=True)

@@ -23,6 +23,7 @@ from strategy_runtime.runtime.state.models import (
     AppliedEntryPackage,
     CurrentTradeCycle,
     GetOrCreateStrategyInstanceRuntimeStateRequest,
+    PendingEntryRecovery,
     RegisteredSpecSnapshot,
 )
 
@@ -374,3 +375,42 @@ def test_physical_write_failure_during_creation_poisons_the_repository(
 
     with pytest.raises(StrategyInstanceStateStorePoisoned):
         repository.get("anything")
+
+
+# ---------------------------------------------------------------------------
+# list_ids_with_pending_entry_recovery(): reflects durable state immediately
+# after restart, with no additional read or replay step.
+# ---------------------------------------------------------------------------
+
+
+def test_list_ids_with_pending_entry_recovery_is_empty_when_nothing_is_pending(
+    tmp_path: Path,
+) -> None:
+    repository = JsonlStrategyInstanceRuntimeStateRepository(tmp_path / "state.jsonl")
+    repository.get_or_create(make_request())
+
+    assert repository.list_ids_with_pending_entry_recovery() == ()
+
+
+def test_list_ids_with_pending_entry_recovery_returns_only_pending_instances(
+    tmp_path: Path,
+) -> None:
+    repository = JsonlStrategyInstanceRuntimeStateRepository(tmp_path / "state.jsonl")
+    pending = repository.get_or_create(make_request(strategy_instance_id="pending"))
+    repository.get_or_create(make_request(strategy_instance_id="not-pending"))
+    repository.save(replace(pending, pending_entry_recovery=PendingEntryRecovery("cycle-1")))
+
+    assert repository.list_ids_with_pending_entry_recovery() == ("pending",)
+
+
+def test_list_ids_with_pending_entry_recovery_reflects_state_immediately_after_restart(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "state.jsonl"
+    first_repository = JsonlStrategyInstanceRuntimeStateRepository(path)
+    pending = first_repository.get_or_create(make_request(strategy_instance_id="pending"))
+    first_repository.save(replace(pending, pending_entry_recovery=PendingEntryRecovery("cycle-1")))
+
+    restarted = JsonlStrategyInstanceRuntimeStateRepository(path)
+
+    assert restarted.list_ids_with_pending_entry_recovery() == ("pending",)

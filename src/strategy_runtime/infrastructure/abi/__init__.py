@@ -1,5 +1,8 @@
 """Production HTTP adapters for ABI-owned Runtime outbound contracts."""
 
+from strategy_runtime.infrastructure.abi.http_entry_cycle_recovery import (
+    HttpxAbiEntryCycleRecoveryAdapter,
+)
 from strategy_runtime.infrastructure.abi.http_entry_package import (
     HttpxAbiEntryPackageAdapter,
 )
@@ -11,6 +14,7 @@ from strategy_runtime.infrastructure.abi.http_position_management import (
 )
 
 __all__ = [
+    "HttpxAbiEntryCycleRecoveryAdapter",
     "HttpxAbiEntryPackageAdapter",
     "HttpxAbiOpenPositionLookupAdapter",
     "HttpxAbiPositionManagementAdapter",

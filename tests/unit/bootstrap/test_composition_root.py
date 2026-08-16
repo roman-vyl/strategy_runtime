@@ -93,13 +93,16 @@ def test_runtime_orchestrator_is_the_direct_strategy_cycle_dispatcher(
     assert committed_bar_kwargs["strategy_cycle_dispatcher"] is runtime_orchestrators[0]
 
 
-def test_ready_application_constructs_all_five_outbound_clients_exactly_once(
+def test_ready_application_constructs_all_six_outbound_clients_exactly_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     live_entry_instances = _count_constructions(monkeypatch, "HttpxStrategyEngineLiveEntryAdapter")
     open_trade_instances = _count_constructions(monkeypatch, "HttpxStrategyEngineOpenTradeAdapter")
     open_position_instances = _count_constructions(monkeypatch, "HttpxAbiOpenPositionLookupAdapter")
     entry_package_instances = _count_constructions(monkeypatch, "HttpxAbiEntryPackageAdapter")
+    entry_cycle_recovery_instances = _count_constructions(
+        monkeypatch, "HttpxAbiEntryCycleRecoveryAdapter"
+    )
     position_management_instances = _count_constructions(
         monkeypatch, "HttpxAbiPositionManagementAdapter"
     )
@@ -111,12 +114,14 @@ def test_ready_application_constructs_all_five_outbound_clients_exactly_once(
     assert len(open_trade_instances) == 1
     assert len(open_position_instances) == 1
     assert len(entry_package_instances) == 1
+    assert len(entry_cycle_recovery_instances) == 1
     assert len(position_management_instances) == 1
     assert app.state.outbound_http_clients == (
         live_entry_instances[0],
         open_trade_instances[0],
         open_position_instances[0],
         entry_package_instances[0],
+        entry_cycle_recovery_instances[0],
         position_management_instances[0],
     )
 
@@ -166,6 +171,9 @@ def test_startup_rollback_closes_already_constructed_clients_and_fails_closed(
     open_position_instances = _count_constructions(monkeypatch, "HttpxAbiOpenPositionLookupAdapter")
 
     entry_package_instances = _count_constructions(monkeypatch, "HttpxAbiEntryPackageAdapter")
+    entry_cycle_recovery_instances = _count_constructions(
+        monkeypatch, "HttpxAbiEntryCycleRecoveryAdapter"
+    )
 
     def _raise_on_construction(**_kwargs: object) -> Any:
         raise ValueError("simulated invalid ABI position-management configuration")
@@ -181,13 +189,15 @@ def test_startup_rollback_closes_already_constructed_clients_and_fails_closed(
     assert len(open_trade_instances) == 1
     assert len(open_position_instances) == 1
     assert len(entry_package_instances) == 1
+    assert len(entry_cycle_recovery_instances) == 1
     assert live_entry_instances[0]._client.is_closed
     assert open_trade_instances[0]._client.is_closed
     assert open_position_instances[0]._client.is_closed
     assert entry_package_instances[0]._client.is_closed
+    assert entry_cycle_recovery_instances[0]._client.is_closed
 
 
-def test_shutdown_closes_all_five_clients_exactly_once(
+def test_shutdown_closes_all_six_clients_exactly_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     close_call_counts: dict[int, int] = {}
@@ -197,6 +207,7 @@ def test_shutdown_closes_all_five_clients_exactly_once(
         "HttpxStrategyEngineOpenTradeAdapter",
         "HttpxAbiOpenPositionLookupAdapter",
         "HttpxAbiEntryPackageAdapter",
+        "HttpxAbiEntryCycleRecoveryAdapter",
         "HttpxAbiPositionManagementAdapter",
     ):
         real = getattr(application_module, name)
@@ -220,7 +231,7 @@ def test_shutdown_closes_all_five_clients_exactly_once(
 
     app = build_application(_valid_environ(tmp_path))
     assert app.state.ready is True
-    assert len(close_call_counts) == 5
+    assert len(close_call_counts) == 6
 
     with TestClient(app):
         assert all(count == 0 for count in close_call_counts.values())
@@ -244,6 +255,7 @@ def test_lifecycle_owner_close_all_once_is_idempotent_when_called_directly(
         "HttpxStrategyEngineOpenTradeAdapter",
         "HttpxAbiOpenPositionLookupAdapter",
         "HttpxAbiEntryPackageAdapter",
+        "HttpxAbiEntryCycleRecoveryAdapter",
         "HttpxAbiPositionManagementAdapter",
     ):
         real = getattr(application_module, name)
@@ -273,15 +285,15 @@ def test_lifecycle_owner_close_all_once_is_idempotent_when_called_directly(
     lifecycle.close_all_once()
     lifecycle.close_all_once()
 
-    assert len(close_call_counts) == 5
+    assert len(close_call_counts) == 6
     assert all(count == 1 for count in close_call_counts.values())
 
 
-def test_startup_rollback_covers_construction_after_all_five_clients_exist(
+def test_startup_rollback_covers_construction_after_all_six_clients_exist(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The rollback boundary extends past the five HTTP clients: a failure
-    inside `create_http_app(ready=True, ...)` itself -- after all five
+    """The rollback boundary extends past the six HTTP clients: a failure
+    inside `create_http_app(ready=True, ...)` itself -- after all six
     clients and the semantic graph already exist -- still
     triggers rollback and returns `ready=False`, never a partially assembled
     `ready=True` application."""
@@ -289,6 +301,9 @@ def test_startup_rollback_covers_construction_after_all_five_clients_exist(
     open_trade_instances = _count_constructions(monkeypatch, "HttpxStrategyEngineOpenTradeAdapter")
     open_position_instances = _count_constructions(monkeypatch, "HttpxAbiOpenPositionLookupAdapter")
     entry_package_instances = _count_constructions(monkeypatch, "HttpxAbiEntryPackageAdapter")
+    entry_cycle_recovery_instances = _count_constructions(
+        monkeypatch, "HttpxAbiEntryCycleRecoveryAdapter"
+    )
     position_management_instances = _count_constructions(
         monkeypatch, "HttpxAbiPositionManagementAdapter"
     )
@@ -310,6 +325,7 @@ def test_startup_rollback_covers_construction_after_all_five_clients_exist(
         open_trade_instances,
         open_position_instances,
         entry_package_instances,
+        entry_cycle_recovery_instances,
         position_management_instances,
     ):
         assert len(instances) == 1
@@ -328,6 +344,7 @@ def test_missing_position_management_timeout_fails_before_any_client_exists(
             "HttpxStrategyEngineOpenTradeAdapter",
             "HttpxAbiOpenPositionLookupAdapter",
             "HttpxAbiEntryPackageAdapter",
+            "HttpxAbiEntryCycleRecoveryAdapter",
             "HttpxAbiPositionManagementAdapter",
         )
     ]

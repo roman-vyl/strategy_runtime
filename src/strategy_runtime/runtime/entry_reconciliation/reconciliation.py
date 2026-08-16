@@ -8,7 +8,6 @@ from strategy_runtime.runtime.entry_reconciliation.models import (
     Cancel,
     EntryReconciliationDecision,
     NoOp,
-    Replace,
 )
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
 from strategy_runtime.runtime.state.models import CurrentTradeCycle
@@ -57,4 +56,4 @@ def decide_entry_reconciliation(
         return Cancel(current_trade_cycle.trade_cycle_id)
     if desired_entries_equivalent(new_desired_entry, acknowledged_desired_entry):
         return NoOp()
-    return Replace(current_trade_cycle.trade_cycle_id, new_desired_entry)
+    return Cancel(current_trade_cycle.trade_cycle_id)

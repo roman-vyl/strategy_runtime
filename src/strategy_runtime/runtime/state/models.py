@@ -90,12 +90,22 @@ class CurrentTradeCycle:
 
 
 @dataclass(frozen=True, slots=True)
+class PendingEntryRecovery:
+    trade_cycle_id: str
+
+    def __post_init__(self) -> None:
+        if type(self.trade_cycle_id) is not str or len(self.trade_cycle_id) == 0:
+            raise ValueError("trade_cycle_id must be a non-empty string")
+
+
+@dataclass(frozen=True, slots=True)
 class StrategyInstanceRuntimeState:
     strategy_instance_id: str
     strategy_id: str
     registered_spec_snapshot: RegisteredSpecSnapshot
     risk_multiplier: str
     current_trade_cycle: CurrentTradeCycle | None = None
+    pending_entry_recovery: PendingEntryRecovery | None = None
 
     def __post_init__(self) -> None:
         if not self.strategy_instance_id.strip() or not self.strategy_id.strip():
@@ -107,6 +117,21 @@ class StrategyInstanceRuntimeState:
             and type(self.current_trade_cycle) is not CurrentTradeCycle
         ):
             raise TypeError("current_trade_cycle must be CurrentTradeCycle or None")
+        if (
+            self.pending_entry_recovery is not None
+            and type(self.pending_entry_recovery) is not PendingEntryRecovery
+        ):
+            raise TypeError("pending_entry_recovery must be PendingEntryRecovery or None")
+        if (
+            self.pending_entry_recovery is not None
+            and self.current_trade_cycle is not None
+            and self.pending_entry_recovery.trade_cycle_id
+            != self.current_trade_cycle.trade_cycle_id
+        ):
+            raise ValueError(
+                "pending_entry_recovery.trade_cycle_id must match "
+                "current_trade_cycle.trade_cycle_id"
+            )
 
 
 @dataclass(frozen=True, slots=True)
