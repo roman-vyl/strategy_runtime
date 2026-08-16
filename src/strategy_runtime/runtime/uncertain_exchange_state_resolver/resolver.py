@@ -22,7 +22,11 @@ from strategy_runtime.runtime.abi.entry_cycle_recovery_models import (
     TerminalWithoutFillRecoveryState,
 )
 from strategy_runtime.runtime.abi.entry_cycle_recovery_ports import AbiEntryCycleRecoveryPort
-from strategy_runtime.runtime.abi.entry_package_models import EntryPackageWireDesiredEntry
+from strategy_runtime.runtime.abi.entry_package_errors import AbiEntryPackageClientError
+from strategy_runtime.runtime.abi.entry_package_models import (
+    EntryPackageAbsent,
+    EntryPackageWireDesiredEntry,
+)
 from strategy_runtime.runtime.coordination import StrategyInstanceKeyedMutexRegistry
 from strategy_runtime.runtime.first_fill.state_applier import apply_first_fill
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
@@ -118,14 +122,38 @@ class UncertainExchangeStateResolver:
             return
 
         if isinstance(response, EntryOrderLiveRecoveryState):
-            # The only corrective action this component performs. The marker
-            # stays set for a later attempt to observe the outcome.
-            self._abi_entry_cycle_recovery.cancel(
-                state.strategy_instance_id,
-                current_cycle.trade_cycle_id,
-                state.registered_spec_snapshot.instrument,
-                state.risk_multiplier,
-            )
+            # The only corrective action this component performs.
+            try:
+                cancel_result = self._abi_entry_cycle_recovery.cancel(
+                    state.strategy_instance_id,
+                    current_cycle.trade_cycle_id,
+                    state.registered_spec_snapshot.instrument,
+                    state.risk_multiplier,
+                )
+            except AbiEntryPackageClientError:
+                # Timeout, network, or protocol failure: fail closed, leave
+                # both fields untouched for a later attempt.
+                return
+
+            if (
+                type(cancel_result) is EntryPackageAbsent
+                and cancel_result.strategy_instance_id == state.strategy_instance_id
+                and cancel_result.trade_cycle_id == current_cycle.trade_cycle_id
+            ):
+                # The corrective cancel itself already positively confirmed
+                # the intended absence. ABI's recovery-state GET fails safe
+                # (500) once the confirmed cancel clears order_link_id to
+                # null, so waiting for a later recovery-state observation to
+                # confirm the same fact would deadlock forever -- clear both
+                # fields now instead of leaving the marker set.
+                self._state_repository.save(
+                    replace(state, current_trade_cycle=None, pending_entry_recovery=None)
+                )
+            # Any other outcome -- a public error, an unexpected
+            # EntryPackageApplied, an identity mismatch, or any other
+            # unrecognized result -- fails closed: leave current_trade_cycle
+            # and pending_entry_recovery exactly as they were, for a later
+            # attempt to observe the outcome.
 
 
 def _build_cycle(

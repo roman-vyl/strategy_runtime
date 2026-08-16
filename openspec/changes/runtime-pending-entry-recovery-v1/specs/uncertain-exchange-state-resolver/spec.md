@@ -107,10 +107,38 @@ table.
 - **WHEN** ABI reports `entry_order_live`
 - **THEN** the resolver issues one bounded CANCEL for
   `pending_entry_recovery.trade_cycle_id`
-- **AND** does not modify `pending_entry_recovery` — it remains set for a
-  later attempt to observe the outcome
 - **AND** issues no other command (no CREATE, no amend, no resend of any
   desired entry)
+
+#### Scenario: An exact matching absent confirmation from the corrective cancel completes the removal immediately
+- **WHEN** the corrective CANCEL's result is a formal `EntryPackageAbsent`
+  confirmation whose `strategy_instance_id` and `trade_cycle_id` exactly
+  match the instance and `pending_entry_recovery.trade_cycle_id`
+- **THEN** the resolver durably saves `current_trade_cycle = null`,
+  `pending_entry_recovery = null` in the same attempt — it does not wait for
+  a later recovery-state observation to confirm the same fact
+- **AND** this is required, not optional: the paired ABI capability's
+  entry-package PUT clears the record's exchange order-link binding on a
+  confirmed absent result, after which the recovery-state endpoint fails
+  safe (its documented `500` availability response) for that trade cycle
+  forever — waiting for a later recovery-state GET to positively resolve
+  what the corrective cancel already positively confirmed would deadlock the
+  instance's bar path indefinitely
+
+#### Scenario: Any other corrective-cancel outcome leaves the marker untouched
+- **WHEN** the corrective CANCEL raises a transport, network, or protocol
+  exception, or returns a documented public error, an unexpected
+  `EntryPackageApplied`, an absent confirmation whose identity does not
+  exactly match the instance and `pending_entry_recovery.trade_cycle_id`, or
+  any other unrecognized result
+- **THEN** the resolver modifies neither `current_trade_cycle` nor
+  `pending_entry_recovery` — both remain exactly as they were
+- **AND** the instance remains eligible for a later attempt, whether that
+  attempt observes the corrective cancel's outcome directly or the ABI
+  record settles and a later recovery-state query resolves it instead
+- **AND** the resolver never infers success from HTTP transport completion
+  alone — only an exact formal `EntryPackageAbsent` confirmation for the
+  same identity may clear either field
 
 ### Requirement: A transport failure, availability failure, inconclusive-evidence response, or unknown-binding response all change nothing
 When the ABI recovery-state query itself does not return one of the four

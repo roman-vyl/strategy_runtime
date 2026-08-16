@@ -17,7 +17,18 @@ from strategy_runtime.runtime.abi.entry_cycle_recovery_models import (
     TerminalAfterFillRecoveryState,
     TerminalWithoutFillRecoveryState,
 )
-from strategy_runtime.runtime.abi.entry_package_models import EntryPackageWireDesiredEntry
+from strategy_runtime.runtime.abi.entry_package_errors import (
+    AbiEntryPackageNetworkFailure,
+    AbiEntryPackageProtocolError,
+    AbiEntryPackageTimeout,
+)
+from strategy_runtime.runtime.abi.entry_package_models import (
+    EntryPackageAbsent,
+    EntryPackageApplied,
+    EntryPackageInternalError,
+    EntryPackageResult,
+    EntryPackageWireDesiredEntry,
+)
 from strategy_runtime.runtime.coordination import StrategyInstanceKeyedMutexRegistry
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
 from strategy_runtime.runtime.state.models import (
@@ -57,9 +68,13 @@ class FakeAbiEntryCycleRecoveryPort:
         *,
         query_result: RecoveryStateResponse | None = None,
         query_error: Exception | None = None,
+        cancel_result: EntryPackageResult | None = None,
+        cancel_error: Exception | None = None,
     ) -> None:
         self.query_result = query_result
         self.query_error = query_error
+        self.cancel_result = cancel_result
+        self.cancel_error = cancel_error
         self.query_calls: list[tuple[str, str]] = []
         self.cancel_calls: list[tuple[str, str, str, str]] = []
 
@@ -76,9 +91,12 @@ class FakeAbiEntryCycleRecoveryPort:
         trade_cycle_id: str,
         ticker: str,
         risk_multiplier: str,
-    ) -> object:
+    ) -> EntryPackageResult:
         self.cancel_calls.append((strategy_instance_id, trade_cycle_id, ticker, risk_multiplier))
-        return object()
+        if self.cancel_error is not None:
+            raise self.cancel_error
+        assert self.cancel_result is not None
+        return self.cancel_result
 
 
 def _repository_with_state(
@@ -302,19 +320,145 @@ def test_uncertain_removal_entry_order_live_issues_the_one_corrective_cancel() -
         pending_entry_recovery=PendingEntryRecovery("cycle-1"),
     )
     port = FakeAbiEntryCycleRecoveryPort(
-        query_result=EntryOrderLiveRecoveryState(applied_entry_package=applied_entry_package())
+        query_result=EntryOrderLiveRecoveryState(applied_entry_package=applied_entry_package()),
+        cancel_result=EntryPackageAbsent("ema_pullback:abc", "cycle-1"),
     )
     resolver = _make_resolver(repository, port)
 
     resolver.attempt(_SID)
 
     assert port.cancel_calls == [("ema_pullback:abc", "cycle-1", "BTCUSDT.P", "1")]
+
+
+# ---------------------------------------------------------------------------
+# The cross-service composition fix: ABI's entry-package PUT clears
+# order_link_id to null on a confirmed absent result, after which ABI's
+# recovery-state GET fails safe (500) for that trade cycle forever. Waiting
+# for a later recovery-state observation to confirm the same fact the
+# corrective cancel itself already positively confirmed would deadlock the
+# instance's bar path indefinitely -- so an exact matching EntryPackageAbsent
+# from the corrective cancel must clear both fields immediately, without
+# requiring another recovery-state GET.
+# ---------------------------------------------------------------------------
+
+
+def test_exact_matching_absent_confirmation_from_cancel_completes_removal_immediately() -> None:
+    repository, _ = _repository_with_state(
+        current_trade_cycle=_existing_cycle(),
+        pending_entry_recovery=PendingEntryRecovery("cycle-1"),
+    )
+    port = FakeAbiEntryCycleRecoveryPort(
+        query_result=EntryOrderLiveRecoveryState(applied_entry_package=applied_entry_package()),
+        cancel_result=EntryPackageAbsent("ema_pullback:abc", "cycle-1"),
+    )
+    resolver = _make_resolver(repository, port)
+
+    resolver.attempt(_SID)
+
     result = repository.get(_SID)
     assert result is not None
-    # The marker stays set -- not cleared, not saved to any other value --
-    # for a later attempt to observe the outcome.
-    assert result.pending_entry_recovery == PendingEntryRecovery("cycle-1")
+    assert result.current_trade_cycle is None
+    assert result.pending_entry_recovery is None
+    # Runtime must not require a second recovery-state GET to complete the
+    # removal -- the query happened exactly once, inside this same attempt.
+    assert len(port.query_calls) == 1
+
+
+def test_corrective_cancel_public_error_leaves_both_fields_unchanged() -> None:
+    repository, _ = _repository_with_state(
+        current_trade_cycle=_existing_cycle(),
+        pending_entry_recovery=PendingEntryRecovery("cycle-1"),
+    )
+    port = FakeAbiEntryCycleRecoveryPort(
+        query_result=EntryOrderLiveRecoveryState(applied_entry_package=applied_entry_package()),
+        cancel_result=EntryPackageInternalError("boom"),
+    )
+    resolver = _make_resolver(repository, port)
+
+    resolver.attempt(_SID)
+
+    result = repository.get(_SID)
+    assert result is not None
     assert result.current_trade_cycle == _existing_cycle()
+    assert result.pending_entry_recovery == PendingEntryRecovery("cycle-1")
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        AbiEntryPackageTimeout("timed out"),
+        AbiEntryPackageNetworkFailure("network down"),
+        AbiEntryPackageProtocolError("invalid response"),
+    ],
+)
+def test_corrective_cancel_transport_or_protocol_exception_leaves_both_fields_unchanged(
+    error: Exception,
+) -> None:
+    repository, _ = _repository_with_state(
+        current_trade_cycle=_existing_cycle(),
+        pending_entry_recovery=PendingEntryRecovery("cycle-1"),
+    )
+    port = FakeAbiEntryCycleRecoveryPort(
+        query_result=EntryOrderLiveRecoveryState(applied_entry_package=applied_entry_package()),
+        cancel_error=error,
+    )
+    resolver = _make_resolver(repository, port)
+
+    resolver.attempt(_SID)
+
+    result = repository.get(_SID)
+    assert result is not None
+    assert result.current_trade_cycle == _existing_cycle()
+    assert result.pending_entry_recovery == PendingEntryRecovery("cycle-1")
+
+
+def test_corrective_cancel_unexpected_applied_result_fails_closed() -> None:
+    repository, _ = _repository_with_state(
+        current_trade_cycle=_existing_cycle(),
+        pending_entry_recovery=PendingEntryRecovery("cycle-1"),
+    )
+    port = FakeAbiEntryCycleRecoveryPort(
+        query_result=EntryOrderLiveRecoveryState(applied_entry_package=applied_entry_package()),
+        cancel_result=EntryPackageApplied(
+            "ema_pullback:abc", "cycle-1", wire_desired_entry(), "0.01"
+        ),
+    )
+    resolver = _make_resolver(repository, port)
+
+    resolver.attempt(_SID)
+
+    result = repository.get(_SID)
+    assert result is not None
+    assert result.current_trade_cycle == _existing_cycle()
+    assert result.pending_entry_recovery == PendingEntryRecovery("cycle-1")
+
+
+@pytest.mark.parametrize(
+    "mismatched",
+    [
+        EntryPackageAbsent("other-instance", "cycle-1"),
+        EntryPackageAbsent("ema_pullback:abc", "other-cycle"),
+    ],
+)
+def test_corrective_cancel_identity_mismatch_fails_closed(
+    mismatched: EntryPackageAbsent,
+) -> None:
+    repository, _ = _repository_with_state(
+        current_trade_cycle=_existing_cycle(),
+        pending_entry_recovery=PendingEntryRecovery("cycle-1"),
+    )
+    port = FakeAbiEntryCycleRecoveryPort(
+        query_result=EntryOrderLiveRecoveryState(applied_entry_package=applied_entry_package()),
+        cancel_result=mismatched,
+    )
+    resolver = _make_resolver(repository, port)
+
+    resolver.attempt(_SID)
+
+    result = repository.get(_SID)
+    assert result is not None
+    assert result.current_trade_cycle == _existing_cycle()
+    assert result.pending_entry_recovery == PendingEntryRecovery("cycle-1")
 
 
 # ---------------------------------------------------------------------------
