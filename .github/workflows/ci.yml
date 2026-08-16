@@ -12,10 +12,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Checkout abi_executor_bot (sibling, for contract tests)
-        uses: actions/checkout@v4
-        with:
-          repository: roman-vyl/abi_executor_bot
-          path: ../abi_executor_bot
+        run: git clone --depth 1 https://github.com/roman-vyl/abi_executor_bot.git "${GITHUB_WORKSPACE}/../abi_executor_bot"
 
       - uses: actions/setup-python@v5
         with:
