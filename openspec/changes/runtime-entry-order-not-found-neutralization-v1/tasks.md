@@ -33,10 +33,13 @@
 
 ## 4. Coordinated Phase A verification
 
-- [ ] 4.1 Deploy Runtime before or atomically with paired ABI change
+- [x] 4.1 Deploy Runtime before or atomically with paired ABI change
   `abi-entry-order-not-found-recovery-v1`, without editing the two incident markers.
-- [ ] 4.2 For each incident still inside ABI's trustworthy evidence window, capture
+- [x] 4.2 For each incident still inside ABI's trustworthy evidence window, capture
   `entry_order_not_found → corrective CANCEL → EntryPackageAbsent → marker cleared`; if
   outside, confirm no fifth state and no state mutation.
 - [ ] 4.3 Verify no old CREATE was resent and the next genuine bar resumes ordinary fresh
   reconciliation for each strategy instance.
+  Old CREATE non-resend is confirmed for both exact identities, but the first post-recovery
+  genuine ETH and BTC bars timed out at Runtime → Strategy Engine before reaching ABI, so
+  ordinary fresh reconciliation is not yet accepted and Phase A remains stopped.
