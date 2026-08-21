@@ -11,6 +11,7 @@ from strategy_runtime.runtime.abi.entry_cycle_recovery_errors import (
 )
 from strategy_runtime.runtime.abi.entry_cycle_recovery_models import (
     EntryOrderLiveRecoveryState,
+    EntryOrderNotFoundRecoveryState,
     PositionOpenRecoveryState,
     RecoveryStateAppliedEntryPackage,
     RecoveryStateResponse,
@@ -246,6 +247,72 @@ def test_uncertain_apply_terminal_after_fill_forgets_the_attempt() -> None:
     assert result.pending_entry_recovery is None
 
 
+def test_uncertain_apply_not_found_neutralizes_once_and_clears_only_on_exact_absence() -> None:
+    repository, _ = _repository_with_state(
+        current_trade_cycle=None,
+        pending_entry_recovery=PendingEntryRecovery("cycle-new"),
+    )
+    port = FakeAbiEntryCycleRecoveryPort(
+        query_result=EntryOrderNotFoundRecoveryState(),
+        cancel_result=EntryPackageAbsent(_SID, "cycle-new"),
+    )
+    resolver = _make_resolver(repository, port)
+
+    resolver.attempt(_SID)
+
+    result = repository.get(_SID)
+    assert result is not None
+    assert result.current_trade_cycle is None
+    assert result.pending_entry_recovery is None
+    assert port.query_calls == [(_SID, "cycle-new")]
+    assert port.cancel_calls == [(_SID, "cycle-new", "BTCUSDT.P", "1")]
+
+
+@pytest.mark.parametrize(
+    "cancel_result",
+    [
+        EntryPackageAbsent("other-instance", "cycle-new"),
+        EntryPackageAbsent(_SID, "other-cycle"),
+        EntryPackageApplied(_SID, "cycle-new", wire_desired_entry(), "0.01"),
+        EntryPackageInternalError("safe error"),
+    ],
+)
+def test_uncertain_apply_not_found_keeps_marker_for_any_non_exact_cancel_result(
+    cancel_result: EntryPackageResult,
+) -> None:
+    repository, initial = _repository_with_state(
+        current_trade_cycle=None,
+        pending_entry_recovery=PendingEntryRecovery("cycle-new"),
+    )
+    port = FakeAbiEntryCycleRecoveryPort(
+        query_result=EntryOrderNotFoundRecoveryState(),
+        cancel_result=cancel_result,
+    )
+    resolver = _make_resolver(repository, port)
+
+    resolver.attempt(_SID)
+
+    assert repository.get(_SID) == initial
+    assert len(port.cancel_calls) == 1
+
+
+def test_uncertain_apply_not_found_keeps_marker_when_corrective_cancel_fails() -> None:
+    repository, initial = _repository_with_state(
+        current_trade_cycle=None,
+        pending_entry_recovery=PendingEntryRecovery("cycle-new"),
+    )
+    port = FakeAbiEntryCycleRecoveryPort(
+        query_result=EntryOrderNotFoundRecoveryState(),
+        cancel_error=AbiEntryPackageTimeout("timed out"),
+    )
+    resolver = _make_resolver(repository, port)
+
+    resolver.attempt(_SID)
+
+    assert repository.get(_SID) == initial
+    assert len(port.cancel_calls) == 1
+
+
 # ---------------------------------------------------------------------------
 # Uncertain removal (current_trade_cycle == A): the four positive states,
 # with entry_order_live triggering the one corrective action.
@@ -328,6 +395,21 @@ def test_uncertain_removal_entry_order_live_issues_the_one_corrective_cancel() -
     resolver.attempt(_SID)
 
     assert port.cancel_calls == [("ema_pullback:abc", "cycle-1", "BTCUSDT.P", "1")]
+
+
+def test_uncertain_removal_entry_order_not_found_changes_nothing_and_sends_no_command() -> None:
+    existing = _existing_cycle()
+    repository, initial = _repository_with_state(
+        current_trade_cycle=existing,
+        pending_entry_recovery=PendingEntryRecovery("cycle-1"),
+    )
+    port = FakeAbiEntryCycleRecoveryPort(query_result=EntryOrderNotFoundRecoveryState())
+    resolver = _make_resolver(repository, port)
+
+    resolver.attempt(_SID)
+
+    assert repository.get(_SID) == initial
+    assert port.cancel_calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -529,6 +611,11 @@ def test_repeated_failed_attempts_never_escalate_or_give_up() -> None:
     result = repository.get(_SID)
     assert result is not None
     assert result.pending_entry_recovery == PendingEntryRecovery("cycle-new")
+    assert port.cancel_calls == []
+
+
+def test_pending_entry_recovery_schema_remains_trade_cycle_id_only() -> None:
+    assert PendingEntryRecovery.__dataclass_fields__.keys() == {"trade_cycle_id"}
 
 
 # ---------------------------------------------------------------------------

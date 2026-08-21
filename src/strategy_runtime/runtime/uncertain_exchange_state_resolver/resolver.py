@@ -3,9 +3,9 @@
 Runs independently of committed-bar cadence (see `committed_bar_intake`). Each
 attempt holds the same `StrategyInstanceKeyedMutexRegistry` bar processing and
 the first-fill webhook path already share, performs at most one bounded ABI
-recovery-state query plus, in exactly one case, one bounded corrective CANCEL,
-and applies no wall-clock gate of any kind: whether an attempt resolves
-depends entirely on ABI's response, never on elapsed time.
+recovery-state query plus, in one of two explicit state/context rows, one
+bounded corrective CANCEL, and applies no wall-clock gate of any kind: whether
+an attempt resolves depends entirely on ABI's response, never on elapsed time.
 """
 
 from dataclasses import replace
@@ -15,6 +15,7 @@ from strategy_runtime.runtime.abi.entry_cycle_recovery_errors import (
 )
 from strategy_runtime.runtime.abi.entry_cycle_recovery_models import (
     EntryOrderLiveRecoveryState,
+    EntryOrderNotFoundRecoveryState,
     PositionOpenRecoveryState,
     RecoveryStateAppliedEntryPackage,
     RecoveryStateResponse,
@@ -98,6 +99,10 @@ class UncertainExchangeStateResolver:
             self._state_repository.save(
                 replace(state, current_trade_cycle=None, pending_entry_recovery=None)
             )
+            return
+
+        if isinstance(response, EntryOrderNotFoundRecoveryState):
+            self._cancel_and_clear_only_if_exact_absent(state, trade_cycle_id)
 
     def _resolve_uncertain_removal(
         self,
@@ -118,38 +123,30 @@ class UncertainExchangeStateResolver:
             return
 
         if isinstance(response, EntryOrderLiveRecoveryState):
-            # The only corrective action this component performs.
-            try:
-                cancel_result = self._abi_entry_cycle_recovery.cancel(
-                    state.strategy_instance_id,
-                    current_cycle.trade_cycle_id,
-                    state.registered_spec_snapshot.instrument,
-                    state.risk_multiplier,
-                )
-            except AbiEntryPackageClientError:
-                # Timeout, network, or protocol failure: fail closed, leave
-                # both fields untouched for a later attempt.
-                return
+            self._cancel_and_clear_only_if_exact_absent(state, current_cycle.trade_cycle_id)
 
-            if (
-                type(cancel_result) is EntryPackageAbsent
-                and cancel_result.strategy_instance_id == state.strategy_instance_id
-                and cancel_result.trade_cycle_id == current_cycle.trade_cycle_id
-            ):
-                # The corrective cancel itself already positively confirmed
-                # the intended absence. ABI's recovery-state GET fails safe
-                # (500) once the confirmed cancel clears order_link_id to
-                # null, so waiting for a later recovery-state observation to
-                # confirm the same fact would deadlock forever -- clear both
-                # fields now instead of leaving the marker set.
-                self._state_repository.save(
-                    replace(state, current_trade_cycle=None, pending_entry_recovery=None)
-                )
-            # Any other outcome -- a public error, an unexpected
-            # EntryPackageApplied, an identity mismatch, or any other
-            # unrecognized result -- fails closed: leave current_trade_cycle
-            # and pending_entry_recovery exactly as they were, for a later
-            # attempt to observe the outcome.
+    def _cancel_and_clear_only_if_exact_absent(
+        self, state: StrategyInstanceRuntimeState, trade_cycle_id: str
+    ) -> None:
+        """Issue the one existing corrective CANCEL and trust only exact formal absence."""
+        try:
+            cancel_result = self._abi_entry_cycle_recovery.cancel(
+                state.strategy_instance_id,
+                trade_cycle_id,
+                state.registered_spec_snapshot.instrument,
+                state.risk_multiplier,
+            )
+        except AbiEntryPackageClientError:
+            return
+
+        if (
+            type(cancel_result) is EntryPackageAbsent
+            and cancel_result.strategy_instance_id == state.strategy_instance_id
+            and cancel_result.trade_cycle_id == trade_cycle_id
+        ):
+            self._state_repository.save(
+                replace(state, current_trade_cycle=None, pending_entry_recovery=None)
+            )
 
 
 def _build_cycle(

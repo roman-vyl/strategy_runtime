@@ -15,6 +15,7 @@ from strategy_runtime.runtime.abi.entry_cycle_recovery_errors import (
 )
 from strategy_runtime.runtime.abi.entry_cycle_recovery_models import (
     EntryOrderLiveRecoveryState,
+    EntryOrderNotFoundRecoveryState,
     PositionOpenRecoveryState,
     RecoveryStateAppliedEntryPackage,
     TerminalAfterFillRecoveryState,
@@ -124,6 +125,24 @@ def test_decodes_entry_order_live() -> None:
     assert result == EntryOrderLiveRecoveryState(applied_entry_package=_applied_entry_package())
 
 
+def test_decodes_entry_order_not_found_only_with_all_conditional_fields_null() -> None:
+    fake = FakeAbi(
+        lambda _: json_response(
+            200,
+            {
+                "recovery_state": "entry_order_not_found",
+                "applied_entry_package": None,
+                "first_fill_at_ms": None,
+                "average_entry_price": None,
+            },
+        )
+    )
+
+    result = query(fake, strategy_instance_id="instance", trade_cycle_id="cycle")
+
+    assert result == EntryOrderNotFoundRecoveryState()
+
+
 def test_decodes_position_open() -> None:
     fake = FakeAbi(
         lambda _: json_response(
@@ -179,6 +198,18 @@ def test_decodes_terminal_after_fill() -> None:
             "recovery_state": "entry_order_live",
             "applied_entry_package": None,
             "first_fill_at_ms": None,
+            "average_entry_price": None,
+        },
+        {
+            "recovery_state": "entry_order_not_found",
+            "applied_entry_package": _applied_entry_package_body(),
+            "first_fill_at_ms": None,
+            "average_entry_price": None,
+        },
+        {
+            "recovery_state": "entry_order_not_found",
+            "applied_entry_package": None,
+            "first_fill_at_ms": 1,
             "average_entry_price": None,
         },
         {
