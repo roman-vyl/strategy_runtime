@@ -8,7 +8,9 @@ lets Runtime neutralize the old identity without ever resurrecting the stale CRE
 ## What Changes
 
 - Decode the paired ABI recovery state `entry_order_not_found` as a fifth strict success
-  member with no applied package or fill facts.
+  member with no applied package or fill facts. Runtime SHALL trust only ABI's typed
+  outcome; ABI alone owns ambiguous-CREATE structural eligibility, full bounded
+  order/execution evidence, and the documented-retention freshness gate.
 - For an uncertain APPLY only (`pending_entry_recovery != null` and
   `current_trade_cycle == null`), respond to that observation with exactly one bounded
   corrective CANCEL using the existing `abi_entry_cycle_recovery.cancel(...)` operation
@@ -21,6 +23,9 @@ lets Runtime neutralize the old identity without ever resurrecting the stale CRE
   `entry_order_live` remains its only corrective-CANCEL trigger.
 - Preserve the current minimal `PendingEntryRecovery { trade_cycle_id }` durable shape;
   add no desired entry, timestamp, action discriminator, or retry counter.
+- Add no Runtime wall-clock check or aged-out inference. If ABI preserves
+  `internal_error` outside its trustworthy evidence window, Runtime leaves the marker
+  untouched.
 - Never resend the old CREATE. After formal absence clears the marker, only a later
   genuine bar may calculate a fresh ordinary entry.
 - Coordinate with ABI change `abi-entry-order-not-found-recovery-v1`.

@@ -29,7 +29,9 @@ corrective CANCEL is allowed only for one of two explicit rows: uncertain remova
 The resolver SHALL NOT compare a marker timestamp to current time, compute marker age, or
 alter recovery behavior based on elapsed time. Resolution depends only on the current ABI
 response, including the fifth `entry_order_not_found` observation, and the formal result
-of any eligible corrective CANCEL.
+of any eligible corrective CANCEL. ABI alone decides whether its ambiguous-CREATE
+order/execution evidence is complete and still inside the documented retention window;
+Runtime SHALL NOT duplicate, widen, or bypass that gate.
 
 #### Scenario: Every attempt queries ABI regardless of marker age
 - **WHEN** a marker has survived any number of prior attempts
@@ -39,6 +41,12 @@ of any eligible corrective CANCEL.
 - **WHEN** an uncertain APPLY is arbitrarily old
 - **THEN** Runtime never resends its original CREATE or reconstructs its old desired entry
 - **AND** only explicit current ABI evidence controls recovery
+
+#### Scenario: Aged-out ABI evidence produces no Runtime fallback
+- **WHEN** ABI declines to emit the fifth state and returns its safe error because the
+  binding is outside ABI's trustworthy evidence window
+- **THEN** Runtime leaves `pending_entry_recovery` and `current_trade_cycle` unchanged
+- **AND** sends no corrective CANCEL and performs no local age inference
 
 ### Requirement: An uncertain Apply resolves by the five ABI-reported states
 When `pending_entry_recovery` is non-null and `current_trade_cycle` is null, the resolver
@@ -64,6 +72,7 @@ SHALL apply the following table.
 - **AND** uses the existing entry-package request with `desired_entry:null`
 - **AND** does not send CREATE, reconstruct desired entry, or clear the marker from the GET
   observation alone
+- **AND** does not independently re-evaluate the evidence age that ABI already validated
 
 #### Scenario: Exact EntryPackageAbsent completes neutralization
 - **WHEN** that corrective CANCEL returns formal `EntryPackageAbsent` whose strategy
@@ -77,6 +86,8 @@ SHALL apply the following table.
   returns `EntryPackageApplied`, returns mismatched absence, or any unrecognized result
 - **THEN** Runtime changes neither `current_trade_cycle` nor `pending_entry_recovery`
 - **AND** a later polling attempt starts again from a fresh recovery GET
+- **AND** this includes ABI refusing `EntryPackageAbsent` because the evidence window
+  expired between GET and corrective CANCEL
 
 ### Requirement: An uncertain removal resolves by the five ABI-reported states, with one existing corrective action
 When `pending_entry_recovery` is non-null and `current_trade_cycle` holds the matching

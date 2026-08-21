@@ -4,6 +4,9 @@
   applied package or fill facts.
 - [ ] 1.2 Extend the strict HTTP decoder and protocol tests for the valid fifth response,
   invalid conditional fields, and unknown response members.
+- [ ] 1.3 Document and test that Runtime never derives the fifth state from marker age,
+  clean errors, `internal_error`, or `unknown_trade_cycle_binding`; ABI is the sole
+  evidence/freshness authority.
 
 ## 2. Uncertain-APPLY neutralization
 
@@ -21,13 +24,16 @@
   `entry_order_not_found` in removal context changes nothing and sends no command.
 - [ ] 3.2 Confirm `PendingEntryRecovery` remains `trade_cycle_id`-only and no durable state
   migration, timestamp, action discriminator, or retry counter is added.
-- [ ] 3.3 Run the canonical Runtime test/lint/type checks and strict OpenSpec validation.
+- [ ] 3.3 Add a regression proving an aged-out ABI safe error leaves the marker untouched
+  and sends no corrective command.
+- [ ] 3.4 Run the canonical Runtime test/lint/type checks and strict OpenSpec validation.
 
 ## 4. Coordinated Phase A verification
 
 - [ ] 4.1 Deploy Runtime before or atomically with paired ABI change
   `abi-entry-order-not-found-recovery-v1`, without editing the two incident markers.
-- [ ] 4.2 Capture both live sequences
-  `entry_order_not_found → corrective CANCEL → EntryPackageAbsent → marker cleared`.
+- [ ] 4.2 For each incident still inside ABI's trustworthy evidence window, capture
+  `entry_order_not_found → corrective CANCEL → EntryPackageAbsent → marker cleared`; if
+  outside, confirm no fifth state and no state mutation.
 - [ ] 4.3 Verify no old CREATE was resent and the next genuine bar resumes ordinary fresh
   reconciliation for each strategy instance.

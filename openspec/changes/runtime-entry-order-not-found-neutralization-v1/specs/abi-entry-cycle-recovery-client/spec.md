@@ -11,7 +11,10 @@ invariant: `applied_entry_package` is non-null if and only if the state is
 `entry_order_not_found` SHALL decode only with `applied_entry_package`,
 `first_fill_at_ms`, and `average_entry_price` all null. Runtime SHALL represent it as an
 observation distinct from `terminal_without_fill`; the decoder SHALL NOT attach terminal
-meaning or synthesize an applied package.
+meaning or synthesize an applied package. Runtime SHALL NOT require or derive a timestamp,
+retention age, retry count, or evidence details from this response: the paired ABI
+contract is solely responsible for emitting the state only after its structural,
+full-budget execution/order, and freshness rules pass.
 
 #### Scenario: Decode entry_order_live
 - **WHEN** HTTP `200` reports `entry_order_live` with a non-null applied package and both
@@ -28,6 +31,12 @@ meaning or synthesize an applied package.
   facts null
 - **THEN** the adapter returns the distinct `entry_order_not_found` typed response
 - **AND** does not classify it as terminal or absent confirmation
+
+#### Scenario: Decoder does not infer fifth state from an ABI error
+- **WHEN** ABI returns `internal_error`, `unknown_trade_cycle_binding`, a transport error,
+  or any response other than the exact valid fifth-state DTO
+- **THEN** the adapter does not return `entry_order_not_found`
+- **AND** does not use local time or marker age to reinterpret the response
 
 #### Scenario: Decode terminal_without_fill or terminal_after_fill
 - **WHEN** HTTP `200` reports either terminal state with applied package and both fill
@@ -67,4 +76,3 @@ and the pending cycle's exact identity; no second write contract is introduced.
 
 - FROM: `### Requirement: The four recovery_state values decode strictly, with conditional fields enforced`
 - TO: `### Requirement: The five recovery_state values decode strictly, with conditional fields enforced`
-

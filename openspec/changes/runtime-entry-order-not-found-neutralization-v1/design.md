@@ -9,7 +9,10 @@ corrective CANCEL operation backed by the ordinary entry-package port.
 The existing removal row calls corrective CANCEL when ABI reports
 `entry_order_live`. The paired ABI change adds `entry_order_not_found`, a non-terminal
 exact-identity observation designed to trigger the same revalidating CANCEL for uncertain
-APPLY.
+APPLY. ABI emits it only for a structurally ambiguous CREATE after the full existing
+retry budget remains cleanly order/execution absent and aggregate-flat, with completion
+strictly inside Bybit's documented seven-day evidence window. ABI's corrective CANCEL
+repeats that same gate before formal absence.
 
 ## Goals / Non-Goals
 
@@ -18,6 +21,7 @@ APPLY.
 - Add one strict decoder variant and one uncertain-APPLY action row.
 - Reuse the existing bounded corrective CANCEL and exact `EntryPackageAbsent` identity
   check.
+- Keep all evidence-age and retention reasoning inside ABI.
 - Preserve durable-state minimality and bar-path recovery precedence.
 - Allow the two pre-existing stuck markers to recover without manual state edits.
 
@@ -25,6 +29,8 @@ APPLY.
 
 - Storing or resending the old desired entry.
 - Adding timestamps, action kinds, retry counts, or a state migration.
+- Computing age, interpreting exchange retention, or fabricating the fifth state from an
+  ABI error.
 - Changing uncertain-removal behavior.
 - Adding an HTTP endpoint, recovery write contract, retry framework, or Engine call.
 - Clearing a marker from the GET observation alone.
@@ -47,8 +53,9 @@ CANCEL adapter, which delegates to the existing entry-package client with
 `desired_entry=None`. No new write endpoint or payload type is introduced.
 
 This is preferred over adding a special neutralize endpoint: ABI's CANCEL already
-revalidates the exact identity, cancels only if live, confirms absence/terminality, and
-fails closed if fill or ambiguous evidence appears.
+revalidates the exact identity, cancels only if live, and under the paired ABI change
+repeats the full order/execution/freshness proof before clean-empty evidence can become
+formal absence.
 
 ### 3. Clear only on exact formal absence
 
@@ -59,6 +66,11 @@ exception changes nothing.
 
 This preserves the existing uncertain-removal safety rule and makes the new row
 idempotent across polling retries.
+
+Runtime does not independently decide that the result is still fresh between GET and
+CANCEL. Only the exact formal response is actionable; ABI owns the second freshness check
+at the write boundary. If expiry occurs between calls, ABI returns a safe error and this
+branch leaves the marker untouched.
 
 ### 4. Never reconstruct or resend CREATE
 
@@ -80,7 +92,8 @@ semantics merely because the decoder union grew.
 ## Risks / Trade-offs
 
 - [GET observation becomes stale before CANCEL] → CANCEL performs fresh ABI-side exact
-  identity reads and reports absence only after its own confirmation.
+  order/execution reads and repeats the documented-retention freshness gate before formal
+  absence.
 - [A fill appears during neutralization] → ABI does not return formal absence; Runtime
   leaves the marker and a later recovery GET can resolve `position_open`.
 - [Corrective response is lost after ABI durably confirms absence] → Runtime keeps the
@@ -91,14 +104,17 @@ semantics merely because the decoder union grew.
   idempotent contract.
 - [Old ABI never emits the fifth state] → Runtime-first deployment is inert and compatible;
   markers remain unchanged until ABI is upgraded.
+- [A marker has aged beyond ABI's evidence window] → ABI returns no fifth state; Runtime
+  applies no clock fallback and leaves the marker unchanged.
 
 ## Migration Plan
 
 1. Deploy Runtime first so the strict decoder accepts all five states.
 2. Deploy paired ABI change `abi-entry-order-not-found-recovery-v1`.
 3. Do not edit the two incident markers or replay their old CREATE requests.
-4. Observe each marker pass through fifth-state query, corrective CANCEL, exact
-   `EntryPackageAbsent`, and durable clearing.
+4. If each marker is still inside ABI's trustworthy window, observe it pass through
+   fifth-state query, corrective CANCEL, exact `EntryPackageAbsent`, and durable clearing;
+   otherwise verify it remains fail-closed without manual mutation.
 5. Confirm the next genuine bar resumes ordinary evaluation with a newly calculated
    entry, if any.
 
