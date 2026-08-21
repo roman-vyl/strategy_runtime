@@ -42,7 +42,12 @@ _APPLY_PROTECTION_PUBLIC_CODES = {
 }
 _CLOSE_POSITION_PUBLIC_CODES = {
     422: frozenset(
-        {"validation_failed", "unknown_trade_cycle_binding", "unsupported_exchange_scope"}
+        {
+            "validation_failed",
+            "unknown_trade_cycle_binding",
+            "unsupported_exchange_scope",
+            "close_execution_incomplete",
+        }
     ),
 }
 

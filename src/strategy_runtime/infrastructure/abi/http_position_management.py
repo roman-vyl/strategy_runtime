@@ -68,9 +68,17 @@ class HttpxAbiPositionManagementAdapter:
         )
 
     def close_position(self, command: ClosePositionCommand) -> PositionClosedConfirmation:
-        path = _open_position_path(command.strategy_instance_id, command.trade_cycle_id)
+        path = _close_path(command.strategy_instance_id, command.trade_cycle_id)
+        body = {"exposure_fraction": command.exposure_fraction}
         try:
-            response = self._client.delete(path, headers={"accept": "application/json"})
+            response = self._client.post(
+                path,
+                json=body,
+                headers={
+                    "accept": "application/json",
+                    "content-type": "application/json",
+                },
+            )
         except httpx.TimeoutException as exc:
             raise PositionManagementExecutionTimeout(
                 "ABI close_position request timed out"
@@ -108,7 +116,7 @@ def _protection_path(strategy_instance_id: str, trade_cycle_id: str) -> str:
     return f"/v1/strategy-instances/{strategy_segment}/trade-cycles/{cycle_segment}/protection"
 
 
-def _open_position_path(strategy_instance_id: str, trade_cycle_id: str) -> str:
+def _close_path(strategy_instance_id: str, trade_cycle_id: str) -> str:
     strategy_segment = encode_opaque_path_segment(strategy_instance_id)
     cycle_segment = encode_opaque_path_segment(trade_cycle_id)
-    return f"/v1/strategy-instances/{strategy_segment}/trade-cycles/{cycle_segment}/open-position"
+    return f"/v1/strategy-instances/{strategy_segment}/trade-cycles/{cycle_segment}/close"

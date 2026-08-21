@@ -10,6 +10,7 @@ from strategy_runtime.runtime.position_management_execution.errors import (
     PositionManagementExecutionInvariantError,
 )
 from strategy_runtime.runtime.position_management_execution.models import (
+    CANONICAL_CLOSE_EXPOSURE_FRACTION,
     ApplyProtectionCommand,
     ClosePositionCommand,
     PositionManagementExecutionCommand,
@@ -43,6 +44,7 @@ def build_position_management_command(
         return ClosePositionCommand(
             strategy_instance_id=state.strategy_instance_id,
             trade_cycle_id=decision.trade_cycle_id,
+            exposure_fraction=CANONICAL_CLOSE_EXPOSURE_FRACTION,
         )
 
     raise PositionManagementExecutionInvariantError("unknown position-management decision")

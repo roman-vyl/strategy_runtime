@@ -19,16 +19,29 @@ class ApplyProtectionCommand:
         _require_desired_protection(self.desired_protection, "desired_protection")
 
 
+CANONICAL_CLOSE_EXPOSURE_FRACTION = "1"
+
+
 @dataclass(frozen=True, slots=True)
 class ClosePositionCommand:
-    """Runtime-issued instruction to close the entire current position."""
+    """Runtime-issued instruction to close the entire current position.
+
+    V1 supports only the canonical full close: `exposure_fraction` must be exactly
+    `"1"`, exact-decimal text. No arbitrary partial close.
+    """
 
     strategy_instance_id: str
     trade_cycle_id: str
+    exposure_fraction: str = CANONICAL_CLOSE_EXPOSURE_FRACTION
 
     def __post_init__(self) -> None:
         _require_non_empty_string(self.strategy_instance_id, "strategy_instance_id")
         _require_non_empty_string(self.trade_cycle_id, "trade_cycle_id")
+        if self.exposure_fraction != CANONICAL_CLOSE_EXPOSURE_FRACTION:
+            raise ValueError(
+                "exposure_fraction must be the canonical value "
+                f'"{CANONICAL_CLOSE_EXPOSURE_FRACTION}"'
+            )
 
 
 @dataclass(frozen=True, slots=True)

@@ -22,9 +22,7 @@ from strategy_runtime.runtime.recipes.position_management import DesiredProtecti
 PROTECTION_PATH = (
     "/v1/strategy-instances/{strategy_instance_id}/trade-cycles/{trade_cycle_id}/protection"
 )
-OPEN_POSITION_PATH = (
-    "/v1/strategy-instances/{strategy_instance_id}/trade-cycles/{trade_cycle_id}/open-position"
-)
+CLOSE_PATH = "/v1/strategy-instances/{strategy_instance_id}/trade-cycles/{trade_cycle_id}/close"
 
 
 class MissingAuthoritativeOpenApiDocument(RuntimeError):
@@ -115,16 +113,22 @@ def test_authoritative_abi_openapi_matches_runtime_apply_protection_contract() -
 
 def test_authoritative_abi_openapi_matches_runtime_close_position_contract() -> None:
     document = read_authoritative_openapi()
-    operation = document["paths"][OPEN_POSITION_PATH]["delete"]
+    operation = document["paths"][CLOSE_PATH]["post"]
     schemas = document["components"]["schemas"]
 
-    assert operation["operationId"] == "closeTradeCyclePosition"
+    assert operation["operationId"] == "closeTradeCycle"
     assert parameter_contract(operation["parameters"]) == {
         "strategy_instance_id": {"type": "string", "minLength": 1},
         "trade_cycle_id": {"type": "string", "minLength": 1},
     }
-    assert set(operation["responses"]) == {"200", "422", "500"}
-    assert "requestBody" not in operation
+    assert set(operation["responses"]) == {"200", "400", "415", "422", "500"}
+
+    request_schema = operation["requestBody"]["content"]["application/json"]["schema"]
+    assert request_schema == {"$ref": "#/components/schemas/CloseRequest"}
+    request = schemas["CloseRequest"]
+    assert request["additionalProperties"] is False
+    assert set(request["required"]) == {"exposure_fraction"}
+    assert request["properties"]["exposure_fraction"]["type"] == "string"
 
     success_schema = operation["responses"]["200"]["content"]["application/json"]["schema"]
     assert success_schema == {"$ref": "#/components/schemas/TradeCycleClosedResponse"}
@@ -140,7 +144,18 @@ def test_authoritative_abi_openapi_matches_runtime_close_position_contract() -> 
             {"$ref": "#/components/schemas/ValidationFailedError"},
             {"$ref": "#/components/schemas/UnknownTradeCycleBindingError"},
             {"$ref": "#/components/schemas/UnsupportedExchangeScopeError"},
+            {"$ref": "#/components/schemas/CloseExecutionIncompleteError"},
         ]
+    }
+    assert resolve_error_schema(schemas["CloseExecutionIncompleteError"])["properties"]["code"] == {
+        "const": "close_execution_incomplete"
+    }
+
+    assert operation["responses"]["400"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/MalformedJsonError"
+    }
+    assert operation["responses"]["415"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/UnsupportedMediaTypeError"
     }
 
     internal_error_schema = operation["responses"]["500"]["content"]["application/json"]["schema"]
@@ -148,6 +163,15 @@ def test_authoritative_abi_openapi_matches_runtime_close_position_contract() -> 
     assert resolve_error_schema(schemas["InternalError"])["properties"]["code"] == {
         "const": "internal_error"
     }
+
+
+
+def test_authoritative_abi_openapi_no_longer_defines_the_retired_delete_close_route() -> None:
+    document = read_authoritative_openapi()
+    open_position_path = document["paths"].get(
+        "/v1/strategy-instances/{strategy_instance_id}/trade-cycles/{trade_cycle_id}/open-position"
+    )
+    assert open_position_path is None or "delete" not in open_position_path
 
 
 def test_authoritative_protection_examples_decode_successfully_via_runtime_codec() -> None:
@@ -181,7 +205,7 @@ def test_authoritative_protection_examples_decode_successfully_via_runtime_codec
 
 def test_authoritative_close_example_decodes_successfully_via_runtime_codec() -> None:
     document = read_authoritative_openapi()
-    example = document["paths"][OPEN_POSITION_PATH]["delete"]["responses"]["200"]["content"][
+    example = document["paths"][CLOSE_PATH]["post"]["responses"]["200"]["content"][
         "application/json"
     ]["examples"]["closed"]["value"]
 
@@ -231,12 +255,17 @@ def test_authoritative_protection_business_error_examples_decode_via_runtime_cod
 
 def test_authoritative_close_business_error_examples_decode_via_runtime_codec() -> None:
     document = read_authoritative_openapi()
-    examples = document["paths"][OPEN_POSITION_PATH]["delete"]["responses"]["422"]["content"][
+    examples = document["paths"][CLOSE_PATH]["post"]["responses"]["422"]["content"][
         "application/json"
     ]["examples"]
     command = ClosePositionCommand(strategy_instance_id="instance", trade_cycle_id="cycle")
 
-    for name in ("validation_failed", "unknown_trade_cycle_binding", "unsupported_exchange_scope"):
+    for name in (
+        "validation_failed",
+        "unknown_trade_cycle_binding",
+        "unsupported_exchange_scope",
+        "close_execution_incomplete",
+    ):
         with pytest.raises(PositionManagementExecutionPublicError) as raised:
             decode_close_position_response(
                 status_code=422,

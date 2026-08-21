@@ -89,7 +89,9 @@ def test_close_position_builds_command_carrying_no_quantity() -> None:
     assert result == ClosePositionCommand(
         strategy_instance_id="instance",
         trade_cycle_id="cycle-1",
+        exposure_fraction="1",
     )
+    assert result.exposure_fraction == "1"
 
 
 @pytest.mark.parametrize(

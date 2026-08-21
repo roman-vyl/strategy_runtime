@@ -63,6 +63,7 @@ _PROTECTION_PATH_RE = re.compile(
 _OPEN_POSITION_PATH_RE = re.compile(
     r"^/v1/strategy-instances/([^/]+)/trade-cycles/([^/]+)/open-position$"
 )
+_CLOSE_PATH_RE = re.compile(r"^/v1/strategy-instances/([^/]+)/trade-cycles/([^/]+)/close$")
 
 
 def _write_deployment(specs_path: Path) -> None:
@@ -301,7 +302,7 @@ def _protection_applied(request: RecordedRequest) -> FakeResponse:
 
 
 def _position_closed(request: RecordedRequest) -> FakeResponse:
-    match = _OPEN_POSITION_PATH_RE.match(request.path)
+    match = _CLOSE_PATH_RE.match(request.path)
     assert match is not None, f"unexpected close-position path: {request.path}"
     sid, cid = unquote(match.group(1)), unquote(match.group(2))
     return FakeResponse(
@@ -355,15 +356,10 @@ def _set_abi_routes(
     close_position: object = None,
 ) -> None:
     routes: dict[str, object] = {}
-    if open_position is not None or close_position is not None:
-
-        def _open_position_by_method(request: RecordedRequest) -> object:
-            target = close_position if request.method == "DELETE" else open_position
-            if target is None:
-                return FakeResponse(404, {"error": "not_found"})
-            return target(request) if callable(target) else target
-
-        routes["/open-position"] = _open_position_by_method
+    if open_position is not None:
+        routes["/open-position"] = open_position
+    if close_position is not None:
+        routes["/close"] = close_position
     if entry_package is not None:
         routes["/entry-package"] = entry_package
     if protection is not None:
@@ -735,9 +731,9 @@ def test_open_trade_close_position_clears_cycle_after_verified_confirmation(
         assert state is not None
         assert state.current_trade_cycle is None
 
-        requests = [r for r in abi_server.requests if r.method == "DELETE"]
+        requests = [r for r in abi_server.requests if r.method == "POST" and "/close" in r.path]
         assert len(requests) == 1
-        assert "/open-position" in requests[0].path
+        assert requests[0].json() == {"exposure_fraction": "1"}
 
         outcomes = _dispatch_outcomes(tmp_path / "journal" / "runtime.jsonl")
         assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_succeeded"
