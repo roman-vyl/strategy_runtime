@@ -13,6 +13,7 @@ from strategy_runtime.runtime.abi.entry_cycle_recovery_errors import (
 )
 from strategy_runtime.runtime.abi.entry_cycle_recovery_models import (
     EntryOrderLiveRecoveryState,
+    EntryOrderNotFoundRecoveryState,
     PositionOpenRecoveryState,
     RecoveryStateAppliedEntryPackage,
     TerminalAfterFillRecoveryState,
@@ -47,6 +48,7 @@ def test_authoritative_abi_openapi_matches_runtime_client_contract() -> None:
     assert schemas["RecoveryStateResponse"] == {
         "oneOf": [
             {"$ref": "#/components/schemas/EntryOrderLiveResponse"},
+            {"$ref": "#/components/schemas/EntryOrderNotFoundResponse"},
             {"$ref": "#/components/schemas/PositionOpenResponse"},
             {"$ref": "#/components/schemas/TerminalWithoutFillResponse"},
             {"$ref": "#/components/schemas/TerminalAfterFillResponse"},
@@ -89,6 +91,13 @@ def test_authoritative_openapi_success_examples_decode_via_runtime_codec() -> No
             examples["entry_order_live"]["value"]["applied_entry_package"]
         )
     )
+
+    entry_order_not_found = decode_recovery_state_response(
+        status_code=200,
+        content_type="application/json",
+        content=json.dumps(examples["entry_order_not_found"]["value"]).encode("utf-8"),
+    )
+    assert entry_order_not_found == EntryOrderNotFoundRecoveryState()
 
     position_open_value = examples["position_open"]["value"]
     position_open = decode_recovery_state_response(

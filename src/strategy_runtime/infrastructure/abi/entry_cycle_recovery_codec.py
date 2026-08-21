@@ -10,6 +10,7 @@ from strategy_runtime.runtime.abi.entry_cycle_recovery_errors import (
 )
 from strategy_runtime.runtime.abi.entry_cycle_recovery_models import (
     EntryOrderLiveRecoveryState,
+    EntryOrderNotFoundRecoveryState,
     PositionOpenRecoveryState,
     RecoveryStateAppliedEntryPackage,
     RecoveryStateResponse,
@@ -73,6 +74,12 @@ def _decode_success(payload: object) -> RecoveryStateResponse:
             return EntryOrderLiveRecoveryState(
                 applied_entry_package=_decode_applied_entry_package(applied_payload)
             )
+
+        if recovery_state == "entry_order_not_found":
+            _require_none(applied_payload, "applied_entry_package")
+            _require_none(first_fill_payload, "first_fill_at_ms")
+            _require_none(average_price_payload, "average_entry_price")
+            return EntryOrderNotFoundRecoveryState()
 
         if recovery_state == "position_open":
             return PositionOpenRecoveryState(

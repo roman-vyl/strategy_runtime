@@ -38,6 +38,13 @@ class EntryOrderLiveRecoveryState:
 
 
 @dataclass(frozen=True, slots=True)
+class EntryOrderNotFoundRecoveryState:
+    """ABI's fresh, non-terminal ambiguous-CREATE absence observation."""
+
+    kind: ClassVar[Literal["entry_order_not_found"]] = "entry_order_not_found"
+
+
+@dataclass(frozen=True, slots=True)
 class PositionOpenRecoveryState:
     """ABI positively established a filled, open position."""
 
@@ -72,6 +79,7 @@ class TerminalAfterFillRecoveryState:
 
 RecoveryStateResponse = (
     EntryOrderLiveRecoveryState
+    | EntryOrderNotFoundRecoveryState
     | PositionOpenRecoveryState
     | TerminalWithoutFillRecoveryState
     | TerminalAfterFillRecoveryState

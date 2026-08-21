@@ -10,6 +10,7 @@ from strategy_runtime.runtime.abi.entry_cycle_recovery_errors import (
 )
 from strategy_runtime.runtime.abi.entry_cycle_recovery_models import (
     EntryOrderLiveRecoveryState,
+    EntryOrderNotFoundRecoveryState,
     PositionOpenRecoveryState,
     RecoveryStateAppliedEntryPackage,
     RecoveryStateResponse,
@@ -52,6 +53,7 @@ __all__ = [
     "AbiEntryPackageProtocolError",
     "AbiEntryPackageTimeout",
     "EntryOrderLiveRecoveryState",
+    "EntryOrderNotFoundRecoveryState",
     "EntryPackageAbsent",
     "EntryPackageApplied",
     "EntryPackageInternalError",
