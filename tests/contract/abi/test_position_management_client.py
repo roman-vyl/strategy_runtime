@@ -84,7 +84,7 @@ def test_apply_protection_with_null_take_price_is_sent_explicitly() -> None:
 # -- close_position: request shape -------------------------------------------
 
 
-def test_close_position_sends_a_bodyless_delete() -> None:
+def test_close_position_sends_a_post_with_canonical_exposure_fraction() -> None:
     fake = FakeAbi(lambda _: json_response(200, closed_body()))
 
     result = close_position(fake, make_close_command())
@@ -94,12 +94,12 @@ def test_close_position_sends_a_bodyless_delete() -> None:
     )
     assert len(fake.requests) == 1
     sent = fake.requests[0]
-    assert sent.method == "DELETE"
-    assert (
-        sent.url.raw_path == b"/v1/strategy-instances/instance-1/trade-cycles/cycle-1/open-position"
-    )
-    assert sent.content == b""
-    assert "content-type" not in sent.headers
+    assert sent.method == "POST"
+    assert sent.url.raw_path == b"/v1/strategy-instances/instance-1/trade-cycles/cycle-1/close"
+    assert sent.headers["content-type"] == "application/json"
+    assert sent.headers["accept"] == "application/json"
+    assert json.loads(sent.content) == {"exposure_fraction": "1"}
+    assert all(request.method != "DELETE" for request in fake.requests)
 
 
 # -- opaque identifier encoding -----------------------------------------------
@@ -145,10 +145,10 @@ def test_apply_protection_encodes_opaque_identifiers(
     [
         (
             "cycle/future %",
-            b"/v1/strategy-instances/instance/trade-cycles/cycle%2Ffuture%20%25/open-position",
+            b"/v1/strategy-instances/instance/trade-cycles/cycle%2Ffuture%20%25/close",
         ),
-        (".", b"/v1/strategy-instances/instance/trade-cycles/%2E/open-position"),
-        ("..", b"/v1/strategy-instances/instance/trade-cycles/%2E%2E/open-position"),
+        (".", b"/v1/strategy-instances/instance/trade-cycles/%2E/close"),
+        ("..", b"/v1/strategy-instances/instance/trade-cycles/%2E%2E/close"),
     ],
 )
 def test_close_position_encodes_opaque_identifiers(
@@ -328,6 +328,7 @@ def test_apply_protection_position_not_open_is_an_ordinary_public_error() -> Non
         (422, "validation_failed"),
         (422, "unknown_trade_cycle_binding"),
         (422, "unsupported_exchange_scope"),
+        (422, "close_execution_incomplete"),
     ],
 )
 def test_close_position_documented_public_errors_share_one_type(
@@ -361,6 +362,17 @@ def test_apply_protection_does_not_recognize_close_only_codes_at_other_statuses(
 
     with pytest.raises(PositionManagementExecutionProtocolError):
         apply_protection(fake, make_protection_command())
+
+
+def test_close_position_does_not_recognize_position_not_open() -> None:
+    fake = FakeAbi(
+        lambda _: json_response(
+            422, {"error": {"code": "position_not_open", "message": "no live position"}}
+        )
+    )
+
+    with pytest.raises(PositionManagementExecutionProtocolError):
+        close_position(fake, make_close_command())
 
 
 # -- internal_error is unavailable, not a public error ------------------------

@@ -1,11 +1,5 @@
-# abi-position-management-client Specification
+## MODIFIED Requirements
 
-## Purpose
-
-Define Runtime's outbound ABI position-management HTTP contract for applying
-protection and closing a position, including verified confirmations, strict
-error decoding, and bounded single-attempt transport behavior.
-## Requirements
 ### Requirement: Runtime implements the execution port over HTTP against the exact ABI resources
 Strategy Runtime SHALL provide an HTTP implementation of
 `PositionManagementExecutionPort` that issues `PUT
@@ -21,6 +15,14 @@ for `apply_protection` and `POST
   strategy-instance/trade-cycle protection resource
 - **AND** the request body contains exactly `stop_price` and `take_price`
   taken unchanged from `desired_protection`
+
+#### Scenario: Close position targets the open-position resource without a body
+- **WHEN** ABI's close capability moves to `POST .../close` with an
+  `exposure_fraction` body
+- **THEN** the adapter no longer issues a bodyless `DELETE` request to the
+  `open-position` resource for a close
+- **AND** this scenario is superseded by "Close position targets the close
+  resource with a canonical exposure_fraction body" below
 
 #### Scenario: Close position targets the close resource with a canonical exposure_fraction body
 - **WHEN** `close_position` is called with a `ClosePositionCommand`
@@ -147,4 +149,3 @@ retry, and never follow redirects.
 - **WHEN** ABI responds to either operation with a redirect status
 - **THEN** the adapter does not issue a request to the redirect target
 - **AND** raises a protocol failure
-

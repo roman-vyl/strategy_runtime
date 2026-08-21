@@ -29,13 +29,23 @@ def test_apply_protection_command_has_exact_minimal_fields() -> None:
     assert command.desired_protection == protection()
 
 
-def test_close_position_command_carries_no_quantity_or_fraction_field() -> None:
+def test_close_position_command_carries_canonical_exposure_fraction() -> None:
     command = ClosePositionCommand("instance", "cycle-1")
 
     assert tuple(field.name for field in fields(command)) == (
         "strategy_instance_id",
         "trade_cycle_id",
+        "exposure_fraction",
     )
+    assert command.exposure_fraction == "1"
+
+
+@pytest.mark.parametrize("exposure_fraction", ["0.5", "0", "2", "-1", "1.0", "", "1 "])
+def test_close_position_command_rejects_non_canonical_exposure_fraction(
+    exposure_fraction: str,
+) -> None:
+    with pytest.raises(ValueError, match="exposure_fraction"):
+        ClosePositionCommand("instance", "cycle-1", exposure_fraction=exposure_fraction)
 
 
 def test_protection_applied_confirmation_has_exact_minimal_fields() -> None:
