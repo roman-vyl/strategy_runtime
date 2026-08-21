@@ -10,9 +10,11 @@ The existing removal row calls corrective CANCEL when ABI reports
 `entry_order_live`. The paired ABI change adds `entry_order_not_found`, a non-terminal
 exact-identity observation designed to trigger the same revalidating CANCEL for uncertain
 APPLY. ABI emits it only for a structurally ambiguous CREATE after the full existing
-retry budget remains cleanly order/execution absent and aggregate-flat, with completion
-strictly inside Bybit's documented seven-day evidence window. ABI's corrective CANCEL
-repeats that same gate before formal absence.
+retry budget remains cleanly order/execution absent and aggregate-compatible, with
+completion strictly inside Bybit's documented seven-day evidence window. ABI treats both
+flat and same-side aggregate position as compatible because a same-side sibling may own
+that exposure; opposite-side or failed/malformed aggregate evidence fails closed. ABI's
+corrective CANCEL repeats that same gate before formal absence.
 
 ## Goals / Non-Goals
 
