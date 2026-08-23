@@ -28,6 +28,8 @@ class StrategyInstanceRuntimeStateRepository(Protocol):
 
     def list_ids_with_pending_entry_recovery(self) -> tuple[str, ...]: ...
 
+    def list_ids_with_pending_close_recovery(self) -> tuple[str, ...]: ...
+
 
 class InMemoryStrategyInstanceRuntimeStateRepository:
     """Atomic deterministic implementation used by composition/tests until SQLite design."""
@@ -84,6 +86,14 @@ class InMemoryStrategyInstanceRuntimeStateRepository:
                 strategy_instance_id
                 for strategy_instance_id, state in self._states.items()
                 if state.pending_entry_recovery is not None
+            )
+
+    def list_ids_with_pending_close_recovery(self) -> tuple[str, ...]:
+        with self._lock:
+            return tuple(
+                strategy_instance_id
+                for strategy_instance_id, state in self._states.items()
+                if state.pending_close_recovery is not None
             )
 
 

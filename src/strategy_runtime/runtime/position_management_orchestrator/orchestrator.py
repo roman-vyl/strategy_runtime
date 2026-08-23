@@ -1,5 +1,7 @@
 """Application sequencing for position-management execution."""
 
+from dataclasses import replace
+
 from strategy_runtime.runtime.position_management_decision.decision import (
     decide_position_management,
 )
@@ -19,14 +21,20 @@ from strategy_runtime.runtime.position_management_orchestrator.ports import (
     PositionManagementExecutionPort,
 )
 from strategy_runtime.runtime.routing.models import OpenTradeProjectedStrategyInstance
-from strategy_runtime.runtime.state.models import StrategyInstanceRuntimeState
+from strategy_runtime.runtime.state.models import PendingCloseRecovery, StrategyInstanceRuntimeState
+from strategy_runtime.runtime.state.repository import StrategyInstanceRuntimeStateRepository
 
 
 class PositionManagementOrchestrator:
     """Coordinate one position-management decision through confirmed execution."""
 
-    def __init__(self, execution_port: PositionManagementExecutionPort) -> None:
+    def __init__(
+        self,
+        execution_port: PositionManagementExecutionPort,
+        state_repository: StrategyInstanceRuntimeStateRepository,
+    ) -> None:
         self._execution_port = execution_port
+        self._state_repository = state_repository
 
     def execute(
         self,
@@ -61,9 +69,15 @@ class PositionManagementOrchestrator:
                 raise PositionManagementExecutionInvariantError(
                     "CLOSE_POSITION must produce a ClosePositionCommand"
                 )
+            pending_state = self._state_repository.save(
+                replace(
+                    source_state,
+                    pending_close_recovery=PendingCloseRecovery(command.trade_cycle_id),
+                )
+            )
             close_confirmation = self._execution_port.close_position(command)
             return apply_position_management_confirmation(
-                source_state,
+                pending_state,
                 decision,
                 command,
                 close_confirmation,

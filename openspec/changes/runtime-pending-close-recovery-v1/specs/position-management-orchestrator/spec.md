@@ -53,3 +53,21 @@ existing pre-write-before-dispatch ordering. If that pre-write itself fails,
 - **AND** the durably saved `pending_close_recovery` remains in place for
   `uncertain-exchange-state-resolver` to resolve later — no other component
   clears it on this path
+
+### Requirement: The orchestrator owns no mutex or repository
+`PositionManagementOrchestrator` SHALL NOT acquire the keyed
+strategy-instance mutex, and SHALL NOT perform retries or pending-command
+bookkeeping beyond the single `ClosePosition` pre-write defined above. Its
+only repository interaction is that one durable `save(...)` of
+`pending_close_recovery` before dispatching `close_position`; it performs no
+other load or save of repository state.
+
+#### Scenario: No mutex, no repository interaction outside the close pre-write
+- **WHEN** `PositionManagementOrchestrator.execute` runs for `NoOp` or
+  `ApplyProtection`
+- **THEN** it acquires no keyed mutex and performs no repository load or
+  save
+- **WHEN** it runs for `ClosePosition`
+- **THEN** it acquires no keyed mutex, performs exactly the one
+  `pending_close_recovery` pre-write save, and performs no other repository
+  load or save, and no retry of a failed port call

@@ -99,6 +99,15 @@ class PendingEntryRecovery:
 
 
 @dataclass(frozen=True, slots=True)
+class PendingCloseRecovery:
+    trade_cycle_id: str
+
+    def __post_init__(self) -> None:
+        if type(self.trade_cycle_id) is not str or len(self.trade_cycle_id) == 0:
+            raise ValueError("trade_cycle_id must be a non-empty string")
+
+
+@dataclass(frozen=True, slots=True)
 class StrategyInstanceRuntimeState:
     strategy_instance_id: str
     strategy_id: str
@@ -106,6 +115,7 @@ class StrategyInstanceRuntimeState:
     risk_multiplier: str
     current_trade_cycle: CurrentTradeCycle | None = None
     pending_entry_recovery: PendingEntryRecovery | None = None
+    pending_close_recovery: PendingCloseRecovery | None = None
 
     def __post_init__(self) -> None:
         if not self.strategy_instance_id.strip() or not self.strategy_id.strip():
@@ -130,6 +140,25 @@ class StrategyInstanceRuntimeState:
         ):
             raise ValueError(
                 "pending_entry_recovery.trade_cycle_id must match "
+                "current_trade_cycle.trade_cycle_id"
+            )
+        if (
+            self.pending_close_recovery is not None
+            and type(self.pending_close_recovery) is not PendingCloseRecovery
+        ):
+            raise TypeError("pending_close_recovery must be PendingCloseRecovery or None")
+        if self.pending_close_recovery is not None and self.current_trade_cycle is None:
+            raise ValueError(
+                "pending_close_recovery requires a non-null current_trade_cycle"
+            )
+        if (
+            self.pending_close_recovery is not None
+            and self.current_trade_cycle is not None
+            and self.pending_close_recovery.trade_cycle_id
+            != self.current_trade_cycle.trade_cycle_id
+        ):
+            raise ValueError(
+                "pending_close_recovery.trade_cycle_id must match "
                 "current_trade_cycle.trade_cycle_id"
             )
 

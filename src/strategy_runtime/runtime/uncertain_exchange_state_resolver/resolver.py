@@ -30,6 +30,13 @@ from strategy_runtime.runtime.abi.entry_package_models import (
 )
 from strategy_runtime.runtime.coordination import StrategyInstanceKeyedMutexRegistry
 from strategy_runtime.runtime.first_fill.state_applier import apply_first_fill
+from strategy_runtime.runtime.position_management_execution.models import (
+    ClosePositionCommand,
+    PositionClosedConfirmation,
+)
+from strategy_runtime.runtime.position_management_orchestrator.ports import (
+    PositionManagementExecutionPort,
+)
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
 from strategy_runtime.runtime.state.models import (
     AppliedEntryPackage,
@@ -40,7 +47,8 @@ from strategy_runtime.runtime.state.repository import StrategyInstanceRuntimeSta
 
 
 class UncertainExchangeStateResolver:
-    """Resolve one instance's `pending_entry_recovery` against ABI's recovery-state endpoint."""
+    """Resolve one instance's `pending_entry_recovery`/`pending_close_recovery`
+    against ABI's recovery-state endpoint or the pair-scoped close endpoint."""
 
     def __init__(
         self,
@@ -48,16 +56,23 @@ class UncertainExchangeStateResolver:
         state_repository: StrategyInstanceRuntimeStateRepository,
         keyed_mutex_registry: StrategyInstanceKeyedMutexRegistry,
         abi_entry_cycle_recovery: AbiEntryCycleRecoveryPort,
+        position_management_execution: PositionManagementExecutionPort,
     ) -> None:
         self._state_repository = state_repository
         self._keyed_mutex_registry = keyed_mutex_registry
         self._abi_entry_cycle_recovery = abi_entry_cycle_recovery
+        self._position_management_execution = position_management_execution
 
     def attempt(self, strategy_instance_id: str) -> None:
         """Resolve, or leave untouched, the one instance's pending recovery marker."""
         with self._keyed_mutex_registry.hold(strategy_instance_id):
             state = self._state_repository.get(strategy_instance_id)
-            if state is None or state.pending_entry_recovery is None:
+            if state is None:
+                return
+            if state.pending_close_recovery is not None:
+                self._resolve_pending_close(state)
+                return
+            if state.pending_entry_recovery is None:
                 return
 
             trade_cycle_id = state.pending_entry_recovery.trade_cycle_id
@@ -75,6 +90,36 @@ class UncertainExchangeStateResolver:
                 self._resolve_uncertain_apply(state, trade_cycle_id, response)
             else:
                 self._resolve_uncertain_removal(state, state.current_trade_cycle, response)
+
+    def _resolve_pending_close(self, state: StrategyInstanceRuntimeState) -> None:
+        pending_close_recovery = state.pending_close_recovery
+        assert pending_close_recovery is not None
+        trade_cycle_id = pending_close_recovery.trade_cycle_id
+        command = ClosePositionCommand(
+            strategy_instance_id=state.strategy_instance_id,
+            trade_cycle_id=trade_cycle_id,
+        )
+        try:
+            confirmation = self._position_management_execution.close_position(command)
+        except Exception:
+            # Transport failure or any other exception: leave the marker
+            # untouched, eligible for another attempt on the next tick.
+            return
+
+        if (
+            type(confirmation) is not PositionClosedConfirmation
+            or confirmation.strategy_instance_id != state.strategy_instance_id
+            or confirmation.trade_cycle_id != trade_cycle_id
+        ):
+            return
+
+        current_cycle = state.current_trade_cycle
+        if current_cycle is None or current_cycle.trade_cycle_id != trade_cycle_id:
+            return
+
+        self._state_repository.save(
+            replace(state, current_trade_cycle=None, pending_close_recovery=None)
+        )
 
     def _resolve_uncertain_apply(
         self,

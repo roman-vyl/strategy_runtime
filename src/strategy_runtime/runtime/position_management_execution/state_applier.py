@@ -90,7 +90,7 @@ def _close_position(
     _require_cycle_identity(current_cycle.trade_cycle_id, decision.trade_cycle_id)
     _require_cycle_identity(decision.trade_cycle_id, sent_command.trade_cycle_id)
     _require_cycle_identity(sent_command.trade_cycle_id, confirmation.trade_cycle_id)
-    return replace(state, current_trade_cycle=None)
+    return replace(state, current_trade_cycle=None, pending_close_recovery=None)
 
 
 def _require_input_types(

@@ -100,7 +100,11 @@ class UncertainExchangeStateResolverWorker:
                 self._wake.clear()
 
     def _tick(self) -> None:
-        for strategy_instance_id in self._state_repository.list_ids_with_pending_entry_recovery():
+        pending_ids = (
+            *self._state_repository.list_ids_with_pending_entry_recovery(),
+            *self._state_repository.list_ids_with_pending_close_recovery(),
+        )
+        for strategy_instance_id in pending_ids:
             with self._lifecycle_lock:
                 if self._state is not _State.RUNNING:
                     return

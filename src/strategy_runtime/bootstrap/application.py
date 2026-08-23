@@ -198,12 +198,14 @@ def build_application(
             state_repository,
         )
         position_management_orchestrator = PositionManagementOrchestrator(
-            execution_port=position_management_client
+            execution_port=position_management_client,
+            state_repository=state_repository,
         )
         uncertain_exchange_state_resolver = UncertainExchangeStateResolver(
             state_repository=state_repository,
             keyed_mutex_registry=keyed_mutex_registry,
             abi_entry_cycle_recovery=entry_cycle_recovery_client,
+            position_management_execution=position_management_client,
         )
         strategy_runtime_orchestrator = StrategyRuntimeOrchestrator(
             state_repository=state_repository,

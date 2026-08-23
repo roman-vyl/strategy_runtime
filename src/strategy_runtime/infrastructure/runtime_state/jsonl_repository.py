@@ -114,6 +114,15 @@ class JsonlStrategyInstanceRuntimeStateRepository:
                 if state.pending_entry_recovery is not None
             )
 
+    def list_ids_with_pending_close_recovery(self) -> tuple[str, ...]:
+        with self._lock:
+            self._check_not_poisoned()
+            return tuple(
+                strategy_instance_id
+                for strategy_instance_id, state in self._states.items()
+                if state.pending_close_recovery is not None
+            )
+
     def _check_not_poisoned(self) -> None:
         if self._poison is not None:
             raise StrategyInstanceStateStorePoisoned(

@@ -66,7 +66,7 @@ class StrategyRuntimeOrchestrator:
                     source_path=unit.deployment.source_path,
                 )
             )
-            if state.pending_entry_recovery is not None:
+            if state.pending_entry_recovery is not None or state.pending_close_recovery is not None:
                 return state
             resolved = self._open_position_resolver.resolve(state)
             if resolved.position_open:

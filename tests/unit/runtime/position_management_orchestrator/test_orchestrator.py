@@ -36,8 +36,12 @@ from strategy_runtime.runtime.state.models import (
     AppliedEntryPackage,
     CurrentTradeCycle,
     FrozenExecutedEntryContext,
+    GetOrCreateStrategyInstanceRuntimeStateRequest,
     RegisteredSpecSnapshot,
     StrategyInstanceRuntimeState,
+)
+from strategy_runtime.runtime.state.repository import (
+    InMemoryStrategyInstanceRuntimeStateRepository,
 )
 from strategy_runtime.utility.committed_bar.models import (
     CommittedBarEvent,
@@ -121,6 +125,24 @@ def projection(
     return OpenTradeProjectedStrategyInstance(source, position_management_recipe)
 
 
+def registered_repository(
+    source_state: StrategyInstanceRuntimeState,
+) -> InMemoryStrategyInstanceRuntimeStateRepository:
+    """An in-memory repository already registered for `source_state`'s identity."""
+    repository = InMemoryStrategyInstanceRuntimeStateRepository()
+    repository.get_or_create(
+        GetOrCreateStrategyInstanceRuntimeStateRequest(
+            strategy_instance_id=source_state.strategy_instance_id,
+            strategy_id=source_state.strategy_id,
+            instrument=source_state.registered_spec_snapshot.instrument,
+            base_timeframe=source_state.registered_spec_snapshot.base_timeframe,
+            raw_spec=source_state.registered_spec_snapshot.raw_spec,
+            source_path=source_state.registered_spec_snapshot.source_path,
+        )
+    )
+    return repository
+
+
 class FakeExecutionPort:
     def __init__(
         self,
@@ -160,7 +182,7 @@ def test_no_op_calls_neither_port_method_and_returns_source_state_unchanged() ->
     item = projection(source_state, recipe(stop_price="99", take_price="103"))
     port = FakeExecutionPort()
 
-    result = PositionManagementOrchestrator(port).execute(item)
+    result = PositionManagementOrchestrator(port, registered_repository(source_state)).execute(item)
 
     assert result == snapshot
     assert source_state == snapshot
@@ -176,7 +198,7 @@ def test_apply_protection_calls_only_apply_protection_exactly_once() -> None:
     confirmation = ProtectionAppliedConfirmation("instance", "cycle-1", protection)
     port = FakeExecutionPort(apply_result=confirmation)
 
-    result = PositionManagementOrchestrator(port).execute(item)
+    result = PositionManagementOrchestrator(port, registered_repository(source_state)).execute(item)
 
     assert len(port.apply_calls) == 1
     assert port.apply_calls[0] == ApplyProtectionCommand("instance", "cycle-1", protection)
@@ -195,7 +217,7 @@ def test_close_position_calls_only_close_position_exactly_once() -> None:
     confirmation = PositionClosedConfirmation("instance", "cycle-1")
     port = FakeExecutionPort(close_result=confirmation)
 
-    result = PositionManagementOrchestrator(port).execute(item)
+    result = PositionManagementOrchestrator(port, registered_repository(source_state)).execute(item)
 
     assert port.apply_calls == []
     assert len(port.close_calls) == 1
@@ -212,7 +234,7 @@ def test_port_failure_propagates_and_yields_no_new_state() -> None:
     port = FakeExecutionPort(error=error)
 
     with pytest.raises(RuntimeError) as raised:
-        PositionManagementOrchestrator(port).execute(item)
+        PositionManagementOrchestrator(port, registered_repository(source_state)).execute(item)
 
     assert raised.value is error
     assert len(port.close_calls) == 1
@@ -226,7 +248,7 @@ def test_mismatched_confirmation_raises_and_yields_no_new_state() -> None:
     port = FakeExecutionPort(apply_result=PositionClosedConfirmation("instance", "cycle-1"))
 
     with pytest.raises(PositionManagementExecutionInvariantError):
-        PositionManagementOrchestrator(port).execute(item)
+        PositionManagementOrchestrator(port, registered_repository(source_state)).execute(item)
 
     assert source_state == snapshot
 
@@ -238,7 +260,7 @@ def test_decision_invariant_failure_propagates_before_any_port_call() -> None:
     port = FakeExecutionPort()
 
     with pytest.raises(PositionManagementDecisionInvariantError):
-        PositionManagementOrchestrator(port).execute(item)
+        PositionManagementOrchestrator(port, registered_repository(source_state)).execute(item)
 
     assert port.apply_calls == []
     assert port.close_calls == []
@@ -252,8 +274,68 @@ def test_execute_signature_takes_only_the_projection() -> None:
     )
 
 
-def test_constructor_receives_execution_port_but_no_repository_or_mutex() -> None:
+def test_constructor_receives_execution_port_and_state_repository_but_no_mutex() -> None:
     assert tuple(signature(PositionManagementOrchestrator.__init__).parameters) == (
         "self",
         "execution_port",
+        "state_repository",
     )
+
+
+def test_close_position_pre_writes_pending_close_recovery_before_dispatch() -> None:
+    source_state = runtime_state()
+    item = projection(source_state, recipe(active=True))
+    confirmation = PositionClosedConfirmation("instance", "cycle-1")
+
+    class RecordingPort(FakeExecutionPort):
+        def close_position(self, command: ClosePositionCommand) -> PositionClosedConfirmation:
+            saved = repository.get("instance")
+            assert saved is not None
+            assert saved.pending_close_recovery is not None
+            assert saved.pending_close_recovery.trade_cycle_id == "cycle-1"
+            return super().close_position(command)
+
+    repository = registered_repository(source_state)
+    port = RecordingPort(close_result=confirmation)
+
+    result = PositionManagementOrchestrator(port, repository).execute(item)
+
+    assert len(port.close_calls) == 1
+    assert result.current_trade_cycle is None
+    assert result.pending_close_recovery is None
+
+
+def test_close_position_failure_leaves_pending_close_recovery_durably_saved() -> None:
+    source_state = runtime_state()
+    item = projection(source_state, recipe(active=True))
+    error = RuntimeError("executor unreachable")
+    repository = registered_repository(source_state)
+    port = FakeExecutionPort(error=error)
+
+    with pytest.raises(RuntimeError):
+        PositionManagementOrchestrator(port, repository).execute(item)
+
+    saved = repository.get("instance")
+    assert saved is not None
+    assert saved.pending_close_recovery is not None
+    assert saved.pending_close_recovery.trade_cycle_id == "cycle-1"
+    assert saved.current_trade_cycle is not None
+
+
+def test_failed_pre_write_never_calls_close_position() -> None:
+    source_state = runtime_state()
+    item = projection(source_state, recipe(active=True))
+    port = FakeExecutionPort(close_result=PositionClosedConfirmation("instance", "cycle-1"))
+
+    class FailingSaveRepository(InMemoryStrategyInstanceRuntimeStateRepository):
+        def save(
+            self, state: StrategyInstanceRuntimeState
+        ) -> StrategyInstanceRuntimeState:
+            raise RuntimeError("durable write failed")
+
+    repository = FailingSaveRepository()
+
+    with pytest.raises(RuntimeError, match="durable write failed"):
+        PositionManagementOrchestrator(port, repository).execute(item)
+
+    assert port.close_calls == []

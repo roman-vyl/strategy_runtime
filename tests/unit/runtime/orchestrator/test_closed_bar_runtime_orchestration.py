@@ -1005,7 +1005,7 @@ class TestTypedBranchAndErrorBoundary:
         projection = _open_trade_projection(item)
         repo = _FakeRepository(state)
         port = _FakePositionManagementExecutionPort()
-        position_orch = PositionManagementOrchestrator(port)
+        position_orch = PositionManagementOrchestrator(port, repo)
         real_execute = position_orch.execute
         received: list[OpenTradeProjectedStrategyInstance] = []
 
@@ -1053,7 +1053,7 @@ class TestTypedBranchAndErrorBoundary:
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value=projection)),
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
-            position_management_orchestrator=PositionManagementOrchestrator(port),
+            position_management_orchestrator=PositionManagementOrchestrator(port, repo),
             entry_reconciliation_orchestrator=MagicMock(),
         )
 
@@ -1084,7 +1084,7 @@ class TestTypedBranchAndErrorBoundary:
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=MagicMock(route=MagicMock(return_value=projection)),
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
-            position_management_orchestrator=PositionManagementOrchestrator(port),
+            position_management_orchestrator=PositionManagementOrchestrator(port, repo),
             entry_reconciliation_orchestrator=MagicMock(),
         )
 
@@ -1092,9 +1092,11 @@ class TestTypedBranchAndErrorBoundary:
 
         assert port.apply_calls == []
         assert len(port.close_calls) == 1
-        assert len(repo.save_calls) == 1
-        assert result is repo.save_calls[0]
+        assert len(repo.save_calls) == 2
+        assert repo.save_calls[0].pending_close_recovery is not None
+        assert result is repo.save_calls[1]
         assert result.current_trade_cycle is None
+        assert result.pending_close_recovery is None
 
     def test_position_management_failure_preserves_first_fill_freeze_only(self) -> None:
         state = _open_trade_state(frozen=False)
@@ -1119,7 +1121,7 @@ class TestTypedBranchAndErrorBoundary:
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=router,
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
-            position_management_orchestrator=PositionManagementOrchestrator(port),
+            position_management_orchestrator=PositionManagementOrchestrator(port, repo),
             entry_reconciliation_orchestrator=MagicMock(),
         )
 
@@ -1128,12 +1130,14 @@ class TestTypedBranchAndErrorBoundary:
 
         assert raised.value is error
         assert len(port.close_calls) == 1
-        assert len(repo.save_calls) == 1
+        assert len(repo.save_calls) == 2
         frozen_state = repo.save_calls[0]
-        assert repo._state is frozen_state
         assert frozen_state.current_trade_cycle is not None
         assert frozen_state.current_trade_cycle.frozen_entry_context is not None
         assert frozen_state.current_trade_cycle.frozen_entry_context.first_fill_at_ms == 300_950
+        pending_close_state = repo.save_calls[1]
+        assert repo._state is pending_close_state
+        assert pending_close_state.pending_close_recovery is not None
         routed_item = router.route.call_args.args[0]
         assert routed_item.resolved_state.runtime_state is frozen_state
 
@@ -1534,7 +1538,7 @@ class TestPostFreezeTemporalGuard:
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=router,
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
-            position_management_orchestrator=PositionManagementOrchestrator(port),
+            position_management_orchestrator=PositionManagementOrchestrator(port, repo),
             entry_reconciliation_orchestrator=MagicMock(),
         )
 
@@ -1569,7 +1573,7 @@ class TestPostFreezeTemporalGuard:
             open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
             use_case_router=router,
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
-            position_management_orchestrator=PositionManagementOrchestrator(port),
+            position_management_orchestrator=PositionManagementOrchestrator(port, repo),
             entry_reconciliation_orchestrator=MagicMock(),
         )
 

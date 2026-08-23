@@ -31,11 +31,16 @@ from strategy_runtime.runtime.abi.entry_package_models import (
     EntryPackageWireDesiredEntry,
 )
 from strategy_runtime.runtime.coordination import StrategyInstanceKeyedMutexRegistry
+from strategy_runtime.runtime.position_management_execution.models import (
+    ClosePositionCommand,
+    PositionClosedConfirmation,
+)
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
 from strategy_runtime.runtime.state.models import (
     AppliedEntryPackage,
     CurrentTradeCycle,
     GetOrCreateStrategyInstanceRuntimeStateRequest,
+    PendingCloseRecovery,
     PendingEntryRecovery,
     StrategyInstanceRuntimeState,
 )
@@ -126,14 +131,41 @@ def _repository_with_state(
     return repository, state
 
 
+class FakePositionManagementExecutionPort:
+    def __init__(
+        self,
+        *,
+        close_result: PositionClosedConfirmation | object | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.close_result = close_result
+        self.error = error
+        self.close_calls: list[ClosePositionCommand] = []
+
+    def apply_protection(self, command: object) -> object:  # pragma: no cover - unused
+        raise NotImplementedError
+
+    def close_position(self, command: ClosePositionCommand) -> PositionClosedConfirmation:
+        self.close_calls.append(command)
+        if self.error is not None:
+            raise self.error
+        return self.close_result  # type: ignore[return-value]
+
+
 def _make_resolver(
     repository: InMemoryStrategyInstanceRuntimeStateRepository,
     port: FakeAbiEntryCycleRecoveryPort,
+    position_management_execution: FakePositionManagementExecutionPort | None = None,
 ) -> UncertainExchangeStateResolver:
     return UncertainExchangeStateResolver(
         state_repository=repository,
         keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
         abi_entry_cycle_recovery=port,  # type: ignore[arg-type]
+        position_management_execution=(
+            position_management_execution
+            if position_management_execution is not None
+            else FakePositionManagementExecutionPort()
+        ),  # type: ignore[arg-type]
     )
 
 
@@ -656,6 +688,7 @@ def test_attempt_holds_the_shared_keyed_mutex_for_its_full_duration() -> None:
         state_repository=repository,
         keyed_mutex_registry=registry,
         abi_entry_cycle_recovery=port,  # type: ignore[arg-type]
+        position_management_execution=FakePositionManagementExecutionPort(),  # type: ignore[arg-type]
     )
 
     assert _is_key_locked(registry, _SID) is False
@@ -667,3 +700,115 @@ def test_attempt_holds_the_shared_keyed_mutex_for_its_full_duration() -> None:
 
 def applied_package() -> AppliedEntryPackage:
     return AppliedEntryPackage(desired_entry(), "0.01")
+
+
+# ---------------------------------------------------------------------------
+# Pending close recovery: re-issues close_position, converges on a matching
+# confirmation, leaves the marker untouched on failure or mismatch.
+# ---------------------------------------------------------------------------
+
+
+def _repository_with_pending_close(
+    trade_cycle_id: str = "cycle-1",
+) -> tuple[InMemoryStrategyInstanceRuntimeStateRepository, StrategyInstanceRuntimeState]:
+    repository = InMemoryStrategyInstanceRuntimeStateRepository()
+    state = repository.get_or_create(
+        GetOrCreateStrategyInstanceRuntimeStateRequest(
+            strategy_instance_id=_SID,
+            strategy_id="ema_pullback",
+            instrument="BTCUSDT.P",
+            base_timeframe="5m",
+            raw_spec={},
+            source_path="a.json",
+        )
+    )
+    cycle = CurrentTradeCycle(trade_cycle_id, applied_package())
+    state = repository.save(
+        replace(
+            state,
+            current_trade_cycle=cycle,
+            pending_close_recovery=PendingCloseRecovery(trade_cycle_id),
+        )
+    )
+    return repository, state
+
+
+def test_pending_close_recovery_takes_priority_and_never_queries_entry_recovery() -> None:
+    repository, _ = _repository_with_pending_close()
+    entry_port = FakeAbiEntryCycleRecoveryPort()
+    close_port = FakePositionManagementExecutionPort(
+        close_result=PositionClosedConfirmation(_SID, "cycle-1")
+    )
+    resolver = _make_resolver(repository, entry_port, close_port)
+
+    resolver.attempt(_SID)
+
+    assert entry_port.query_calls == []
+    assert len(close_port.close_calls) == 1
+    assert close_port.close_calls[0] == ClosePositionCommand(_SID, "cycle-1")
+
+
+def test_a_matching_confirmation_clears_both_fields_in_one_save() -> None:
+    repository, _ = _repository_with_pending_close()
+    close_port = FakePositionManagementExecutionPort(
+        close_result=PositionClosedConfirmation(_SID, "cycle-1")
+    )
+    resolver = _make_resolver(repository, FakeAbiEntryCycleRecoveryPort(), close_port)
+
+    resolver.attempt(_SID)
+
+    saved = repository.get(_SID)
+    assert saved is not None
+    assert saved.current_trade_cycle is None
+    assert saved.pending_close_recovery is None
+
+
+def test_an_exception_from_the_reissued_close_leaves_the_marker_untouched() -> None:
+    repository, before = _repository_with_pending_close()
+    close_port = FakePositionManagementExecutionPort(error=RuntimeError("timeout"))
+    resolver = _make_resolver(repository, FakeAbiEntryCycleRecoveryPort(), close_port)
+
+    resolver.attempt(_SID)
+
+    saved = repository.get(_SID)
+    assert saved == before
+    assert saved.pending_close_recovery is not None
+
+
+def test_a_mismatched_confirmation_leaves_the_marker_untouched() -> None:
+    repository, before = _repository_with_pending_close()
+    close_port = FakePositionManagementExecutionPort(
+        close_result=PositionClosedConfirmation(_SID, "some-other-cycle")
+    )
+    resolver = _make_resolver(repository, FakeAbiEntryCycleRecoveryPort(), close_port)
+
+    resolver.attempt(_SID)
+
+    saved = repository.get(_SID)
+    assert saved == before
+    assert saved.pending_close_recovery is not None
+
+
+def test_attempt_holds_the_mutex_for_close_recovery_too() -> None:
+    repository, _ = _repository_with_pending_close()
+    registry = StrategyInstanceKeyedMutexRegistry()
+    observed_locked: list[bool] = []
+
+    class _ObservingClosePort(FakePositionManagementExecutionPort):
+        def close_position(self, command: ClosePositionCommand) -> PositionClosedConfirmation:
+            observed_locked.append(_is_key_locked(registry, command.strategy_instance_id))
+            return super().close_position(command)
+
+    close_port = _ObservingClosePort(close_result=PositionClosedConfirmation(_SID, "cycle-1"))
+    resolver = UncertainExchangeStateResolver(
+        state_repository=repository,
+        keyed_mutex_registry=registry,
+        abi_entry_cycle_recovery=FakeAbiEntryCycleRecoveryPort(),  # type: ignore[arg-type]
+        position_management_execution=close_port,  # type: ignore[arg-type]
+    )
+
+    assert _is_key_locked(registry, _SID) is False
+    resolver.attempt(_SID)
+
+    assert observed_locked == [True]
+    assert _is_key_locked(registry, _SID) is False

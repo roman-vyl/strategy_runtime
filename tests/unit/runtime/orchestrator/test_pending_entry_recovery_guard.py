@@ -13,6 +13,7 @@ from strategy_runtime.runtime.state.models import (
     AppliedEntryPackage,
     CurrentTradeCycle,
     GetOrCreateStrategyInstanceRuntimeStateRequest,
+    PendingCloseRecovery,
     PendingEntryRecovery,
     StrategyInstanceRuntimeState,
 )
@@ -92,6 +93,9 @@ class _RecordingRepository:
     def list_ids_with_pending_entry_recovery(self) -> tuple[str, ...]:
         return ()
 
+    def list_ids_with_pending_close_recovery(self) -> tuple[str, ...]:
+        return ()
+
 
 def _pending_state(
     *, current_trade_cycle: CurrentTradeCycle | None
@@ -158,6 +162,25 @@ def test_normal_bar_path_proceeds_when_pending_entry_recovery_is_null() -> None:
         assert "resolve" in str(exc)
     else:
         raise AssertionError("expected the unguarded path to reach the open-position resolver")
+
+
+def test_guard_also_defers_the_pipeline_for_a_pending_close_recovery_marker() -> None:
+    """A pending close recovery leaves current_trade_cycle set exactly like an
+    uncertain removal does -- the same guard, same position, must also defer."""
+    cycle = CurrentTradeCycle("cycle-1", AppliedEntryPackage(_desired_entry(), "0.01"))
+    base_state = InMemoryStrategyInstanceRuntimeStateRepository().get_or_create(_request())
+    state = replace(
+        base_state,
+        current_trade_cycle=cycle,
+        pending_close_recovery=PendingCloseRecovery("cycle-1"),
+    )
+    repository = _RecordingRepository(state)
+    orch = _build_orchestrator(repository)
+
+    result = orch.process(_processing_unit())
+
+    assert result == state
+    assert repository.save_calls == 0
 
 
 def test_dispatch_reports_a_guarded_deferral_as_an_ordinary_successful_outcome() -> None:

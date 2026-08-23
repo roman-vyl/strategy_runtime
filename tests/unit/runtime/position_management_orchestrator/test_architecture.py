@@ -1,4 +1,7 @@
-"""Guardrail: the position-management orchestrator owns no mutex or repository."""
+"""Guardrail: the position-management orchestrator owns no mutex, and its only
+repository interaction is the durable `pending_close_recovery` pre-write
+before dispatching `close_position` (see `runtime-pending-close-recovery-v1`).
+"""
 
 import ast
 from pathlib import Path
@@ -7,7 +10,6 @@ PACKAGE = Path("src/strategy_runtime/runtime/position_management_orchestrator")
 
 FORBIDDEN_IMPORT_PREFIXES = (
     "strategy_runtime.runtime.coordination",
-    "strategy_runtime.runtime.state.repository",
     "strategy_runtime.runtime.orchestrator",
     "strategy_runtime.adapters",
     "strategy_runtime.bootstrap",

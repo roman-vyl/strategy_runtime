@@ -31,6 +31,9 @@ class RecordingRepository:
     def list_ids_with_pending_entry_recovery(self) -> tuple[str, ...]:
         return self.pending_ids
 
+    def list_ids_with_pending_close_recovery(self) -> tuple[str, ...]:
+        return ()
+
 
 class RecordingResolver:
     def __init__(self) -> None:
