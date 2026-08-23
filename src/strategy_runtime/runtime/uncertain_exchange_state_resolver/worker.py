@@ -100,9 +100,15 @@ class UncertainExchangeStateResolverWorker:
                 self._wake.clear()
 
     def _tick(self) -> None:
-        pending_ids = (
-            *self._state_repository.list_ids_with_pending_entry_recovery(),
-            *self._state_repository.list_ids_with_pending_close_recovery(),
+        # dict.fromkeys dedups while preserving discovery order, defensive
+        # against a repository ever returning the same id in both
+        # enumerations (the domain model forbids both markers being set on
+        # one instance, but the tick stays defensive at no extra cost).
+        pending_ids = dict.fromkeys(
+            (
+                *self._state_repository.list_ids_with_pending_entry_recovery(),
+                *self._state_repository.list_ids_with_pending_close_recovery(),
+            )
         )
         for strategy_instance_id in pending_ids:
             with self._lifecycle_lock:

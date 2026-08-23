@@ -369,3 +369,22 @@ def test_decode_rejects_unknown_field_in_pending_entry_recovery() -> None:
 
     with pytest.raises(StateRecordDecodeError):
         decode_state_line(json.dumps(envelope))
+
+
+def test_schema_version_3_line_fails_closed_when_both_pending_markers_are_set() -> None:
+    """Decoding routes the model's mutual-exclusion invariant through the same
+    fail-closed StateRecordDecodeError path as any other domain violation."""
+    cycle = CurrentTradeCycle(
+        "cycle-1",
+        AppliedEntryPackage(DesiredEntry("long", 900, "100", "99", "103", "runner"), "0.01"),
+    )
+    state = replace(
+        _bare_state(),
+        current_trade_cycle=cycle,
+        pending_close_recovery=PendingCloseRecovery("cycle-1"),
+    )
+    envelope = json.loads(encode_state_line(state))
+    envelope["pending_entry_recovery"] = {"trade_cycle_id": "cycle-1"}
+
+    with pytest.raises(StateRecordDecodeError):
+        decode_state_line(json.dumps(envelope))

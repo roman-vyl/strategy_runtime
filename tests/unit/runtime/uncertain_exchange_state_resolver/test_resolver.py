@@ -31,6 +31,9 @@ from strategy_runtime.runtime.abi.entry_package_models import (
     EntryPackageWireDesiredEntry,
 )
 from strategy_runtime.runtime.coordination import StrategyInstanceKeyedMutexRegistry
+from strategy_runtime.runtime.position_management_execution.errors import (
+    PositionManagementExecutionTimeout,
+)
 from strategy_runtime.runtime.position_management_execution.models import (
     ClosePositionCommand,
     PositionClosedConfirmation,
@@ -763,12 +766,64 @@ def test_a_matching_confirmation_clears_both_fields_in_one_save() -> None:
     assert saved.pending_close_recovery is None
 
 
-def test_an_exception_from_the_reissued_close_leaves_the_marker_untouched() -> None:
+def test_resolver_close_recovery_uses_the_canonical_confirmation_application_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prove the resolver applies the same `apply_position_management_confirmation`
+    helper `PositionManagementOrchestrator` uses for a synchronous close --
+    not a second, hand-rolled state transition."""
+    import strategy_runtime.runtime.uncertain_exchange_state_resolver.resolver as resolver_module
+
+    repository, _ = _repository_with_pending_close()
+    close_port = FakePositionManagementExecutionPort(
+        close_result=PositionClosedConfirmation(_SID, "cycle-1")
+    )
+    resolver = _make_resolver(repository, FakeAbiEntryCycleRecoveryPort(), close_port)
+
+    calls: list[object] = []
+    original = resolver_module.apply_position_management_confirmation
+
+    def _spy(*args: object, **kwargs: object) -> object:
+        calls.append(args)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(resolver_module, "apply_position_management_confirmation", _spy)
+
+    resolver.attempt(_SID)
+
+    assert len(calls) == 1
+    saved = repository.get(_SID)
+    assert saved is not None
+    assert saved.current_trade_cycle is None
+    assert saved.pending_close_recovery is None
+
+
+def test_an_expected_execution_error_from_the_reissued_close_leaves_the_marker_untouched() -> None:
+    """A `PositionManagementExecutionError` (transport/timeout/protocol/public
+    rejection) is the documented external-failure path: retry next tick."""
     repository, before = _repository_with_pending_close()
-    close_port = FakePositionManagementExecutionPort(error=RuntimeError("timeout"))
+    close_port = FakePositionManagementExecutionPort(
+        error=PositionManagementExecutionTimeout("timed out")
+    )
     resolver = _make_resolver(repository, FakeAbiEntryCycleRecoveryPort(), close_port)
 
     resolver.attempt(_SID)
+
+    saved = repository.get(_SID)
+    assert saved == before
+    assert saved.pending_close_recovery is not None
+
+
+def test_an_unexpected_programming_exception_propagates_and_leaves_state_unchanged() -> None:
+    """Anything outside `PositionManagementExecutionError` is a programming
+    error and must not be silently swallowed here -- it must reach the
+    worker's own per-instance exception isolation/logging."""
+    repository, before = _repository_with_pending_close()
+    close_port = FakePositionManagementExecutionPort(error=TypeError("unexpected"))
+    resolver = _make_resolver(repository, FakeAbiEntryCycleRecoveryPort(), close_port)
+
+    with pytest.raises(TypeError):
+        resolver.attempt(_SID)
 
     saved = repository.get(_SID)
     assert saved == before

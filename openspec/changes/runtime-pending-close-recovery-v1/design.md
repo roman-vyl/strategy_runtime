@@ -157,3 +157,41 @@ migration, compaction, or rewrite step is needed at deploy time.
 - **Schema bump touches every future write**, but not existing files;
   replay of mixed-version files is already proven correct by the 1/2
   precedent, and this change's tests extend that proof to include `3`.
+
+## Correction pass (post code-review)
+
+Three decisions were corrected after code review found real defects in the
+first implementation pass; all three are still within this change's scope
+(no new recovery cases, no ABI changes, no protection recovery):
+
+1. **The resolver's close-recovery branch initially built its own
+   `replace(state, current_trade_cycle=None, pending_close_recovery=None)`
+   instead of reusing `apply_position_management_confirmation`** (the same
+   `position_management_execution` helper `PositionManagementOrchestrator`
+   calls for a synchronous close). That duplicated the canonical
+   confirmation-application transition rule in a second place. Corrected:
+   the resolver now builds a `ClosePosition` decision (with a synthetic
+   `CloseSignal(True)` — unused by the transition itself, only by
+   `apply_position_management_confirmation`'s type signature) and calls the
+   same helper, so a synchronous close and an asynchronous recovery close
+   apply the identical rule.
+2. **The resolver's close-recovery branch caught bare `Exception`** around
+   the re-issued `close_position` call, which would silently swallow
+   programming errors (a `TypeError`/`AttributeError` from a bug), not just
+   expected external failures. Corrected: it now catches only
+   `PositionManagementExecutionError` (the existing parent of
+   `PositionManagementExecutionUnavailable`/`Timeout`/`NetworkFailure`/
+   `ProtocolError`/`PublicError`) — an unexpected exception now propagates to
+   the worker's own per-instance exception isolation/logging, unchanged from
+   how the worker already treats any other unexpected exception.
+3. **The domain model technically allowed `pending_entry_recovery` and
+   `pending_close_recovery` to both be non-null**, relying only on
+   `StrategyRuntimeOrchestrator.process()`'s guard and the resolver's
+   `if`/`elif` dispatch order to keep that combination from mattering in
+   practice. Corrected: `StrategyInstanceRuntimeState.__post_init__` now
+   rejects both being non-null at construction, which also fail-closes it at
+   decode (decoding reconstructs the aggregate through the same
+   constructor). No legitimate flow was found that needs both set at once —
+   the existing pending-recovery guard already defers the entire pipeline,
+   including both orchestrators' pre-writes, whenever either marker is
+   already set, so neither pre-write can run while the other marker exists.

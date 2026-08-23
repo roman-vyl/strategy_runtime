@@ -217,9 +217,7 @@ def _decode_envelope(envelope: Any) -> StrategyInstanceRuntimeState:
     schema_version = envelope.get("schema_version")
     if schema_version == 1:
         _reject_unknown_keys(envelope, _ENVELOPE_KEYS_V1, where="envelope")
-        return _decode_aggregate(
-            envelope, pending_entry_recovery=None, pending_close_recovery=None
-        )
+        return _decode_aggregate(envelope, pending_entry_recovery=None, pending_close_recovery=None)
     if schema_version == 2:
         _reject_unknown_keys(envelope, _ENVELOPE_KEYS_V2, where="envelope")
         pending_entry_recovery_data = envelope["pending_entry_recovery"]

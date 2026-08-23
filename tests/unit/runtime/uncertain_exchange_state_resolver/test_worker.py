@@ -25,14 +25,20 @@ def _wait_until(predicate: object, *, timeout: float = 2.0, interval: float = 0.
 
 
 class RecordingRepository:
-    def __init__(self, pending_ids: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self,
+        pending_ids: tuple[str, ...] = (),
+        *,
+        pending_close_ids: tuple[str, ...] = (),
+    ) -> None:
         self.pending_ids = pending_ids
+        self.pending_close_ids = pending_close_ids
 
     def list_ids_with_pending_entry_recovery(self) -> tuple[str, ...]:
         return self.pending_ids
 
     def list_ids_with_pending_close_recovery(self) -> tuple[str, ...]:
-        return ()
+        return self.pending_close_ids
 
 
 class RecordingResolver:
@@ -165,6 +171,52 @@ def test_one_tick_attempts_every_currently_pending_instance() -> None:
         worker.stop_once()
 
     assert {"a", "b", "c"}.issubset(set(resolver.calls))
+
+
+def test_one_tick_attempts_a_pending_close_recovery_instance() -> None:
+    """Direct regression for the close-recovery enumeration: a worker tick
+    must reach `resolver.attempt(...)` exactly once for an instance that only
+    appears in `list_ids_with_pending_close_recovery()`."""
+    repository = RecordingRepository((), pending_close_ids=("instance-a",))
+    resolver = RecordingResolver()
+    worker = UncertainExchangeStateResolverWorker(
+        state_repository=repository,  # type: ignore[arg-type]
+        resolver=resolver,  # type: ignore[arg-type]
+        logger=_LOGGER,
+        poll_interval_seconds=_FAST_INTERVAL_SECONDS,
+    )
+
+    worker.start()
+    try:
+        assert _wait_until(lambda: "instance-a" in resolver.calls)
+    finally:
+        worker.stop_once()
+
+    assert resolver.calls.count("instance-a") >= 1
+
+
+def test_one_tick_does_not_double_attempt_an_id_returned_by_both_enumerations() -> None:
+    """Defensive dedup: even if a repository incorrectly returned the same id
+    from both enumerations, one tick must call `resolver.attempt(...)` for it
+    exactly once. A long poll interval keeps this to a single tick within the
+    test window, so the count reflects one tick's dedup, not cross-tick
+    repetition (which is expected and out of scope here)."""
+    repository = RecordingRepository(("dup",), pending_close_ids=("dup",))
+    resolver = RecordingResolver()
+    worker = UncertainExchangeStateResolverWorker(
+        state_repository=repository,  # type: ignore[arg-type]
+        resolver=resolver,  # type: ignore[arg-type]
+        logger=_LOGGER,
+        poll_interval_seconds=60.0,
+    )
+
+    worker.start()
+    try:
+        assert _wait_until(lambda: "dup" in resolver.calls, timeout=1.0)
+    finally:
+        worker.stop_once()
+
+    assert resolver.calls.count("dup") == 1
 
 
 def test_no_pending_instances_means_no_attempts() -> None:

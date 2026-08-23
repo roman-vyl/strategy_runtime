@@ -109,3 +109,30 @@
 - [x] 9.1 Run the full unit test suite; confirm no regression in
   `pending_entry_recovery`-related tests.
 - [x] 9.2 `openspec validate --strict` for this change.
+
+## 10. Correction pass (post code-review)
+
+- [x] 10.1 Resolver close-recovery reuses `apply_position_management_confirmation`
+  (the canonical `position_management_execution` state-transition helper)
+  instead of a second hand-rolled `replace(...)`; added a spy test proving
+  the resolver calls the canonical helper.
+- [x] 10.2 Narrowed resolver close-recovery exception handling from bare
+  `except Exception` to `except PositionManagementExecutionError`; added
+  tests for an expected execution error (marker untouched, retry next tick)
+  and an unexpected programming exception (propagates, state unchanged).
+- [x] 10.3 Enforced mutual exclusion of `pending_entry_recovery` and
+  `pending_close_recovery` at `StrategyInstanceRuntimeState.__post_init__`
+  (fail-closed at construction and decode); added model-level tests and a
+  codec test for a `schema_version = 3` line with both markers non-null.
+- [x] 10.4 Added a direct worker-tick regression test for close-recovery
+  discovery (`list_ids_with_pending_close_recovery()` only) and a defensive
+  dedup test/fix (`dict.fromkeys`) for an id returned by both enumerations.
+- [x] 10.5 Added a durable restart/replay regression test: a fresh
+  `JsonlStrategyInstanceRuntimeStateRepository` against the same file
+  discovers a replayed `pending_close_recovery`, the resolver resolves it,
+  and a second reload confirms the durably cleared state.
+- [x] 10.6 Full unit suite, targeted close/entry-recovery suites, `ruff
+  check`, `mypy`, and `git diff --check` all green; updated the affected
+  spec deltas (`uncertain-exchange-state-resolver`,
+  `pending-close-recovery-state`, `runtime-durable-state-store`) and
+  `design.md` to match; re-ran `openspec validate --strict`.

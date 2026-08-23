@@ -148,9 +148,7 @@ class StrategyInstanceRuntimeState:
         ):
             raise TypeError("pending_close_recovery must be PendingCloseRecovery or None")
         if self.pending_close_recovery is not None and self.current_trade_cycle is None:
-            raise ValueError(
-                "pending_close_recovery requires a non-null current_trade_cycle"
-            )
+            raise ValueError("pending_close_recovery requires a non-null current_trade_cycle")
         if (
             self.pending_close_recovery is not None
             and self.current_trade_cycle is not None
@@ -160,6 +158,10 @@ class StrategyInstanceRuntimeState:
             raise ValueError(
                 "pending_close_recovery.trade_cycle_id must match "
                 "current_trade_cycle.trade_cycle_id"
+            )
+        if self.pending_entry_recovery is not None and self.pending_close_recovery is not None:
+            raise ValueError(
+                "pending_entry_recovery and pending_close_recovery must not both be set"
             )
 
 

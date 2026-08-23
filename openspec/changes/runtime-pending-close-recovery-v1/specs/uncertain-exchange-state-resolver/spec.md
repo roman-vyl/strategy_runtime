@@ -87,6 +87,13 @@ thread is introduced for close recovery.
 - **AND** a failure resolving one instance does not prevent attempting the
   others in the same tick, regardless of marker kind
 
+#### Scenario: One tick attempts each id at most once, even if returned by both enumerations
+- **WHEN** the two enumerations for one tick contain the same
+  `strategy_instance_id` (defensive: the domain model already forbids both
+  markers being set on one instance, so this should not occur in practice)
+- **THEN** the worker calls `resolver.attempt(...)` for that id exactly once
+  in that tick, not once per enumeration it appeared in
+
 #### Scenario: No tight busy-loop
 - **WHEN** the worker is running
 - **THEN** it sleeps for a fixed, bounded interval between ticks
@@ -112,7 +119,7 @@ thread is introduced for close recovery.
 - **AND** this completes before the ABI HTTP client used by the resolver is
   closed
 
-### Requirement: An uncertain close resolves by re-issuing the close command
+### Requirement: An uncertain close resolves by re-issuing the close command through the canonical confirmation-application path
 When `pending_close_recovery` is non-null, the resolver SHALL resolve it by
 calling `PositionManagementExecutionPort.close_position` again with a
 `ClosePositionCommand` for `pending_close_recovery.trade_cycle_id`, relying
@@ -120,26 +127,47 @@ on ABI's own pair-scoped `close_position` idempotency (a `terminal_closed`
 record short-circuits with no exchange mutation; an in-progress or
 not-yet-dispatched close re-derives every fact fresh and reuses its durable
 deterministic `close_order_link_id` rather than dispatching a second market
-order) rather than performing a read-only query of its own.
+order) rather than performing a read-only query of its own. On a returned
+confirmation, the resolver SHALL apply it through the exact same
+`apply_position_management_confirmation` helper (`position_management_execution`)
+that `PositionManagementOrchestrator` calls for a synchronous close — the
+resolver SHALL NOT implement a second, hand-rolled state transition for
+clearing `current_trade_cycle`/`pending_close_recovery`. A synchronous close
+and an asynchronous recovery close therefore apply the identical state
+transition rule.
 
-#### Scenario: A verified confirmation clears both fields in the same write
+#### Scenario: A verified confirmation clears both fields in the same write, via the canonical helper
 - **WHEN** the re-issued `close_position` call returns a matching
   `PositionClosedConfirmation`
-- **THEN** the resolver applies it through the same
-  `current-trade-cycle-state` confirmation-application rules
-  `PositionManagementOrchestrator` uses, clearing `current_trade_cycle` and
-  `pending_close_recovery` together in one durable save
+- **THEN** the resolver passes it to `apply_position_management_confirmation`
+  — the same helper `PositionManagementOrchestrator` uses — which clears
+  `current_trade_cycle` and `pending_close_recovery` together in the
+  returned state
+- **AND** the resolver then durably saves that returned state; it does not
+  construct the cleared state by its own `replace(...)` call
 
-#### Scenario: A repeated failure or inconclusive re-issue leaves the marker untouched
-- **WHEN** the re-issued `close_position` call raises (transport, timeout, or
-  any other exception) instead of returning a matching confirmation
+#### Scenario: An expected external execution failure leaves the marker untouched
+- **WHEN** the re-issued `close_position` call raises a
+  `PositionManagementExecutionError` (or any of its subtypes: transport
+  failure, timeout, protocol error, or a documented public rejection)
+  instead of returning a confirmation
 - **THEN** the resolver durably changes nothing
 - **AND** the instance remains eligible for another attempt on the next tick
 
+#### Scenario: An unexpected exception propagates instead of being swallowed
+- **WHEN** the re-issued `close_position` call raises any exception that is
+  not a `PositionManagementExecutionError` — a programming error, not a
+  documented external execution failure
+- **THEN** the resolver does not catch it
+- **AND** it propagates out of `attempt(...)` to the worker's own
+  per-instance exception isolation and logging, exactly like any other
+  unexpected exception during a tick
+
 #### Scenario: A mismatched confirmation leaves the marker untouched rather than corrupting state
-- **WHEN** the re-issued call returns a confirmation that fails the
-  `current-trade-cycle-state` matching rules
-- **THEN** the resolver does not apply it
+- **WHEN** `apply_position_management_confirmation` raises
+  `PositionManagementExecutionInvariantError` for the re-issued call's
+  confirmation
+- **THEN** the resolver does not save any state
 - **AND** `pending_close_recovery` and `current_trade_cycle` remain exactly
   as they were, eligible for a later attempt
 

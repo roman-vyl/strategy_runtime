@@ -122,6 +122,13 @@ schema/domain validation failure.
 - **AND** the decoded aggregate's `pending_close_recovery` holds that exact
   `trade_cycle_id`
 
+#### Scenario: A schema_version 3 line with both markers non-null fails closed
+- **WHEN** replay encounters a line with `schema_version: 3` where both
+  `pending_entry_recovery` and `pending_close_recovery` hold non-null values
+- **THEN** decoding raises a schema/domain validation failure, per
+  `pending-close-recovery-state`'s mutual-exclusion invariant, with the same
+  fail-closed replay handling as any other invalid record
+
 #### Scenario: Every new write is schema_version 3
 - **WHEN** `save(...)` or the creation path of `get_or_create(...)` encodes a
   line

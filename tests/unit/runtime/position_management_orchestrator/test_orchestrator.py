@@ -328,9 +328,7 @@ def test_failed_pre_write_never_calls_close_position() -> None:
     port = FakeExecutionPort(close_result=PositionClosedConfirmation("instance", "cycle-1"))
 
     class FailingSaveRepository(InMemoryStrategyInstanceRuntimeStateRepository):
-        def save(
-            self, state: StrategyInstanceRuntimeState
-        ) -> StrategyInstanceRuntimeState:
+        def save(self, state: StrategyInstanceRuntimeState) -> StrategyInstanceRuntimeState:
             raise RuntimeError("durable write failed")
 
     repository = FailingSaveRepository()

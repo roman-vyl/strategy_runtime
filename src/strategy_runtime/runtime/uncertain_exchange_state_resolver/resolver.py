@@ -30,14 +30,22 @@ from strategy_runtime.runtime.abi.entry_package_models import (
 )
 from strategy_runtime.runtime.coordination import StrategyInstanceKeyedMutexRegistry
 from strategy_runtime.runtime.first_fill.state_applier import apply_first_fill
+from strategy_runtime.runtime.position_management_decision.models import ClosePosition
+from strategy_runtime.runtime.position_management_execution.errors import (
+    PositionManagementExecutionError,
+    PositionManagementExecutionInvariantError,
+)
 from strategy_runtime.runtime.position_management_execution.models import (
     ClosePositionCommand,
-    PositionClosedConfirmation,
+)
+from strategy_runtime.runtime.position_management_execution.state_applier import (
+    apply_position_management_confirmation,
 )
 from strategy_runtime.runtime.position_management_orchestrator.ports import (
     PositionManagementExecutionPort,
 )
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
+from strategy_runtime.runtime.recipes.position_management import CloseSignal
 from strategy_runtime.runtime.state.models import (
     AppliedEntryPackage,
     CurrentTradeCycle,
@@ -101,25 +109,25 @@ class UncertainExchangeStateResolver:
         )
         try:
             confirmation = self._position_management_execution.close_position(command)
-        except Exception:
-            # Transport failure or any other exception: leave the marker
-            # untouched, eligible for another attempt on the next tick.
+        except PositionManagementExecutionError:
+            # An expected external execution failure (transport, timeout,
+            # protocol, or a documented public rejection): leave the marker
+            # untouched, eligible for another attempt on the next tick. Any
+            # other exception is a programming error and must propagate to
+            # the worker's own per-instance exception isolation/logging.
             return
 
-        if (
-            type(confirmation) is not PositionClosedConfirmation
-            or confirmation.strategy_instance_id != state.strategy_instance_id
-            or confirmation.trade_cycle_id != trade_cycle_id
-        ):
+        decision = ClosePosition(trade_cycle_id=trade_cycle_id, close_signal=CloseSignal(True))
+        try:
+            resulting_state = apply_position_management_confirmation(
+                state, decision, command, confirmation
+            )
+        except PositionManagementExecutionInvariantError:
+            # A mismatched or malformed confirmation: leave the marker
+            # untouched rather than corrupting state.
             return
 
-        current_cycle = state.current_trade_cycle
-        if current_cycle is None or current_cycle.trade_cycle_id != trade_cycle_id:
-            return
-
-        self._state_repository.save(
-            replace(state, current_trade_cycle=None, pending_close_recovery=None)
-        )
+        self._state_repository.save(resulting_state)
 
     def _resolve_uncertain_apply(
         self,

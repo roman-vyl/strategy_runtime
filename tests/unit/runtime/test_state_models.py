@@ -10,6 +10,7 @@ from strategy_runtime.runtime.state.models import (
     CurrentTradeCycle,
     FrozenExecutedEntryContext,
     GetOrCreateStrategyInstanceRuntimeStateRequest,
+    PendingCloseRecovery,
     PendingEntryRecovery,
     RegisteredSpecSnapshot,
     StrategyInstanceRuntimeState,
@@ -331,3 +332,62 @@ def test_state_rejects_invalid_pending_entry_recovery_type() -> None:
             risk_multiplier="1",
             pending_entry_recovery=cast("PendingEntryRecovery", object()),
         )
+
+
+# ---------------------------------------------------------------------------
+# Mutual exclusion: pending_entry_recovery and pending_close_recovery must
+# never both be set on one aggregate (correction pass item 3).
+# ---------------------------------------------------------------------------
+
+
+def test_state_rejects_both_recovery_markers_set_together() -> None:
+    cycle = CurrentTradeCycle("cycle-1", AppliedEntryPackage(desired_entry(), "0.01"))
+    with pytest.raises(
+        ValueError, match="pending_entry_recovery and pending_close_recovery must not both"
+    ):
+        StrategyInstanceRuntimeState(
+            strategy_instance_id="instance",
+            strategy_id="strategy",
+            registered_spec_snapshot=RegisteredSpecSnapshot("BTCUSDT.P", "5m", {}, "a.json"),
+            risk_multiplier="1",
+            current_trade_cycle=cycle,
+            pending_entry_recovery=PendingEntryRecovery("cycle-1"),
+            pending_close_recovery=PendingCloseRecovery("cycle-1"),
+        )
+
+
+def test_state_accepts_only_pending_close_recovery_set() -> None:
+    cycle = CurrentTradeCycle("cycle-1", AppliedEntryPackage(desired_entry(), "0.01"))
+    state = StrategyInstanceRuntimeState(
+        strategy_instance_id="instance",
+        strategy_id="strategy",
+        registered_spec_snapshot=RegisteredSpecSnapshot("BTCUSDT.P", "5m", {}, "a.json"),
+        risk_multiplier="1",
+        current_trade_cycle=cycle,
+        pending_close_recovery=PendingCloseRecovery("cycle-1"),
+    )
+    assert state.pending_entry_recovery is None
+    assert state.pending_close_recovery == PendingCloseRecovery("cycle-1")
+
+
+def test_state_accepts_only_pending_entry_recovery_set() -> None:
+    state = StrategyInstanceRuntimeState(
+        strategy_instance_id="instance",
+        strategy_id="strategy",
+        registered_spec_snapshot=RegisteredSpecSnapshot("BTCUSDT.P", "5m", {}, "a.json"),
+        risk_multiplier="1",
+        pending_entry_recovery=PendingEntryRecovery("cycle-new"),
+    )
+    assert state.pending_close_recovery is None
+    assert state.pending_entry_recovery == PendingEntryRecovery("cycle-new")
+
+
+def test_state_accepts_both_recovery_markers_null() -> None:
+    state = StrategyInstanceRuntimeState(
+        strategy_instance_id="instance",
+        strategy_id="strategy",
+        registered_spec_snapshot=RegisteredSpecSnapshot("BTCUSDT.P", "5m", {}, "a.json"),
+        risk_multiplier="1",
+    )
+    assert state.pending_entry_recovery is None
+    assert state.pending_close_recovery is None

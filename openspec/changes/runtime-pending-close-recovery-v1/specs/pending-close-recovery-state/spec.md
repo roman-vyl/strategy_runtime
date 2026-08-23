@@ -75,6 +75,44 @@ particular state. It records only that this Runtime process issued a
 - **AND** only a later ABI-sourced confirmation or resolver outcome may
   establish that fact
 
+### Requirement: pending_entry_recovery and pending_close_recovery are mutually exclusive
+At most one of `pending_entry_recovery` and `pending_close_recovery` SHALL be
+non-null on any `StrategyInstanceRuntimeState` at a time. This is enforced at
+construction (and therefore at decode, since decoding reconstructs the
+aggregate through its normal constructor) — it is not left to incidental
+ordering in any caller such as the resolver's own `if`/`elif` dispatch.
+Normal Runtime flow never needs both non-null simultaneously:
+`StrategyRuntimeOrchestrator.process()`'s pending-recovery guard already
+defers the entire pipeline — including `EntryReconciliationOrchestrator` and
+`PositionManagementOrchestrator` — whenever either marker is already
+non-null, so neither orchestrator's pre-write can ever run while the other
+marker is set.
+
+#### Scenario: Construction rejects both markers set together
+- **WHEN** `StrategyInstanceRuntimeState` is constructed with both
+  `pending_entry_recovery` and `pending_close_recovery` non-null
+- **THEN** construction fails before the value can be used
+
+#### Scenario: A schema_version 3 durable line with both markers non-null fails closed on decode
+- **WHEN** a `schema_version = 3` durable line holds a non-null
+  `pending_entry_recovery` and a non-null `pending_close_recovery`
+- **THEN** decoding raises a schema/domain validation failure through the
+  same construction path, and replay treats it exactly like any other
+  fail-closed record
+
+#### Scenario: Existing schema_version 1/2 decoding is unaffected
+- **WHEN** a `schema_version = 1` line (no markers) or a `schema_version = 2`
+  line (only `pending_entry_recovery`, no `pending_close_recovery` key)
+  decodes
+- **THEN** decoding succeeds exactly as it did before this invariant existed
+  — a `schema_version = 1` or `2` line can never carry both keys, so this
+  invariant never rejects one
+
+#### Scenario: One marker set, or both null, decodes and constructs normally
+- **WHEN** exactly one of `pending_entry_recovery`/`pending_close_recovery`
+  is non-null, or both are null
+- **THEN** construction and decoding succeed normally
+
 ### Requirement: No file rewrite is required to introduce this field
 Introducing `pending_close_recovery` SHALL follow the same additive,
 non-rewriting migration shape `runtime-durable-state-store` already
