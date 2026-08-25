@@ -165,7 +165,6 @@ def test_authoritative_abi_openapi_matches_runtime_close_position_contract() -> 
     }
 
 
-
 def test_authoritative_abi_openapi_no_longer_defines_the_retired_delete_close_route() -> None:
     document = read_authoritative_openapi()
     open_position_path = document["paths"].get(
