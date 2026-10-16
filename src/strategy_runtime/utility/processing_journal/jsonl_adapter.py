@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable
+import os
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from threading import Lock
 from typing import Final
@@ -24,7 +25,7 @@ from strategy_runtime.utility.processing_journal.models import (
 IdentifierFactory = Callable[[], str]
 TimestampFactory = Callable[[], str]
 
-_SCHEMA_VERSION: Final = 1
+_SCHEMA_VERSION: Final = 2
 _SOURCE: Final = "strategy_runtime.committed_bar_orchestrator"
 
 
@@ -126,6 +127,27 @@ class JsonlProcessingJournal:
             },
         )
 
+    def live_entry_evaluated(
+        self,
+        *,
+        strategy_instance_id: str,
+        instrument: str,
+        timeframe: str,
+        bar_open_time_ms: int,
+        desired_entry: Mapping[str, JsonValue] | None,
+    ) -> None:
+        self._record(
+            event_type=ProcessingJournalEventType.LIVE_ENTRY_EVALUATED,
+            severity="info",
+            strategy_instance_id=strategy_instance_id,
+            payload={
+                "instrument": instrument,
+                "timeframe": timeframe,
+                "bar_open_time_ms": bar_open_time_ms,
+                "desired_entry": desired_entry,
+            },
+        )
+
     def _record(
         self,
         *,
@@ -159,6 +181,7 @@ class JsonlProcessingJournal:
                     handle.write(record)
                     handle.write("\n")
                     handle.flush()
+                    os.fsync(handle.fileno())
         except Exception:
             self._failure_count += 1
             self._logger.exception(

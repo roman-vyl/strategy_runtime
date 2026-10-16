@@ -1,6 +1,9 @@
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import pytest
 
 from strategy_runtime.utility.committed_bar.models import (
     CommittedBarEvent,
@@ -121,3 +124,73 @@ def test_serialization_is_deterministic(tmp_path: Path) -> None:
     assert line == json.dumps(
         json.loads(line), ensure_ascii=False, separators=(",", ":"), sort_keys=True
     )
+
+
+def test_live_entry_evaluated_serializes_desired_entry_and_null(tmp_path: Path) -> None:
+    path = tmp_path / "runtime.jsonl"
+    journal = make_journal(path)
+    desired_entry = {
+        "side": "long",
+        "source_plan_bar_open_time_ms": 900,
+        "planned_entry_price": "100.5",
+        "initial_stop_price": "99",
+        "initial_take_price": "103.25",
+        "locked_exit_profile": "runner",
+    }
+
+    journal.live_entry_evaluated(
+        strategy_instance_id="dep-a",
+        instrument="BTCUSDT.P",
+        timeframe="5m",
+        bar_open_time_ms=1000,
+        desired_entry=desired_entry,
+    )
+    journal.live_entry_evaluated(
+        strategy_instance_id="dep-a",
+        instrument="BTCUSDT.P",
+        timeframe="5m",
+        bar_open_time_ms=1300,
+        desired_entry=None,
+    )
+
+    with_entry, without_entry = (json.loads(line) for line in path.read_text().splitlines())
+    assert with_entry["event_type"] == "live_entry_evaluated"
+    assert with_entry["schema_version"] == 2
+    assert with_entry["strategy_instance_id"] == "dep-a"
+    assert with_entry["payload"] == {
+        "instrument": "BTCUSDT.P",
+        "timeframe": "5m",
+        "bar_open_time_ms": 1000,
+        "desired_entry": desired_entry,
+    }
+    assert without_entry["payload"]["bar_open_time_ms"] == 1300
+    assert without_entry["payload"]["desired_entry"] is None
+    assert "desired_entry" in without_entry["payload"]
+
+
+def test_appends_are_fsynced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    synced: list[int] = []
+    monkeypatch.setattr(os, "fsync", lambda fd: synced.append(fd))
+    journal = make_journal(tmp_path / "runtime.jsonl")
+
+    journal.orchestration_started(event=CommittedBarEvent("BTCUSDT.P", "5m", 123))
+
+    assert len(synced) == 1
+
+
+def test_fsync_failure_is_absorbed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken_fsync(fd: int) -> None:
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(os, "fsync", broken_fsync)
+    journal = make_journal(tmp_path / "runtime.jsonl")
+
+    journal.live_entry_evaluated(
+        strategy_instance_id="dep-a",
+        instrument="BTCUSDT.P",
+        timeframe="5m",
+        bar_open_time_ms=1000,
+        desired_entry=None,
+    )
+
+    assert journal.failure_count == 1
