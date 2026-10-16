@@ -11,15 +11,20 @@ from starlette.types import Lifespan
 
 from strategy_runtime.adapters.http.models import (
     AcceptedResponse,
+    CatalogUnavailableResponse,
     ClosedBarRequest,
+    DuplicateDeploymentIdentityItem,
     FirstFillConflictResponse,
     FirstFillRecordedResponse,
     FirstFillRequest,
     InternalErrorResponse,
+    InvalidDeploymentFileItem,
     LiveResponse,
     NotReadyResponse,
     ReadyResponse,
     RejectedResponse,
+    StrategyInstanceItem,
+    StrategyInstanceListResponse,
     StrategyInstanceStateNotFoundResponse,
 )
 from strategy_runtime.runtime.abi_execution_event.models import AbiFirstFillExecutionEvent
@@ -31,8 +36,13 @@ from strategy_runtime.runtime.first_fill.errors import FirstFillInvariantError
 from strategy_runtime.runtime.state.errors import StrategyInstanceStateNotFound
 from strategy_runtime.runtime.state.models import StrategyInstanceRuntimeState
 from strategy_runtime.utility.committed_bar import CommittedBarEvent
+from strategy_runtime.utility.deployment_catalog import (
+    DeploymentCatalogSnapshot,
+    DeploymentCatalogUnavailableError,
+)
 
 FirstFillUseCase = Callable[[AbiFirstFillExecutionEvent], StrategyInstanceRuntimeState]
+LoadDeploymentCatalog = Callable[[], DeploymentCatalogSnapshot]
 
 
 def create_http_app(
@@ -40,6 +50,7 @@ def create_http_app(
     ready: bool,
     committed_bar_intake: CommittedBarIntakeBoundary | None,
     process_first_fill: FirstFillUseCase | None,
+    load_deployment_catalog: LoadDeploymentCatalog | None = None,
     logger: logging.Logger | None = None,
     lifespan: Lifespan[FastAPI] | None = None,
 ) -> FastAPI:
@@ -47,6 +58,7 @@ def create_http_app(
     app.state.ready = ready
     app.state.committed_bar_intake = committed_bar_intake
     app.state.process_first_fill = process_first_fill
+    app.state.load_deployment_catalog = load_deployment_catalog
     app.state.logger = logger or logging.getLogger(__name__)
 
     @app.exception_handler(RequestValidationError)
@@ -161,5 +173,55 @@ def create_http_app(
             return JSONResponse(status_code=500, content=InternalErrorResponse().model_dump())
 
         return FirstFillRecordedResponse()
+
+    @app.get(
+        "/v1/strategy-instances",
+        response_model=StrategyInstanceListResponse,
+        responses={
+            503: {"model": NotReadyResponse | CatalogUnavailableResponse},
+            500: {"model": InternalErrorResponse},
+        },
+    )
+    def list_strategy_instances() -> StrategyInstanceListResponse | JSONResponse:
+        if not app.state.ready or app.state.load_deployment_catalog is None:
+            return JSONResponse(status_code=503, content=NotReadyResponse().model_dump())
+
+        try:
+            snapshot = app.state.load_deployment_catalog()
+        except DeploymentCatalogUnavailableError:
+            return JSONResponse(status_code=503, content=CatalogUnavailableResponse().model_dump())
+        except Exception:
+            app.state.logger.exception("Failed to list strategy instances")
+            return JSONResponse(status_code=500, content=InternalErrorResponse().model_dump())
+
+        return StrategyInstanceListResponse(
+            scanned_file_count=snapshot.scanned_file_count,
+            strategy_instances=[
+                StrategyInstanceItem(
+                    strategy_instance_id=item.strategy_instance_id,
+                    strategy_id=item.strategy_id,
+                    instrument=item.instrument,
+                    base_timeframe=item.base_timeframe,
+                    enabled=item.enabled,
+                    source_path=item.source_path,
+                )
+                for item in snapshot.accepted_deployments
+            ],
+            invalid_files=[
+                InvalidDeploymentFileItem(
+                    source_path=item.source_path,
+                    error_code=item.error_code,
+                    error_message=item.error_message,
+                )
+                for item in snapshot.invalid_files
+            ],
+            duplicate_identities=[
+                DuplicateDeploymentIdentityItem(
+                    strategy_instance_id=item.strategy_instance_id,
+                    source_paths=list(item.source_paths),
+                )
+                for item in snapshot.duplicate_identities
+            ],
+        )
 
     return app

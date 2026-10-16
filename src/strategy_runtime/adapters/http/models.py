@@ -61,3 +61,34 @@ class FirstFillConflictResponse(BaseModel):
 
 class InternalErrorResponse(BaseModel):
     status: Literal["internal_error"] = "internal_error"
+
+
+class CatalogUnavailableResponse(BaseModel):
+    status: Literal["catalog_unavailable"] = "catalog_unavailable"
+
+
+class StrategyInstanceItem(BaseModel):
+    strategy_instance_id: str
+    strategy_id: str
+    instrument: str
+    base_timeframe: str
+    enabled: bool
+    source_path: str
+
+
+class InvalidDeploymentFileItem(BaseModel):
+    source_path: str
+    error_code: str
+    error_message: str | None
+
+
+class DuplicateDeploymentIdentityItem(BaseModel):
+    strategy_instance_id: str
+    source_paths: list[str]
+
+
+class StrategyInstanceListResponse(BaseModel):
+    scanned_file_count: int
+    strategy_instances: list[StrategyInstanceItem]
+    invalid_files: list[InvalidDeploymentFileItem]
+    duplicate_identities: list[DuplicateDeploymentIdentityItem]

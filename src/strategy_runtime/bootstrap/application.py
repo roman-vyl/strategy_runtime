@@ -258,6 +258,7 @@ def build_application(
             ready=True,
             committed_bar_intake=committed_bar_intake,
             process_first_fill=process_first_fill,
+            load_deployment_catalog=catalog.load_snapshot,
             logger=runtime_logger,
             lifespan=_lifespan,
         )
