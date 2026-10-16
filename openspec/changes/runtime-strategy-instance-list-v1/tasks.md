@@ -11,3 +11,8 @@
 - [x] 2.3 Read-only: provider called once per request; spec files byte-identical after a request. The route receives only the catalog loader, so it has no access to the state repository, journal or queue.
 - [x] 2.4 Existing architecture test (`app.py` imports no infrastructure, repository or mutex) still passes; composition test: ready app has the route.
 - [x] 2.5 `make verify` and `openspec validate --all --strict` green.
+
+## 3. Verification on the Mac
+
+- [x] 3.1 Build Runtime from the change and call `GET /v1/strategy-instances` against the real catalog (ABI dry-run).
+  2026-10-16: passed. Image built from `a8223c0`, ABI `dryRun: true`, testnet, no key. `200`, `scanned_file_count` 33 = number of `*.json`; 33 instances: `journal-smoke-eth-ema500` enabled (same `strategy_instance_id` as in the journal smoke) and 32 `loadtest-*` disabled; six fields each; `invalid_files` and `duplicate_identities` empty; no `raw_spec` or state fields; `POST/PUT/PATCH/DELETE` return `405`; `/health/ready` `200`; specs, state and `journal/runtime.jsonl` unchanged (checksums and size) across the requests.
