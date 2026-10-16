@@ -17,6 +17,7 @@ class ProcessingJournalEventType(StrEnum):
     STRATEGY_CYCLE_DISPATCH_SUCCEEDED = "strategy_cycle_dispatch_succeeded"
     STRATEGY_CYCLE_DISPATCH_FAILED = "strategy_cycle_dispatch_failed"
     COMMITTED_BAR_ORCHESTRATION_COMPLETED = "committed_bar_orchestration_completed"
+    LIVE_ENTRY_EVALUATED = "live_entry_evaluated"
 
 
 def freeze_json(value: object) -> JsonValue:

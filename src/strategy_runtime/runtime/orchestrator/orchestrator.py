@@ -1,6 +1,6 @@
 """Semantic Strategy Runtime orchestrator through final aggregate application."""
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 from strategy_runtime.runtime.coordination import StrategyInstanceKeyedMutexRegistry
 from strategy_runtime.runtime.entry_reconciliation_orchestrator import (
@@ -13,6 +13,7 @@ from strategy_runtime.runtime.open_position.models import (
 )
 from strategy_runtime.runtime.open_position.ports import OpenPositionResolverPort
 from strategy_runtime.runtime.orchestrator.errors import UnknownStrategyProjectionError
+from strategy_runtime.runtime.orchestrator.ports import LiveEntryEvaluationJournalPort
 from strategy_runtime.runtime.position_management_orchestrator import (
     PositionManagementOrchestrator,
 )
@@ -44,6 +45,7 @@ class StrategyRuntimeOrchestrator:
         keyed_mutex_registry: StrategyInstanceKeyedMutexRegistry,
         entry_reconciliation_orchestrator: EntryReconciliationOrchestrator,
         position_management_orchestrator: PositionManagementOrchestrator,
+        live_entry_journal: LiveEntryEvaluationJournalPort | None = None,
     ) -> None:
         self._state_repository = state_repository
         self._open_position_resolver = open_position_resolver
@@ -51,6 +53,7 @@ class StrategyRuntimeOrchestrator:
         self._keyed_mutex_registry = keyed_mutex_registry
         self._entry_reconciliation_orchestrator = entry_reconciliation_orchestrator
         self._position_management_orchestrator = position_management_orchestrator
+        self._live_entry_journal = live_entry_journal
 
     def process(
         self, unit: StrategyBarProcessingUnit[DeploymentSpecification]
@@ -83,6 +86,7 @@ class StrategyRuntimeOrchestrator:
 
             if type(projection) is LiveEntryProjectedStrategyInstance:
                 source_state = projection.source.resolved_state.runtime_state
+                self._journal_live_entry(unit, projection)
                 resulting_state = self._entry_reconciliation_orchestrator.execute(projection)
             elif type(projection) is OpenTradeProjectedStrategyInstance:
                 source_state = projection.source.resolved_state.runtime_state
@@ -99,6 +103,23 @@ class StrategyRuntimeOrchestrator:
     ) -> StrategyCycleDispatchOutcome:
         self.process(unit)
         return StrategyCycleDispatchOutcome.succeeded(unit.strategy_instance_id)
+
+    def _journal_live_entry(
+        self,
+        unit: StrategyBarProcessingUnit[DeploymentSpecification],
+        projection: LiveEntryProjectedStrategyInstance,
+    ) -> None:
+        if self._live_entry_journal is None:
+            return
+        self._live_entry_journal.live_entry_evaluated(
+            strategy_instance_id=unit.strategy_instance_id,
+            instrument=unit.deployment.instrument,
+            timeframe=unit.deployment.base_timeframe,
+            bar_open_time_ms=unit.committed_bar.open_time_ms,
+            desired_entry=(
+                None if projection.desired_entry is None else asdict(projection.desired_entry)
+            ),
+        )
 
     def _ensure_first_fill_frozen(
         self, resolved: PositionResolvedStrategyInstanceRuntimeState

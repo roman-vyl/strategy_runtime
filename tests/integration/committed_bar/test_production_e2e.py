@@ -174,6 +174,14 @@ def _read_journal(journal_path: Path) -> list[dict[str, object]]:
     return [json.loads(line) for line in journal_path.read_text(encoding="utf-8").splitlines()]
 
 
+def _live_entry_events(journal_path: Path) -> list[dict[str, object]]:
+    return [
+        record
+        for record in _read_journal(journal_path)
+        if record["event_type"] == "live_entry_evaluated"
+    ]
+
+
 def _dispatch_outcomes(journal_path: Path) -> list[dict[str, object]]:
     return [
         record
@@ -402,6 +410,14 @@ def test_happy_path_applies_desired_entry_and_saves_current_trade_cycle(
         assert len(entry_package_requests) == 1
         assert entry_package_requests[0].json()["risk_multiplier"] == state.risk_multiplier == "1"
 
+        (event,) = _live_entry_events(tmp_path / "journal" / "runtime.jsonl")
+        assert event["strategy_instance_id"] == _STRATEGY_INSTANCE_ID
+        assert event["schema_version"] == 2
+        payload = event["payload"]
+        assert isinstance(payload, dict)
+        assert payload["bar_open_time_ms"] == 1
+        assert payload["desired_entry"] == _desired_entry_wire()
+
 
 def test_duplicate_committed_bar_event_is_a_no_op_with_no_duplicate_mutation(
     tmp_path: Path, engine_server: FakeHttpServer, abi_server: FakeHttpServer
@@ -543,6 +559,12 @@ def test_no_op_when_desired_entry_is_null_and_no_current_cycle(
         state = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
         assert state is not None
         assert state.current_trade_cycle is None
+
+        (event,) = _live_entry_events(tmp_path / "journal" / "runtime.jsonl")
+        payload = event["payload"]
+        assert isinstance(payload, dict)
+        assert payload["bar_open_time_ms"] == 1
+        assert payload["desired_entry"] is None
 
 
 def test_cancel_clears_cycle_only_after_entry_package_absent_confirmation(

@@ -214,6 +214,7 @@ def build_application(
             keyed_mutex_registry=keyed_mutex_registry,
             entry_reconciliation_orchestrator=entry_reconciliation_orchestrator,
             position_management_orchestrator=position_management_orchestrator,
+            live_entry_journal=journal,
         )
         abi_execution_event_orchestrator = AbiExecutionEventOrchestrator(
             state_repository=state_repository,
