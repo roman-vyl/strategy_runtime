@@ -7,7 +7,7 @@
 ## 2. Tests
 
 - [x] 2.1 HTTP integration: enabled and disabled in one response and catalog order; exact item field set; `enabled` from the file; no `raw_spec` or state fields; empty catalog; `invalid_files` with `error_message` present and `null`; `duplicate_identities` with both paths and neither deployment in the list; per-request reread after a file change.
-- [x] 2.2 Errors: `503 not_ready` (not ready and provider missing); `503 catalog_unavailable`; `500 error` for an unexpected exception; `405` for POST/PUT/PATCH/DELETE.
+- [x] 2.2 Errors (including the OpenAPI schema declaring both 503 bodies): `503 not_ready` (not ready and provider missing); `503 catalog_unavailable`; `500 internal_error` for an unexpected exception; `405` for POST/PUT/PATCH/DELETE.
 - [x] 2.3 Read-only: provider called once per request; spec files byte-identical after a request. The route receives only the catalog loader, so it has no access to the state repository, journal or queue.
 - [x] 2.4 Existing architecture test (`app.py` imports no infrastructure, repository or mutex) still passes; composition test: ready app has the route.
 - [x] 2.5 `make verify` and `openspec validate --all --strict` green.

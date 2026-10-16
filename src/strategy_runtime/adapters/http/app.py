@@ -178,7 +178,7 @@ def create_http_app(
         "/v1/strategy-instances",
         response_model=StrategyInstanceListResponse,
         responses={
-            503: {"model": NotReadyResponse},
+            503: {"model": NotReadyResponse | CatalogUnavailableResponse},
             500: {"model": InternalErrorResponse},
         },
     )

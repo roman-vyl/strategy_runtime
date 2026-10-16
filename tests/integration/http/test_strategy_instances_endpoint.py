@@ -318,3 +318,25 @@ def test_built_application_serves_the_list(tmp_path: Path) -> None:
     assert response.status_code == 200
     items = response.json()["strategy_instances"]
     assert [(item["source_path"], item["enabled"]) for item in items] == [("a.json", False)]
+
+
+def test_openapi_declares_both_503_bodies_and_the_500_body() -> None:
+    schema = make_client(None).get("/openapi.json").json()
+    responses = schema["paths"][PATH]["get"]["responses"]
+
+    assert set(responses) >= {"200", "500", "503"}
+    refs = {
+        option["$ref"].rsplit("/", 1)[-1]
+        for option in responses["503"]["content"]["application/json"]["schema"]["anyOf"]
+    }
+    assert refs == {"NotReadyResponse", "CatalogUnavailableResponse"}
+    schemas = schema["components"]["schemas"]
+    assert schemas["NotReadyResponse"]["properties"]["status"]["const"] == "not_ready"
+    assert (
+        schemas["CatalogUnavailableResponse"]["properties"]["status"]["const"]
+        == "catalog_unavailable"
+    )
+    assert (
+        responses["500"]["content"]["application/json"]["schema"]["$ref"].rsplit("/", 1)[-1]
+        == "InternalErrorResponse"
+    )
