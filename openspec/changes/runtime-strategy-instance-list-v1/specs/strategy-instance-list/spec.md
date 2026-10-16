@@ -67,4 +67,4 @@ Strategy Runtime SHALL answer a list request that cannot be served with a distin
 
 #### Scenario: Unexpected failure
 - **WHEN** reading the catalog raises any other exception
-- **THEN** Runtime returns `500 {"status":"error"}` and logs the exception
+- **THEN** Runtime returns `500 {"status":"internal_error"}` and logs the exception

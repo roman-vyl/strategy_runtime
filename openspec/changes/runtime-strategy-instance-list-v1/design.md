@@ -45,7 +45,7 @@ not collide. Other methods on the new path return `405`.
 |---|---|
 | Runtime not ready, or the provider is not wired | `503 {"status":"not_ready"}` |
 | `DeploymentCatalogUnavailableError` | `503 {"status":"catalog_unavailable"}` |
-| Any other exception from the provider | `500 {"status":"error"}`, logged with traceback |
+| Any other exception from the provider | `500 {"status":"internal_error"}`, logged with traceback |
 
 The existing `NotReadyResponse` and `InternalErrorResponse` models are reused; only
 `CatalogUnavailableResponse` is new. A spec file that makes `load_snapshot()` itself raise (the
@@ -58,9 +58,9 @@ The route is a synchronous `def` (as the first-fill route is), so FastAPI runs i
 pool and the filesystem scan never blocks the event loop.
 
 ### D5. Layering
-`app.py` receives the provider as a parameter `list_strategy_instances` (a zero-argument
-callable returning the response model or a plain snapshot-derived structure) and imports no
-infrastructure. `bootstrap/application.py` builds the callable over the already constructed
+`app.py` receives the provider as a parameter `load_deployment_catalog` (a zero-argument
+callable returning a `DeploymentCatalogSnapshot`), maps it to the response models and imports no
+infrastructure. `bootstrap/application.py` passes the already constructed
 `catalog.load_snapshot`. No new object or store is created. `create_http_app` keeps working when
 the parameter is omitted (route answers `503 not_ready`).
 
