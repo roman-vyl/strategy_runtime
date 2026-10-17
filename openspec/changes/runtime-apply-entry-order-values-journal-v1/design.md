@@ -8,9 +8,17 @@ Facts from the code on `main` (63bd7f5):
   `entry_reconciliation_bridge/bridge.py`. The confirmation lives inside one
   `EntryReconciliationOrchestrator.execute` call; durable state keeps only the applied
   desired entry and `calculated_quantity`.
-- The orchestrator has no journal port. The processing journal
-  (`utility/processing_journal`) is best effort, append-only with `fsync`, and its
-  envelope has no cycle id.
+- Journal writing today: one `JsonlProcessingJournal` instance (bootstrap `application.py`)
+  serves two consumer-owned ports. `ProcessingJournalPort` is used by
+  `CommittedBarOrchestrator` for bar-level events (`orchestration_*`,
+  `strategy_cycle_dispatch_succeeded/failed`), which have no access to ABI responses.
+  `LiveEntryEvaluationJournalPort` (`runtime/orchestrator/ports.py`) is an optional
+  constructor argument of `StrategyRuntimeOrchestrator`, implemented by one adapter
+  method `live_entry_evaluated(...)` that calls the private `_record`. Identity and index
+  fields such as `bar_open_time_ms` travel in the payload; only `strategy_instance_id`
+  is an envelope field.
+- `EntryReconciliationOrchestrator.execute` returns only the state, so the confirmation
+  never reaches `StrategyRuntimeOrchestrator`, which holds the existing port.
 - The orchestrator already knows `strategy_instance_id`, `trade_cycle_id` and the
   confirmation; it does not know the bar.
 
@@ -25,15 +33,32 @@ fields, and allows `null` for `stop_loss` and `take_profit`. Any other unknown k
 fails the response. Responses without the fields decode as before. The values are not
 added to `StrategyInstanceRuntimeState` and are not compared with the desired entry.
 
-### D2. One journal event: `entry_package_applied`
+### D2. Same journal path as `live_entry_evaluated`
 
-After `execution_port.execute` returns an applied confirmation and before the state is
-applied, the orchestrator appends one event through a new optional journal port method.
-The event carries `strategy_instance_id` and `trade_cycle_id` in the envelope and
-payload:
+The new record uses the existing mechanism, not a new one:
+
+- a new member `ENTRY_PACKAGE_APPLIED` in `ProcessingJournalEventType`;
+- one method on the existing adapter `JsonlProcessingJournal` that calls the existing
+  `_record`;
+- a small consumer-owned Protocol in `entry_reconciliation_orchestrator/ports.py` (same
+  convention as `LiveEntryEvaluationJournalPort`), passed as an optional constructor
+  argument to `EntryReconciliationOrchestrator` and wired in `bootstrap/application.py`
+  with the same `journal` instance.
+
+The call sits in `EntryReconciliationOrchestrator.execute`, after `execution_port.execute`
+returns an applied confirmation and before the state is applied, because that is the only
+place that holds the confirmation together with `strategy_instance_id` and
+`trade_cycle_id`. Passing the confirmation up to `StrategyRuntimeOrchestrator` would
+change the return type of `execute` and every caller, so it is not done. The bar-level
+`strategy_cycle_dispatch_*` events are emitted by `CommittedBarOrchestrator` after
+dispatch with no access to the ABI response, so they cannot carry these values.
+
+The event is written with the existing envelope and no new field:
 
 ```json
+"strategy_instance_id": "…",
 "payload": {
+  "trade_cycle_id": "…",
   "trigger_price": "…",
   "stop_loss": "…" | null,
   "take_profit": "…" | null,
@@ -41,17 +66,16 @@ payload:
 }
 ```
 
-The values are exactly as received. If ABI sent none of them, no event is written.
-Runtime adds no bar, desired entry or any computed value; the envelope `occurred_at` is
-the time reference.
+`trade_cycle_id` goes in the payload, as `bar_open_time_ms` does for
+`live_entry_evaluated`. The values are exactly as received. If ABI sent none of them, no
+event is written. The envelope `occurred_at` is the time reference; no bar, desired entry
+or computed value is added.
 
-### D3. Envelope
+### D3. No change to the journal envelope or version
 
-`ProcessingJournalEvent` gains optional `trade_cycle_id`, serialized only when set.
-`schema_version` stays unchanged. The processing-journal spec only requires that every
-event carries `schema_version`; it defines no rule that an added optional envelope field
-or a new event type needs a new version, and no code dispatches on the value. Existing
-events keep their shape and meaning.
+`ProcessingJournalEvent`, `_record`, `source` and `schema_version` stay as they are. The
+processing-journal spec only requires that every event carries `schema_version`; it
+defines no rule that a new event type needs a new version, and no code dispatches on it.
 
 ### D4. Best effort
 

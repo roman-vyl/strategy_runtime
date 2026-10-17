@@ -16,9 +16,9 @@ does not use them in any decision.
   applied confirmation as optional values.
 - After a successful apply, the entry-reconciliation orchestrator appends one
   `entry_package_applied` event to `runtime.jsonl` with `strategy_instance_id`,
-  `trade_cycle_id` and the four values exactly as received.
-- The journal envelope gains an optional top-level `trade_cycle_id`. `schema_version`
-  stays as it is.
+  `trade_cycle_id` and the four values exactly as received. It is written through the
+  same mechanism as `live_entry_evaluated`: a consumer-owned optional journal port
+  implemented by the existing `JsonlProcessingJournal`.
 
 ## Out of Scope
 
@@ -36,7 +36,8 @@ of `runtime.jsonl`, any ABI change.
 
 - `runtime/abi/entry_package_models.py`, `runtime/abi/entry_package_codec.py`,
   `runtime/entry_reconciliation/models.py`, `entry_reconciliation_bridge/bridge.py`,
-  `entry_reconciliation_orchestrator/orchestrator.py`, processing journal models,
-  adapter and port, bootstrap wiring, tests.
+  `entry_reconciliation_orchestrator/orchestrator.py` and its `ports.py`, the
+  processing journal event enum and adapter, bootstrap wiring, tests. The event envelope
+  (`ProcessingJournalEvent`), `_record` and `schema_version` are not touched.
 - The durable state file and its codec are untouched.
 - Deploy order: this change before the ABI change (older Runtime rejects the new keys).
