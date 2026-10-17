@@ -64,6 +64,10 @@ class AbiEntryPackageExecutionBridge:
                 trade_cycle_id=result.trade_cycle_id,
                 applied_desired_entry=_decode_desired_entry(result.applied_desired_entry),
                 calculated_quantity=result.calculated_quantity,
+                trigger_price=result.trigger_price,
+                stop_loss=result.stop_loss,
+                take_profit=result.take_profit,
+                quantity=result.quantity,
             )
         if type(result) is EntryPackageAbsent:
             return EntryAbsentConfirmation(

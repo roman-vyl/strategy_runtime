@@ -17,7 +17,7 @@ from strategy_runtime.runtime.abi.entry_package_models import (
     EntryPackageWireDesiredEntry,
 )
 
-_APPLIED_FIELDS = frozenset(
+_APPLIED_REQUIRED_FIELDS = frozenset(
     {
         "strategy_instance_id",
         "trade_cycle_id",
@@ -26,6 +26,8 @@ _APPLIED_FIELDS = frozenset(
         "calculated_quantity",
     }
 )
+_APPLIED_ENTRY_ORDER_FIELDS = frozenset({"trigger_price", "stop_loss", "take_profit", "quantity"})
+_APPLIED_FIELDS = _APPLIED_REQUIRED_FIELDS | _APPLIED_ENTRY_ORDER_FIELDS
 _ABSENT_FIELDS = frozenset({"strategy_instance_id", "trade_cycle_id", "status"})
 _DESIRED_ENTRY_FIELDS = frozenset(
     {
@@ -91,7 +93,7 @@ def _decode_success(payload: object, request: EntryPackageRequest) -> EntryPacka
         body = _closed_object(payload, None, "success response")
         status = body.get("status")
         if status == EntryPackageApplied.status:
-            _require_exact_fields(body, _APPLIED_FIELDS, "applied response")
+            _require_applied_fields(body)
             result: EntryPackageApplied | EntryPackageAbsent = EntryPackageApplied(
                 strategy_instance_id=_non_empty_string(
                     body["strategy_instance_id"], "strategy_instance_id"
@@ -99,6 +101,10 @@ def _decode_success(payload: object, request: EntryPackageRequest) -> EntryPacka
                 trade_cycle_id=_non_empty_string(body["trade_cycle_id"], "trade_cycle_id"),
                 applied_desired_entry=_decode_desired_entry(body["applied_desired_entry"]),
                 calculated_quantity=_string(body["calculated_quantity"], "calculated_quantity"),
+                trigger_price=_optional_string(body, "trigger_price"),
+                stop_loss=_optional_string(body, "stop_loss"),
+                take_profit=_optional_string(body, "take_profit"),
+                quantity=_optional_string(body, "quantity"),
             )
         elif status == EntryPackageAbsent.status:
             _require_exact_fields(body, _ABSENT_FIELDS, "absent response")
@@ -250,6 +256,22 @@ def _require_exact_fields(value: dict[str, object], fields: frozenset[str], name
         missing = sorted(fields - actual)
         unknown = sorted(actual - fields)
         raise ValueError(f"{name} fields differ; missing={missing}, unknown={unknown}")
+
+
+def _require_applied_fields(body: dict[str, object]) -> None:
+    actual = frozenset(body)
+    missing = sorted(_APPLIED_REQUIRED_FIELDS - actual)
+    unknown = sorted(actual - _APPLIED_FIELDS)
+    if missing or unknown:
+        raise ValueError(f"applied response fields differ; missing={missing}, unknown={unknown}")
+
+
+def _optional_string(body: dict[str, object], name: str) -> str | None:
+    """Read an optional entry-order value: absent or JSON null is None."""
+    value = body.get(name)
+    if value is None:
+        return None
+    return _string(value, name)
 
 
 def _string(value: object, name: str) -> str:

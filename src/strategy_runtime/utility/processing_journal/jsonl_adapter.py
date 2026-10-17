@@ -148,6 +148,29 @@ class JsonlProcessingJournal:
             },
         )
 
+    def entry_package_applied(
+        self,
+        *,
+        strategy_instance_id: str,
+        trade_cycle_id: str,
+        trigger_price: str | None,
+        stop_loss: str | None,
+        take_profit: str | None,
+        quantity: str | None,
+    ) -> None:
+        self._record(
+            event_type=ProcessingJournalEventType.ENTRY_PACKAGE_APPLIED,
+            severity="info",
+            strategy_instance_id=strategy_instance_id,
+            payload={
+                "trade_cycle_id": trade_cycle_id,
+                "trigger_price": trigger_price,
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+                "quantity": quantity,
+            },
+        )
+
     def _record(
         self,
         *,

@@ -196,6 +196,7 @@ def build_application(
             new_trade_cycle_id,
             entry_execution_bridge,
             state_repository,
+            entry_applied_journal=journal,
         )
         position_management_orchestrator = PositionManagementOrchestrator(
             execution_port=position_management_client,

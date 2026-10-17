@@ -59,6 +59,10 @@ class EntryAppliedConfirmation:
     trade_cycle_id: str
     applied_desired_entry: DesiredEntry
     calculated_quantity: str
+    trigger_price: str | None = None
+    stop_loss: str | None = None
+    take_profit: str | None = None
+    quantity: str | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty_string(self.strategy_instance_id, "strategy_instance_id")
@@ -66,6 +70,10 @@ class EntryAppliedConfirmation:
         _require_desired_entry(self.applied_desired_entry, "applied_desired_entry")
         if not is_exact_decimal_text(self.calculated_quantity):
             raise ValueError("calculated_quantity must be exact-decimal text")
+        for name in ("trigger_price", "stop_loss", "take_profit", "quantity"):
+            value = getattr(self, name)
+            if value is not None and not is_exact_decimal_text(value):
+                raise ValueError(f"{name} must be exact-decimal text")
 
 
 @dataclass(frozen=True, slots=True)
