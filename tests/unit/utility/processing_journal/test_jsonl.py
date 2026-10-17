@@ -194,3 +194,30 @@ def test_fsync_failure_is_absorbed(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     )
 
     assert journal.failure_count == 1
+
+
+def test_entry_package_applied_serializes_the_four_values(tmp_path: Path) -> None:
+    path = tmp_path / "runtime.jsonl"
+    journal = make_journal(path)
+
+    journal.entry_package_applied(
+        strategy_instance_id="dep-a",
+        trade_cycle_id="cycle-1",
+        trigger_price="100.5",
+        stop_loss="99",
+        take_profit=None,
+        quantity="0.002",
+    )
+
+    record = json.loads(path.read_text())
+    assert record["event_type"] == "entry_package_applied"
+    assert record["schema_version"] == 2
+    assert record["severity"] == "info"
+    assert record["strategy_instance_id"] == "dep-a"
+    assert record["payload"] == {
+        "trade_cycle_id": "cycle-1",
+        "trigger_price": "100.5",
+        "stop_loss": "99",
+        "take_profit": None,
+        "quantity": "0.002",
+    }

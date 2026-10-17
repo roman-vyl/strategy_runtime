@@ -212,6 +212,58 @@ def test_malformed_applied_success_fails_closed(
     assert len(fake.requests) == 1
 
 
+def test_old_applied_shape_decodes_with_no_order_values() -> None:
+    request = make_request()
+    fake = FakeAbi(lambda _: json_response(200, applied_body(request)))
+
+    result = send(fake, request)
+
+    assert isinstance(result, EntryPackageApplied)
+    assert (result.trigger_price, result.stop_loss, result.take_profit, result.quantity) == (
+        None,
+        None,
+        None,
+        None,
+    )
+
+
+def test_applied_order_values_are_decoded_verbatim() -> None:
+    request = make_request()
+    body = applied_body(request)
+    body.update(
+        {"trigger_price": "100.50", "stop_loss": "99", "take_profit": None, "quantity": "0.002"}
+    )
+    fake = FakeAbi(lambda _: json_response(200, body))
+
+    result = send(fake, request)
+
+    assert isinstance(result, EntryPackageApplied)
+    assert result.trigger_price == "100.50"
+    assert result.stop_loss == "99"
+    assert result.take_profit is None
+    assert result.quantity == "0.002"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"order_id": "abc"},
+        {"trigger_price": 100.5},
+        {"quantity": "1x"},
+        {"stop_loss": True},
+        {"take_profit": ""},
+    ],
+)
+def test_malformed_applied_order_values_fail_closed(extra: dict[str, Any]) -> None:
+    request = make_request()
+    body = applied_body(request)
+    body.update(extra)
+    fake = FakeAbi(lambda _: json_response(200, body))
+
+    with pytest.raises(AbiEntryPackageProtocolError):
+        send(fake, request)
+
+
 @pytest.mark.parametrize("field", ["strategy_instance_id", "trade_cycle_id"])
 def test_success_identifier_mismatch_fails_closed(field: str) -> None:
     request = make_request()

@@ -62,6 +62,10 @@ class EntryPackageApplied:
     trade_cycle_id: str
     applied_desired_entry: EntryPackageWireDesiredEntry
     calculated_quantity: str
+    trigger_price: str | None = None
+    stop_loss: str | None = None
+    take_profit: str | None = None
+    quantity: str | None = None
 
     status: ClassVar[Literal["entry_package_applied"]] = "entry_package_applied"
 
@@ -71,6 +75,10 @@ class EntryPackageApplied:
         if type(self.applied_desired_entry) is not EntryPackageWireDesiredEntry:
             raise TypeError("applied_desired_entry must be EntryPackageWireDesiredEntry")
         _require_exact_decimal_text(self.calculated_quantity, "calculated_quantity")
+        for name in ("trigger_price", "stop_loss", "take_profit", "quantity"):
+            value = getattr(self, name)
+            if value is not None:
+                _require_exact_decimal_text(value, name)
 
 
 @dataclass(frozen=True, slots=True)

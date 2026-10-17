@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from dataclasses import replace
 
 import pytest
 
@@ -126,6 +127,32 @@ def test_applied_result_maps_to_applied_confirmation_with_domain_desired_entry()
     assert result.trade_cycle_id == command.trade_cycle_id
     assert result.applied_desired_entry == make_desired_entry()
     assert result.calculated_quantity == "0.00100"
+
+
+def test_applied_order_values_are_carried_to_the_confirmation() -> None:
+    command = make_command(desired_entry=make_desired_entry())
+    source_state = make_source_state()
+
+    def result_factory(req: EntryPackageRequest) -> EntryPackageApplied:
+        return replace(
+            applied_result(req),
+            trigger_price="100.5",
+            stop_loss="99",
+            take_profit=None,
+            quantity="0.002",
+        )
+
+    fake = FakeAbiEntryPackagePort(result_factory=result_factory)
+
+    result = AbiEntryPackageExecutionBridge(fake).execute(command, source_state)
+
+    assert isinstance(result, EntryAppliedConfirmation)
+    assert (result.trigger_price, result.stop_loss, result.take_profit, result.quantity) == (
+        "100.5",
+        "99",
+        None,
+        "0.002",
+    )
 
 
 def test_absent_result_maps_to_absent_confirmation() -> None:

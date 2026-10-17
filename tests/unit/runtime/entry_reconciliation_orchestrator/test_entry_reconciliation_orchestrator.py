@@ -576,3 +576,127 @@ def test_frozen_entry_context_stops_reconciliation_before_any_execution() -> Non
 
     assert execution_port.calls == []
     assert source_state == snapshot
+
+
+class RecordingAppliedJournal:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.calls: list[dict[str, str | None]] = []
+
+    def entry_package_applied(
+        self,
+        *,
+        strategy_instance_id: str,
+        trade_cycle_id: str,
+        trigger_price: str | None,
+        stop_loss: str | None,
+        take_profit: str | None,
+        quantity: str | None,
+    ) -> None:
+        self.calls.append(
+            {
+                "strategy_instance_id": strategy_instance_id,
+                "trade_cycle_id": trade_cycle_id,
+                "trigger_price": trigger_price,
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+                "quantity": quantity,
+            }
+        )
+        if self.error is not None:
+            raise self.error
+
+
+def applied_confirmation(**values: str | None) -> EntryAppliedConfirmation:
+    entry = desired_entry(price="105")
+    return EntryAppliedConfirmation("instance", "cycle-new", entry, "0.01", **values)
+
+
+def run_with_journal(
+    confirmation: SuccessfulEntryConfirmation,
+    journal: RecordingAppliedJournal,
+    new_entry: DesiredEntry | None,
+    *,
+    applied_entry: DesiredEntry | None = None,
+) -> StrategyInstanceRuntimeState:
+    repository, source_state = seeded_repository(applied_entry=applied_entry)
+    return EntryReconciliationOrchestrator(
+        RecordingIdFactory(),
+        FakeExecutionPort(confirmation),
+        repository,
+        entry_applied_journal=journal,
+    ).execute(projection(source_state, new_entry))
+
+
+def test_applied_confirmation_with_values_is_journaled_once() -> None:
+    journal = RecordingAppliedJournal()
+    new_entry = desired_entry(price="105")
+
+    run_with_journal(
+        applied_confirmation(
+            trigger_price="105", stop_loss="99", take_profit="110", quantity="0.01"
+        ),
+        journal,
+        new_entry,
+    )
+
+    assert journal.calls == [
+        {
+            "strategy_instance_id": "instance",
+            "trade_cycle_id": "cycle-new",
+            "trigger_price": "105",
+            "stop_loss": "99",
+            "take_profit": "110",
+            "quantity": "0.01",
+        }
+    ]
+
+
+def test_old_shape_confirmation_writes_no_event() -> None:
+    journal = RecordingAppliedJournal()
+
+    run_with_journal(applied_confirmation(), journal, desired_entry(price="105"))
+
+    assert journal.calls == []
+
+
+def test_absent_confirmation_writes_no_event() -> None:
+    journal = RecordingAppliedJournal()
+
+    run_with_journal(
+        EntryAbsentConfirmation("instance", "cycle-1"),
+        journal,
+        None,
+        applied_entry=desired_entry(),
+    )
+
+    assert journal.calls == []
+
+
+def test_failing_execution_writes_no_event() -> None:
+    journal = RecordingAppliedJournal()
+    repository, source_state = seeded_repository()
+
+    with pytest.raises(RuntimeError, match="abi down"):
+        EntryReconciliationOrchestrator(
+            RecordingIdFactory(),
+            FakeExecutionPort(object(), error=RuntimeError("abi down")),
+            repository,
+            entry_applied_journal=journal,
+        ).execute(projection(source_state, desired_entry(price="105")))
+
+    assert journal.calls == []
+
+
+def test_journaled_values_do_not_change_the_resulting_state() -> None:
+    new_entry = desired_entry(price="105")
+    without = run_with_journal(applied_confirmation(), RecordingAppliedJournal(), new_entry)
+    with_values = run_with_journal(
+        applied_confirmation(
+            trigger_price="105", stop_loss="99", take_profit="110", quantity="0.01"
+        ),
+        RecordingAppliedJournal(),
+        new_entry,
+    )
+
+    assert with_values == without

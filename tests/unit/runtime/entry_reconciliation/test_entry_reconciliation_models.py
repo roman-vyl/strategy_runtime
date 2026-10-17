@@ -51,6 +51,10 @@ def test_confirmation_variants_have_exact_fact_shapes() -> None:
         "trade_cycle_id",
         "applied_desired_entry",
         "calculated_quantity",
+        "trigger_price",
+        "stop_loss",
+        "take_profit",
+        "quantity",
     )
     assert tuple(field.name for field in fields(absent)) == (
         "strategy_instance_id",

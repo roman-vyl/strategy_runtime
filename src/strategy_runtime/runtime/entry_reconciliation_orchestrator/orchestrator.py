@@ -15,6 +15,7 @@ from strategy_runtime.runtime.entry_reconciliation import (
     decide_entry_reconciliation,
 )
 from strategy_runtime.runtime.entry_reconciliation_orchestrator.ports import (
+    EntryAppliedJournalPort,
     EntryReconciliationExecutionPort,
 )
 from strategy_runtime.runtime.routing.models import LiveEntryProjectedStrategyInstance
@@ -31,10 +32,12 @@ class EntryReconciliationOrchestrator:
         trade_cycle_id_factory: TradeCycleIdFactory,
         execution_port: EntryReconciliationExecutionPort,
         state_repository: StrategyInstanceRuntimeStateRepository,
+        entry_applied_journal: EntryAppliedJournalPort | None = None,
     ) -> None:
         self._trade_cycle_id_factory = trade_cycle_id_factory
         self._execution_port = execution_port
         self._state_repository = state_repository
+        self._entry_applied_journal = entry_applied_journal
 
     def execute(
         self,
@@ -73,6 +76,9 @@ class EntryReconciliationOrchestrator:
                 "execution port must return a successful entry confirmation"
             )
 
+        if type(confirmation) is EntryAppliedConfirmation:
+            self._journal_entry_applied(confirmation)
+
         if isinstance(decision, (Apply, Cancel)):
             return apply_success_confirmation(
                 pending_state,
@@ -82,4 +88,23 @@ class EntryReconciliationOrchestrator:
             )
         raise EntryReconciliationInvariantError(
             "unknown command-bearing entry reconciliation decision"
+        )
+
+    def _journal_entry_applied(self, confirmation: EntryAppliedConfirmation) -> None:
+        if self._entry_applied_journal is None:
+            return
+        if (
+            confirmation.trigger_price is None
+            and confirmation.stop_loss is None
+            and confirmation.take_profit is None
+            and confirmation.quantity is None
+        ):
+            return
+        self._entry_applied_journal.entry_package_applied(
+            strategy_instance_id=confirmation.strategy_instance_id,
+            trade_cycle_id=confirmation.trade_cycle_id,
+            trigger_price=confirmation.trigger_price,
+            stop_loss=confirmation.stop_loss,
+            take_profit=confirmation.take_profit,
+            quantity=confirmation.quantity,
         )
