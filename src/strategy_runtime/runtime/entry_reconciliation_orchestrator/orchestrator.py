@@ -77,7 +77,10 @@ class EntryReconciliationOrchestrator:
             )
 
         if type(confirmation) is EntryAppliedConfirmation:
-            self._journal_entry_applied(confirmation)
+            self._journal_entry_applied(
+                confirmation,
+                projection.source.processing_unit.committed_bar.open_time_ms,
+            )
 
         if isinstance(decision, (Apply, Cancel)):
             return apply_success_confirmation(
@@ -90,7 +93,9 @@ class EntryReconciliationOrchestrator:
             "unknown command-bearing entry reconciliation decision"
         )
 
-    def _journal_entry_applied(self, confirmation: EntryAppliedConfirmation) -> None:
+    def _journal_entry_applied(
+        self, confirmation: EntryAppliedConfirmation, bar_open_time_ms: int
+    ) -> None:
         if self._entry_applied_journal is None:
             return
         if (
@@ -98,13 +103,18 @@ class EntryReconciliationOrchestrator:
             and confirmation.stop_loss is None
             and confirmation.take_profit is None
             and confirmation.quantity is None
+            and confirmation.order_link_id is None
+            and confirmation.order_id is None
         ):
             return
         self._entry_applied_journal.entry_package_applied(
             strategy_instance_id=confirmation.strategy_instance_id,
             trade_cycle_id=confirmation.trade_cycle_id,
+            bar_open_time_ms=bar_open_time_ms,
             trigger_price=confirmation.trigger_price,
             stop_loss=confirmation.stop_loss,
             take_profit=confirmation.take_profit,
             quantity=confirmation.quantity,
+            order_link_id=confirmation.order_link_id,
+            order_id=confirmation.order_id,
         )

@@ -244,10 +244,34 @@ def test_applied_order_values_are_decoded_verbatim() -> None:
     assert result.quantity == "0.002"
 
 
+def test_applied_order_identifiers_are_decoded_verbatim() -> None:
+    request = make_request()
+    body = applied_body(request)
+    body.update({"order_link_id": "link-1", "order_id": "bybit-1", "quantity": "0.002"})
+    fake = FakeAbi(lambda _: json_response(200, body))
+
+    result = send(fake, request)
+
+    assert isinstance(result, EntryPackageApplied)
+    assert (result.order_link_id, result.order_id) == ("link-1", "bybit-1")
+
+
+def test_applied_shape_without_identifiers_decodes_them_as_none() -> None:
+    request = make_request()
+    fake = FakeAbi(lambda _: json_response(200, applied_body(request)))
+
+    result = send(fake, request)
+
+    assert isinstance(result, EntryPackageApplied)
+    assert (result.order_link_id, result.order_id) == (None, None)
+
+
 @pytest.mark.parametrize(
     "extra",
     [
-        {"order_id": "abc"},
+        {"order_number": "abc"},
+        {"order_id": ""},
+        {"order_link_id": 123},
         {"trigger_price": 100.5},
         {"quantity": "1x"},
         {"stop_loss": True},

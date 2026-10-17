@@ -10,6 +10,13 @@ from pathlib import Path
 import pytest
 
 from strategy_runtime.runtime.coordination import StrategyInstanceKeyedMutexRegistry
+from strategy_runtime.runtime.entry_reconciliation import (
+    EntryAppliedConfirmation,
+    EntryReconciliationCommand,
+)
+from strategy_runtime.runtime.entry_reconciliation_orchestrator import (
+    EntryReconciliationOrchestrator,
+)
 from strategy_runtime.runtime.open_position.models import (
     PositionResolvedStrategyInstanceRuntimeState,
 )
@@ -304,3 +311,61 @@ def test_real_journal_line_for_a_live_entry_bar(tmp_path: Path) -> None:
     assert record["event_type"] == "live_entry_evaluated"
     assert record["strategy_instance_id"] == _SID
     assert record["payload"]["desired_entry"] == _ENTRY_PAYLOAD
+
+
+class _AppliedExecutionPort:
+    def execute(
+        self, command: EntryReconciliationCommand, source_state: StrategyInstanceRuntimeState
+    ) -> EntryAppliedConfirmation:
+        assert command.desired_entry is not None
+        return EntryAppliedConfirmation(
+            command.strategy_instance_id,
+            command.trade_cycle_id,
+            command.desired_entry,
+            "0.001",
+            trigger_price="100.5",
+            stop_loss="99",
+            take_profit="103.25",
+            quantity="0.001",
+            order_link_id="link-1",
+            order_id="bybit-1",
+        )
+
+
+def test_applied_record_carries_the_bar_of_the_same_evaluation(tmp_path: Path) -> None:
+    path = tmp_path / "journal" / "runtime.jsonl"
+    journal = JsonlProcessingJournal(
+        path,
+        event_id_factory=lambda: "event-1",
+        timestamp_factory=lambda: "2026-07-21T00:00:00Z",
+    )
+    repository = InMemoryStrategyInstanceRuntimeStateRepository()
+    orch = StrategyRuntimeOrchestrator(
+        state_repository=repository,
+        open_position_resolver=_Resolver(),  # type: ignore[arg-type]
+        use_case_router=_Router(desired_entry=_desired_entry()),  # type: ignore[arg-type]
+        keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+        entry_reconciliation_orchestrator=EntryReconciliationOrchestrator(
+            lambda: "cycle-1",
+            _AppliedExecutionPort(),
+            repository,
+            entry_applied_journal=journal,
+        ),
+        position_management_orchestrator=_PositionManagement(_Recorder()),  # type: ignore[arg-type]
+        live_entry_journal=journal,
+    )
+
+    orch.process(_unit(1300))
+
+    evaluated, applied = (json.loads(line) for line in path.read_text().splitlines())
+    assert evaluated["event_type"] == "live_entry_evaluated"
+    assert applied["event_type"] == "entry_package_applied"
+    assert applied["strategy_instance_id"] == evaluated["strategy_instance_id"] == _SID
+    assert (
+        applied["payload"]["bar_open_time_ms"] == evaluated["payload"]["bar_open_time_ms"] == 1300
+    )
+    assert applied["payload"]["trade_cycle_id"] == "cycle-1"
+    assert (applied["payload"]["order_link_id"], applied["payload"]["order_id"]) == (
+        "link-1",
+        "bybit-1",
+    )

@@ -68,6 +68,8 @@ class AbiEntryPackageExecutionBridge:
                 stop_loss=result.stop_loss,
                 take_profit=result.take_profit,
                 quantity=result.quantity,
+                order_link_id=result.order_link_id,
+                order_id=result.order_id,
             )
         if type(result) is EntryPackageAbsent:
             return EntryAbsentConfirmation(

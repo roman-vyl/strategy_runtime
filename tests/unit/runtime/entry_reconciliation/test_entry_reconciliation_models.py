@@ -55,6 +55,8 @@ def test_confirmation_variants_have_exact_fact_shapes() -> None:
         "stop_loss",
         "take_profit",
         "quantity",
+        "order_link_id",
+        "order_id",
     )
     assert tuple(field.name for field in fields(absent)) == (
         "strategy_instance_id",
