@@ -63,6 +63,8 @@ class EntryAppliedConfirmation:
     stop_loss: str | None = None
     take_profit: str | None = None
     quantity: str | None = None
+    order_link_id: str | None = None
+    order_id: str | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty_string(self.strategy_instance_id, "strategy_instance_id")
@@ -74,6 +76,10 @@ class EntryAppliedConfirmation:
             value = getattr(self, name)
             if value is not None and not is_exact_decimal_text(value):
                 raise ValueError(f"{name} must be exact-decimal text")
+        for name in ("order_link_id", "order_id"):
+            value = getattr(self, name)
+            if value is not None:
+                _require_non_empty_string(value, name)
 
 
 @dataclass(frozen=True, slots=True)

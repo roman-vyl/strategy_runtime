@@ -581,26 +581,32 @@ def test_frozen_entry_context_stops_reconciliation_before_any_execution() -> Non
 class RecordingAppliedJournal:
     def __init__(self, error: Exception | None = None) -> None:
         self.error = error
-        self.calls: list[dict[str, str | None]] = []
+        self.calls: list[dict[str, str | int | None]] = []
 
     def entry_package_applied(
         self,
         *,
         strategy_instance_id: str,
         trade_cycle_id: str,
+        bar_open_time_ms: int,
         trigger_price: str | None,
         stop_loss: str | None,
         take_profit: str | None,
         quantity: str | None,
+        order_link_id: str | None,
+        order_id: str | None,
     ) -> None:
         self.calls.append(
             {
                 "strategy_instance_id": strategy_instance_id,
                 "trade_cycle_id": trade_cycle_id,
+                "bar_open_time_ms": bar_open_time_ms,
                 "trigger_price": trigger_price,
                 "stop_loss": stop_loss,
                 "take_profit": take_profit,
                 "quantity": quantity,
+                "order_link_id": order_link_id,
+                "order_id": order_id,
             }
         )
         if self.error is not None:
@@ -644,12 +650,31 @@ def test_applied_confirmation_with_values_is_journaled_once() -> None:
         {
             "strategy_instance_id": "instance",
             "trade_cycle_id": "cycle-new",
+            "bar_open_time_ms": 1000,
             "trigger_price": "105",
             "stop_loss": "99",
             "take_profit": "110",
             "quantity": "0.01",
+            "order_link_id": None,
+            "order_id": None,
         }
     ]
+
+
+def test_applied_identifiers_are_journaled_with_the_processing_bar() -> None:
+    journal = RecordingAppliedJournal()
+
+    run_with_journal(
+        applied_confirmation(order_link_id="link-1", order_id="bybit-1"),
+        journal,
+        desired_entry(price="105"),
+    )
+
+    assert len(journal.calls) == 1
+    call = journal.calls[0]
+    assert call["bar_open_time_ms"] == 1000
+    assert (call["order_link_id"], call["order_id"]) == ("link-1", "bybit-1")
+    assert call["trigger_price"] is None
 
 
 def test_old_shape_confirmation_writes_no_event() -> None:

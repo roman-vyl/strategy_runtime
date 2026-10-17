@@ -153,10 +153,13 @@ class JsonlProcessingJournal:
         *,
         strategy_instance_id: str,
         trade_cycle_id: str,
+        bar_open_time_ms: int,
         trigger_price: str | None,
         stop_loss: str | None,
         take_profit: str | None,
         quantity: str | None,
+        order_link_id: str | None,
+        order_id: str | None,
     ) -> None:
         self._record(
             event_type=ProcessingJournalEventType.ENTRY_PACKAGE_APPLIED,
@@ -164,10 +167,13 @@ class JsonlProcessingJournal:
             strategy_instance_id=strategy_instance_id,
             payload={
                 "trade_cycle_id": trade_cycle_id,
+                "bar_open_time_ms": bar_open_time_ms,
                 "trigger_price": trigger_price,
                 "stop_loss": stop_loss,
                 "take_profit": take_profit,
                 "quantity": quantity,
+                "order_link_id": order_link_id,
+                "order_id": order_id,
             },
         )
 

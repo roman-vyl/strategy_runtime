@@ -27,7 +27,10 @@ _APPLIED_REQUIRED_FIELDS = frozenset(
     }
 )
 _APPLIED_ENTRY_ORDER_FIELDS = frozenset({"trigger_price", "stop_loss", "take_profit", "quantity"})
-_APPLIED_FIELDS = _APPLIED_REQUIRED_FIELDS | _APPLIED_ENTRY_ORDER_FIELDS
+_APPLIED_ENTRY_ORDER_ID_FIELDS = frozenset({"order_link_id", "order_id"})
+_APPLIED_FIELDS = (
+    _APPLIED_REQUIRED_FIELDS | _APPLIED_ENTRY_ORDER_FIELDS | _APPLIED_ENTRY_ORDER_ID_FIELDS
+)
 _ABSENT_FIELDS = frozenset({"strategy_instance_id", "trade_cycle_id", "status"})
 _DESIRED_ENTRY_FIELDS = frozenset(
     {
@@ -105,6 +108,8 @@ def _decode_success(payload: object, request: EntryPackageRequest) -> EntryPacka
                 stop_loss=_optional_string(body, "stop_loss"),
                 take_profit=_optional_string(body, "take_profit"),
                 quantity=_optional_string(body, "quantity"),
+                order_link_id=_optional_string(body, "order_link_id"),
+                order_id=_optional_string(body, "order_id"),
             )
         elif status == EntryPackageAbsent.status:
             _require_exact_fields(body, _ABSENT_FIELDS, "absent response")
@@ -267,7 +272,7 @@ def _require_applied_fields(body: dict[str, object]) -> None:
 
 
 def _optional_string(body: dict[str, object], name: str) -> str | None:
-    """Read an optional entry-order value: absent or JSON null is None."""
+    """Read an optional entry-order field: absent or JSON null is None."""
     value = body.get(name)
     if value is None:
         return None

@@ -140,6 +140,8 @@ def test_applied_order_values_are_carried_to_the_confirmation() -> None:
             stop_loss="99",
             take_profit=None,
             quantity="0.002",
+            order_link_id="link-1",
+            order_id="bybit-1",
         )
 
     fake = FakeAbiEntryPackagePort(result_factory=result_factory)
@@ -153,6 +155,7 @@ def test_applied_order_values_are_carried_to_the_confirmation() -> None:
         None,
         "0.002",
     )
+    assert (result.order_link_id, result.order_id) == ("link-1", "bybit-1")
 
 
 def test_absent_result_maps_to_absent_confirmation() -> None:

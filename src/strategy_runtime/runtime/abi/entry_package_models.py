@@ -66,6 +66,8 @@ class EntryPackageApplied:
     stop_loss: str | None = None
     take_profit: str | None = None
     quantity: str | None = None
+    order_link_id: str | None = None
+    order_id: str | None = None
 
     status: ClassVar[Literal["entry_package_applied"]] = "entry_package_applied"
 
@@ -79,6 +81,10 @@ class EntryPackageApplied:
             value = getattr(self, name)
             if value is not None:
                 _require_exact_decimal_text(value, name)
+        for name in ("order_link_id", "order_id"):
+            value = getattr(self, name)
+            if value is not None:
+                _require_non_empty_string(value, name)
 
 
 @dataclass(frozen=True, slots=True)
