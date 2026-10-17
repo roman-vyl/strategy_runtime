@@ -2,7 +2,7 @@
 
 ### Requirement: Applied response accepts four optional entry-order values
 
-Runtime's entry-package client MUST accept optional `planned_entry_price`, `stop_loss`,
+Runtime's entry-package client MUST accept optional `trigger_price`, `stop_loss`,
 `take_profit` and `quantity` in the `entry_package_applied` response, decode them
 strictly, carry them on the applied confirmation, and not persist them.
 

@@ -22,12 +22,12 @@ any decision or storing them in durable state.
 ### Requirement: Envelope may carry a trade cycle id
 
 The journal envelope MUST accept an optional top-level `trade_cycle_id`, serialized only
-when set, and `schema_version` MUST be 3 for events written after this change.
+when set, and MUST NOT change `schema_version` or the shape of events that do not set it.
 
 #### Scenario: Event with a cycle
 - **WHEN** an `entry_package_applied` event is written
-- **THEN** its envelope has `trade_cycle_id` and `schema_version` 3
+- **THEN** its envelope has `trade_cycle_id`
 
 #### Scenario: Existing event type
 - **WHEN** a `live_entry_evaluated` event is written
-- **THEN** its payload is unchanged and it has no `trade_cycle_id`
+- **THEN** its payload and envelope are unchanged and it has no `trade_cycle_id`

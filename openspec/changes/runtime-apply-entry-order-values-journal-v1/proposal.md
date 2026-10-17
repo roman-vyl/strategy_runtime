@@ -2,7 +2,7 @@
 
 ABI is about to add four values of the trade cycle's own entry order to its
 `entry_package_applied` response (ABI change `abi-apply-entry-order-values-v1`):
-`planned_entry_price`, `stop_loss`, `take_profit`, `quantity`. Runtime has to accept
+`trigger_price`, `stop_loss`, `take_profit`, `quantity`. Runtime has to accept
 them without breaking its strict response decoder, and write them to its own
 processing journal `runtime.jsonl`, so history can show what was actually placed.
 
@@ -17,8 +17,8 @@ does not use them in any decision.
 - After a successful apply, the entry-reconciliation orchestrator appends one
   `entry_package_applied` event to `runtime.jsonl` with `strategy_instance_id`,
   `trade_cycle_id` and the four values exactly as received.
-- The journal envelope gains an optional top-level `trade_cycle_id`; `schema_version`
-  goes from 2 to 3.
+- The journal envelope gains an optional top-level `trade_cycle_id`. `schema_version`
+  stays as it is.
 
 ## Out of Scope
 

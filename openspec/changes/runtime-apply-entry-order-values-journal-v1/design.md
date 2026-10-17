@@ -19,7 +19,7 @@ Facts from the code on `main` (63bd7f5):
 ### D1. Accept four optional fields
 
 `EntryPackageApplied` and `EntryAppliedConfirmation` gain optional
-`planned_entry_price`, `stop_loss`, `take_profit`, `quantity` (default `None`). The
+`trigger_price`, `stop_loss`, `take_profit`, `quantity` (default `None`). The
 decoder allows these keys, requires exact-decimal text for the price and quantity
 fields, and allows `null` for `stop_loss` and `take_profit`. Any other unknown key still
 fails the response. Responses without the fields decode as before. The values are not
@@ -34,7 +34,7 @@ payload:
 
 ```json
 "payload": {
-  "planned_entry_price": "…",
+  "trigger_price": "…",
   "stop_loss": "…" | null,
   "take_profit": "…" | null,
   "quantity": "…"
@@ -48,7 +48,10 @@ the time reference.
 ### D3. Envelope
 
 `ProcessingJournalEvent` gains optional `trade_cycle_id`, serialized only when set.
-`schema_version` becomes 3. The `live_entry_evaluated` event is unchanged.
+`schema_version` stays unchanged. The processing-journal spec only requires that every
+event carries `schema_version`; it defines no rule that an added optional envelope field
+or a new event type needs a new version, and no code dispatches on the value. Existing
+events keep their shape and meaning.
 
 ### D4. Best effort
 
