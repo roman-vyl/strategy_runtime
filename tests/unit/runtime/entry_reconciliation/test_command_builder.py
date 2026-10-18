@@ -15,6 +15,7 @@ from strategy_runtime.runtime.entry_reconciliation.models import (
     Cancel,
     EntryReconciliationCommand,
     NoOp,
+    Replace,
 )
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
 from strategy_runtime.runtime.state.models import (
@@ -150,3 +151,13 @@ def test_builder_signature_contains_no_duplicate_reconciliation_inputs() -> None
         "decision",
         "apply_trade_cycle_id",
     )
+
+
+@pytest.mark.parametrize("apply_trade_cycle_id", [None, "cycle-new"])
+def test_replace_is_never_built_into_a_single_command(apply_trade_cycle_id: str | None) -> None:
+    state = runtime_state(with_cycle=True)
+
+    with pytest.raises(EntryReconciliationInvariantError):
+        build_entry_reconciliation_command(
+            state, Replace("cycle-1", desired_entry(price="101")), apply_trade_cycle_id
+        )

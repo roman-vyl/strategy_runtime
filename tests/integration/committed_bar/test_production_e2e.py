@@ -615,6 +615,58 @@ def test_cancel_clears_cycle_only_after_entry_package_absent_confirmation(
         assert len(entry_package_requests) == 2
 
 
+def test_changed_desired_entry_replaces_the_order_within_one_bar(
+    tmp_path: Path, engine_server: FakeHttpServer, abi_server: FakeHttpServer
+) -> None:
+    changed_wire = {**_desired_entry_wire(), "planned_entry_price": "101"}
+    _set_engine_routes(
+        engine_server,
+        live_entry=sequential(
+            _live_entry_present(), FakeResponse(200, {"desired_entry": changed_wire})
+        ),
+    )
+    _set_abi_routes(
+        abi_server,
+        open_position=_open_position_closed(),
+        entry_package=sequential(
+            _entry_package_applied, _entry_package_absent, _entry_package_applied
+        ),
+    )
+    app = _build_app(
+        tmp_path, engine_base_url=engine_server.base_url, abi_base_url=abi_server.base_url
+    )
+
+    with TestClient(app) as client:
+        assert _post_closed_bar(client, 1).status_code == 200
+        first = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
+        assert first is not None
+        assert first.current_trade_cycle is not None
+        old_cycle_id = first.current_trade_cycle.trade_cycle_id
+
+        assert _post_closed_bar(client, 2).status_code == 200
+        second = app.state.state_repository.get(_STRATEGY_INSTANCE_ID)
+        assert second is not None
+        assert second.pending_entry_recovery is None
+        assert second.current_trade_cycle is not None
+        assert second.current_trade_cycle.trade_cycle_id != old_cycle_id
+        assert (
+            second.current_trade_cycle.applied_entry_package.applied_desired_entry.planned_entry_price
+            == "101"
+        )
+
+        entry_package_requests = [r for r in abi_server.requests if "/entry-package" in r.path]
+        assert [r.json()["desired_entry"] for r in entry_package_requests] == [
+            _desired_entry_wire(),
+            None,
+            changed_wire,
+        ]
+        assert _parse_entry_package_path(entry_package_requests[1].path)[1] == old_cycle_id
+        assert (
+            _parse_entry_package_path(entry_package_requests[2].path)[1]
+            == second.current_trade_cycle.trade_cycle_id
+        )
+
+
 def test_open_trade_noop_succeeds_after_frozen_first_fill(
     tmp_path: Path, engine_server: FakeHttpServer, abi_server: FakeHttpServer
 ) -> None:

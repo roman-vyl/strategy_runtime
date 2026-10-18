@@ -267,48 +267,212 @@ def test_apply_reserves_once_and_forwards_exact_command_and_source_snapshot() ->
     assert result.pending_entry_recovery is None
 
 
-def test_changed_desired_entry_also_decides_cancel_and_sends_no_desired_entry() -> None:
+class ScriptedExecutionPort:
+    """Returns (or raises) one scripted outcome per call, in order."""
+
+    def __init__(self, *outcomes: SuccessfulEntryConfirmation | Exception | object) -> None:
+        self.outcomes = list(outcomes)
+        self.calls: list[tuple[EntryReconciliationCommand, StrategyInstanceRuntimeState]] = []
+
+    def execute(
+        self,
+        command: EntryReconciliationCommand,
+        source_state: StrategyInstanceRuntimeState,
+    ) -> SuccessfulEntryConfirmation:
+        self.calls.append((command, source_state))
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return cast("SuccessfulEntryConfirmation", outcome)
+
+
+class SaveRecordingRepository(InMemoryStrategyInstanceRuntimeStateRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.saved: list[StrategyInstanceRuntimeState] = []
+
+    def save(self, state: StrategyInstanceRuntimeState) -> StrategyInstanceRuntimeState:
+        self.saved.append(state)
+        return super().save(state)
+
+
+def seeded_recording_repository(
+    applied_entry: DesiredEntry,
+) -> tuple[SaveRecordingRepository, StrategyInstanceRuntimeState]:
+    repository = SaveRecordingRepository()
+    state = repository.get_or_create(
+        GetOrCreateStrategyInstanceRuntimeStateRequest(
+            strategy_instance_id="instance",
+            strategy_id="strategy",
+            instrument="BTCUSDT.P",
+            base_timeframe="5m",
+            raw_spec={},
+            source_path="a.json",
+        )
+    )
+    state = repository.save(
+        replace(
+            state,
+            current_trade_cycle=CurrentTradeCycle(
+                "cycle-1",
+                AppliedEntryPackage(applied_entry, "0.01"),
+            ),
+        )
+    )
+    repository.saved.clear()
+    return repository, state
+
+
+def replace_applied_confirmation(
+    entry: DesiredEntry, cycle: str = "cycle-new"
+) -> EntryAppliedConfirmation:
+    return EntryAppliedConfirmation("instance", cycle, entry, "0.02")
+
+
+def test_changed_desired_entry_replaces_in_one_invocation() -> None:
     original = desired_entry()
     updated = desired_entry(price="101")
-    repository, source_state = seeded_repository(applied_entry=original)
+    repository, source_state = seeded_recording_repository(original)
     snapshot = replace(source_state)
-    item = projection(source_state, updated)
-    confirmation = EntryAbsentConfirmation("instance", "cycle-1")
     id_factory = RecordingIdFactory()
-    execution_port = FakeExecutionPort(confirmation)
+    execution_port = ScriptedExecutionPort(
+        EntryAbsentConfirmation("instance", "cycle-1"),
+        replace_applied_confirmation(updated),
+    )
 
-    with (
-        patch(
-            f"{ORCHESTRATOR_MODULE}.build_entry_reconciliation_command",
-            wraps=build_entry_reconciliation_command,
-        ) as builder,
-        patch(
-            f"{ORCHESTRATOR_MODULE}.apply_success_confirmation",
-            wraps=apply_success_confirmation,
-        ) as applier,
-    ):
-        result = EntryReconciliationOrchestrator(
-            id_factory,
-            execution_port,
-            repository,
-        ).execute(item)
+    result = EntryReconciliationOrchestrator(id_factory, execution_port, repository).execute(
+        projection(source_state, updated)
+    )
+
+    assert id_factory.calls == 1
+    assert [(c.trade_cycle_id, c.desired_entry) for c, _ in execution_port.calls] == [
+        ("cycle-1", None),
+        ("cycle-new", updated),
+    ]
+    assert execution_port.calls[0][1] is source_state
+    assert execution_port.calls[1][1].current_trade_cycle is None
+    # Marker C on cycle C, then the boundary save: no cycle, marker N.
+    assert [(s.current_trade_cycle, s.pending_entry_recovery) for s in repository.saved] == [
+        (source_state.current_trade_cycle, PendingEntryRecovery("cycle-1")),
+        (None, PendingEntryRecovery("cycle-new")),
+    ]
+    assert result.current_trade_cycle == CurrentTradeCycle(
+        "cycle-new", AppliedEntryPackage(updated, "0.02")
+    )
+    assert result.pending_entry_recovery is None
+    assert source_state == snapshot
+
+
+def test_replace_reserves_the_new_identity_only_after_confirmed_absence() -> None:
+    repository, source_state = seeded_recording_repository(desired_entry())
+    id_factory = RecordingIdFactory()
+    seen_calls_at_reservation: list[int] = []
+    execution_port = ScriptedExecutionPort(
+        EntryAbsentConfirmation("instance", "cycle-1"),
+        replace_applied_confirmation(desired_entry(price="101")),
+    )
+
+    def reserve() -> str:
+        seen_calls_at_reservation.append(len(execution_port.calls))
+        return id_factory()
+
+    EntryReconciliationOrchestrator(reserve, execution_port, repository).execute(
+        projection(source_state, desired_entry(price="101"))
+    )
+
+    assert seen_calls_at_reservation == [1]
+
+
+@pytest.mark.parametrize(
+    "cancel_outcome",
+    [
+        RuntimeError("ABI entry-package request timed out"),
+        object(),
+    ],
+)
+def test_replace_sends_no_apply_when_cancel_is_not_confirmed(
+    cancel_outcome: Exception | object,
+) -> None:
+    repository, source_state = seeded_recording_repository(desired_entry())
+    id_factory = RecordingIdFactory()
+    execution_port = ScriptedExecutionPort(cancel_outcome)
+
+    with pytest.raises((RuntimeError, EntryReconciliationInvariantError)):
+        EntryReconciliationOrchestrator(id_factory, execution_port, repository).execute(
+            projection(source_state, desired_entry(price="101"))
+        )
 
     assert id_factory.calls == 0
-    builder.assert_called_once()
-    builder_args = builder.call_args.args
-    assert builder_args[0] is source_state
-    assert builder_args[1] == Cancel("cycle-1")
-    assert builder_args[2] is None
     assert len(execution_port.calls) == 1
-    command, executed_state = execution_port.calls[0]
-    assert command.trade_cycle_id == "cycle-1"
-    assert command.desired_entry is None
-    assert executed_state is source_state
-    applier.assert_called_once()
-    assert applier.call_args.args[2] is command
-    assert source_state == snapshot
-    assert result.current_trade_cycle is None
-    assert result.pending_entry_recovery is None
+    durable = repository.get("instance")
+    assert durable is not None
+    assert durable.current_trade_cycle == source_state.current_trade_cycle
+    assert durable.pending_entry_recovery == PendingEntryRecovery("cycle-1")
+
+
+def test_replace_rejects_a_contradictory_absent_confirmation_without_apply() -> None:
+    repository, source_state = seeded_recording_repository(desired_entry())
+    id_factory = RecordingIdFactory()
+    execution_port = ScriptedExecutionPort(EntryAbsentConfirmation("instance", "other-cycle"))
+
+    with pytest.raises(EntryReconciliationInvariantError):
+        EntryReconciliationOrchestrator(id_factory, execution_port, repository).execute(
+            projection(source_state, desired_entry(price="101"))
+        )
+
+    assert id_factory.calls == 0
+    assert len(execution_port.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "apply_outcome",
+    [
+        RuntimeError("ABI entry-package request timed out"),
+        EntryAppliedConfirmation("instance", "other-cycle", desired_entry(price="101"), "0.02"),
+    ],
+)
+def test_replace_apply_failure_leaves_the_boundary_state_without_retry(
+    apply_outcome: Exception | object,
+) -> None:
+    repository, source_state = seeded_recording_repository(desired_entry())
+    id_factory = RecordingIdFactory()
+    execution_port = ScriptedExecutionPort(
+        EntryAbsentConfirmation("instance", "cycle-1"), apply_outcome
+    )
+
+    with pytest.raises((RuntimeError, EntryReconciliationInvariantError)):
+        EntryReconciliationOrchestrator(id_factory, execution_port, repository).execute(
+            projection(source_state, desired_entry(price="101"))
+        )
+
+    assert len(execution_port.calls) == 2
+    durable = repository.get("instance")
+    assert durable is not None
+    assert durable.current_trade_cycle is None
+    assert durable.pending_entry_recovery == PendingEntryRecovery("cycle-new")
+
+
+def test_five_bars_of_changing_entries_keep_an_order_on_every_bar() -> None:
+    repository, state = seeded_recording_repository(desired_entry(price="100"))
+    ids = iter(f"cycle-{n}" for n in range(2, 7))
+    prices = ["101", "102", "103", "104", "105"]
+    outcomes: list[object] = []
+    previous = "cycle-1"
+    for n, price in zip(range(2, 7), prices, strict=True):
+        outcomes.append(EntryAbsentConfirmation("instance", previous))
+        outcomes.append(replace_applied_confirmation(desired_entry(price=price), f"cycle-{n}"))
+        previous = f"cycle-{n}"
+    execution_port = ScriptedExecutionPort(*outcomes)
+    orchestrator = EntryReconciliationOrchestrator(lambda: next(ids), execution_port, repository)
+
+    for price in prices:
+        state = repository.save(orchestrator.execute(projection(state, desired_entry(price=price))))
+        cycle = state.current_trade_cycle
+        assert cycle is not None
+        assert cycle.applied_entry_package.applied_desired_entry == desired_entry(price=price)
+        assert state.pending_entry_recovery is None
+
+    assert [c.desired_entry is None for c, _ in execution_port.calls] == [True, False] * 5
 
 
 def test_cancel_reuses_cycle_and_clears_the_complete_current_cycle() -> None:
