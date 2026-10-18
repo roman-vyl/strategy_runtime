@@ -43,12 +43,25 @@ Each failure point reuses an existing recovery path:
 | CANCEL rejected or not absent, e.g. the old order filled (fill race) | cycle C + marker C | resolver: `position_open` → first fill, otherwise terminal or absent (existing) | no |
 | Contradictory absent confirmation (invariant) | cycle C + marker C | fails closed; resolver (existing) | no |
 | Crash between step 3 and step 5 | cycle C + marker C (S1 was never saved) | resolver, uncertain removal → finds absent → clears C | no; the next bar decides `Apply(Y')` |
-| Crash or exception after step 5, or APPLY timeout or network error | no cycle + marker N | resolver, uncertain apply for N (existing): not found → clear; live → adopt; filled → first fill | no second attempt |
+| Crash or exception after step 5, or APPLY timeout or network error | no cycle + marker N | resolver, uncertain apply for N (existing): live → adopt N; filled → first fill; not found → one corrective CANCEL, cleared only on exact `entry_package_absent`; ABI never saw N (`unknown_trade_cycle_binding`) → marker stays | no second attempt |
 | APPLY invariant failure | no cycle + marker N | resolver (existing) | no |
 
 Rules for every row:
 - The orchestrator never retries, never sends a fallback command, and never sends APPLY while the CANCEL outcome is unknown.
 - A position can never hold two live entry orders from this instance. APPLY N is sent only after C is confirmed absent and that absence is durably recorded.
+
+### D3a. Intent is not recovered; exchange fact is
+
+Owner review, 2026-10-18 19:18, sets this scope:
+- Replace runs synchronously inside one bar's handling. There is no background continuation, no queue, and no resumption of an interrupted Replace after a restart.
+- If CANCEL is not confirmed, APPLY is forbidden.
+- If APPLY is not confirmed, the existing recovery establishes the exchange fact, whether C remains or N exists. While a marker is set the bar path skips the instance, so no new order is sent before the fact is known.
+- Once uncertainty is resolved, the next bar decides afresh from Engine. The old Y is never re-sent.
+- The identity N is durably saved before APPLY is sent (step 5), so a timeout always knows which order to look for. This save is the only part of the boundary that must not be removed.
+
+The existing resolver never treats an unknown order as confirmed absent. "Not found" leads to one corrective CANCEL and is cleared only on an exact `entry_package_absent`. An unknown binding, where ABI never received APPLY N, leaves the marker in place until a positive answer arrives.
+
+This is safe, but it can need manual intervention: the same stuck shape as the ETH smoke cycle `3e2e0f79`. It is accepted for V1 as the price of simplicity. No new recovery is added for it in this change.
 
 ### D4. Accepted cost
 
