@@ -55,11 +55,15 @@ Rules for every row:
 - Between the confirmed CANCEL and the confirmed APPLY there is a short interval with no order: two sequential ABI round-trips within the same bar, instead of a whole bar as today.
 - If CANCEL is ambiguous, the bar degrades to today's behaviour: no order until recovery resolves, then a fresh Apply on a later bar.
 
-### D5. Runtime→ABI timeout (observation, not changed here)
+### D5. Runtime→ABI timeout (measured, not changed here)
 
 - `RUNTIME_ABI_ENTRY_PACKAGE_TIMEOUT_SECONDS` defaults to 5 s (`docker-compose.yml:18`).
-- ABI cancels were observed taking 10–17 s on demo, so a CANCEL can end as a Runtime timeout even when ABI later succeeds. Such a bar falls into the first row of D3, with no APPLY on that bar.
-- Raising the timeout is a configuration decision for the owner. It is not part of this change.
+- On demo, 2026-10-18 18:15–19:10 UTC, ABI handled each operation in:
+  - cancel: 1.3–2.7 s, median 1.6 s;
+  - apply: 1.0–3.2 s, median 1.6 s.
+- A replace is therefore about 3–6 s in total, and each call fits the 5 s timeout on its own.
+- Two operations took 10 s and 23 s and ended as ABI `internal_error`. They coincided with slow open-position lookups (Bybit stalls), and they fall into the first or fifth row of D3.
+- An earlier "10–17 s cancel" observation was not confirmed.
 
 ## Risks
 
