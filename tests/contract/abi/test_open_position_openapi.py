@@ -48,7 +48,17 @@ def test_authoritative_openapi_examples_decode_successfully_via_runtime_codec() 
         position_open=True,
         first_fill_at_ms=examples["open"]["value"]["first_fill_at_ms"],
         average_entry_price=examples["open"]["value"]["average_entry_price"],
+        entry_order_link_id=examples["open"]["value"]["entry_order_link_id"],
+        entry_order_id=examples["open"]["value"]["entry_order_id"],
     )
+
+    without_order_id = decode_open_position_response(
+        status_code=200,
+        content_type="application/json",
+        content=json.dumps(examples["open_without_exchange_order_id"]["value"]).encode("utf-8"),
+    )
+    assert without_order_id.entry_order_id is None
+    assert without_order_id.entry_order_link_id is not None
 
     closed_result = decode_open_position_response(
         status_code=200,
@@ -57,17 +67,14 @@ def test_authoritative_openapi_examples_decode_successfully_via_runtime_codec() 
     )
     assert closed_result == OpenPositionLookupResponse(position_open=False)
 
-    # ABI with trade-cycle closure (abi-trade-cycle-closure-confirmation-v1);
-    # absent from an older checkout, which Runtime accepts unchanged.
-    if "closed_by_stop_loss" in examples:
-        stop = decode_open_position_response(
-            status_code=200,
-            content_type="application/json",
-            content=json.dumps(examples["closed_by_stop_loss"]["value"]).encode("utf-8"),
-        )
-        assert stop.position_open is False
-        assert stop.closure is not None
-        assert stop.closure.reason == "stop_loss"
+    stop = decode_open_position_response(
+        status_code=200,
+        content_type="application/json",
+        content=json.dumps(examples["closed_by_stop_loss"]["value"]).encode("utf-8"),
+    )
+    assert stop.position_open is False
+    assert stop.closure is not None
+    assert stop.closure.reason == "stop_loss"
 
 
 def test_authoritative_openapi_business_error_examples_decode_via_runtime_codec() -> None:
@@ -142,10 +149,13 @@ def assert_success_schemas(schemas: dict[str, Any], operation: dict[str, Any]) -
 
     open_schema = schemas["OpenPositionOpenResponse"]
     assert open_schema["additionalProperties"] is False
-    assert set(open_schema["required"]) - {"closure"} == {
+    assert set(open_schema["required"]) == {
         "position_open",
         "first_fill_at_ms",
         "average_entry_price",
+        "closure",
+        "entry_order_link_id",
+        "entry_order_id",
     }
     assert open_schema["properties"]["position_open"] == {"const": True}
     assert open_schema["properties"]["first_fill_at_ms"] == {
@@ -156,14 +166,25 @@ def assert_success_schemas(schemas: dict[str, Any], operation: dict[str, Any]) -
         "type": "string",
         "format": "positive-exact-decimal",
     }
+    assert open_schema["properties"]["entry_order_link_id"]["type"] == "string"
+    assert open_schema["properties"]["entry_order_link_id"]["minLength"] == 1
+    assert open_schema["properties"]["entry_order_id"]["oneOf"] == [
+        {"type": "null"},
+        {"type": "string", "minLength": 1},
+    ]
 
     closed_schema = schemas["OpenPositionClosedResponse"]
     assert closed_schema["additionalProperties"] is False
-    assert set(closed_schema["required"]) - {"closure"} == {
+    assert set(closed_schema["required"]) == {
         "position_open",
         "first_fill_at_ms",
         "average_entry_price",
+        "closure",
+        "entry_order_link_id",
+        "entry_order_id",
     }
+    assert closed_schema["properties"]["entry_order_link_id"] == {"type": "null"}
+    assert closed_schema["properties"]["entry_order_id"] == {"type": "null"}
     assert closed_schema["properties"]["position_open"] == {"const": False}
     assert closed_schema["properties"]["first_fill_at_ms"] == {"type": "null"}
     assert closed_schema["properties"]["average_entry_price"] == {"type": "null"}

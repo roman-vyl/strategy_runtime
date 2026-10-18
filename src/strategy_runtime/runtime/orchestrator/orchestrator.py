@@ -7,6 +7,10 @@ from strategy_runtime.runtime.entry_reconciliation_orchestrator import (
     EntryReconciliationOrchestrator,
 )
 from strategy_runtime.runtime.first_fill.errors import FirstFillInvariantError
+from strategy_runtime.runtime.first_fill.journal import (
+    TradeCycleOpenedJournalPort,
+    journal_trade_cycle_opened,
+)
 from strategy_runtime.runtime.first_fill.state_applier import apply_first_fill
 from strategy_runtime.runtime.open_position.models import (
     PositionResolvedStrategyInstanceRuntimeState,
@@ -55,6 +59,7 @@ class StrategyRuntimeOrchestrator:
         position_management_orchestrator: PositionManagementOrchestrator,
         live_entry_journal: LiveEntryEvaluationJournalPort | None = None,
         trade_cycle_closed_journal: TradeCycleClosedJournalPort | None = None,
+        trade_cycle_opened_journal: TradeCycleOpenedJournalPort | None = None,
     ) -> None:
         self._state_repository = state_repository
         self._open_position_resolver = open_position_resolver
@@ -64,6 +69,7 @@ class StrategyRuntimeOrchestrator:
         self._position_management_orchestrator = position_management_orchestrator
         self._live_entry_journal = live_entry_journal
         self._trade_cycle_closed_journal = trade_cycle_closed_journal
+        self._trade_cycle_opened_journal = trade_cycle_opened_journal
 
     def process(
         self, unit: StrategyBarProcessingUnit[DeploymentSpecification]
@@ -95,7 +101,7 @@ class StrategyRuntimeOrchestrator:
                 )
                 return saved_state
             if resolved.position_open:
-                resolved = self._ensure_first_fill_frozen(resolved)
+                resolved = self._ensure_first_fill_frozen(resolved, unit.committed_bar.open_time_ms)
                 current_cycle = resolved.runtime_state.current_trade_cycle
                 assert current_cycle is not None
                 frozen_context = current_cycle.frozen_entry_context
@@ -152,7 +158,7 @@ class StrategyRuntimeOrchestrator:
         )
 
     def _ensure_first_fill_frozen(
-        self, resolved: PositionResolvedStrategyInstanceRuntimeState
+        self, resolved: PositionResolvedStrategyInstanceRuntimeState, bar_open_time_ms: int
     ) -> PositionResolvedStrategyInstanceRuntimeState:
         state = resolved.runtime_state
         current_cycle = state.current_trade_cycle
@@ -165,6 +171,19 @@ class StrategyRuntimeOrchestrator:
             state, current_cycle.trade_cycle_id, resolved.first_fill_at_ms
         )
         if resulting_state is state:
+            # Already frozen: a repeated observation, not a new transition.
             return resolved
         saved_state = self._state_repository.save(resulting_state)
+        assert resolved.average_entry_price is not None
+        assert resolved.entry_order_link_id is not None
+        journal_trade_cycle_opened(
+            self._trade_cycle_opened_journal,
+            strategy_instance_id=state.strategy_instance_id,
+            trade_cycle_id=current_cycle.trade_cycle_id,
+            bar_open_time_ms=bar_open_time_ms,
+            first_fill_at_ms=resolved.first_fill_at_ms,
+            average_entry_price=resolved.average_entry_price,
+            entry_order_link_id=resolved.entry_order_link_id,
+            entry_order_id=resolved.entry_order_id,
+        )
         return replace(resolved, runtime_state=saved_state)

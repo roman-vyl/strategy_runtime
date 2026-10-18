@@ -36,4 +36,6 @@ class OpenPositionResolver:
             first_fill_at_ms=response.first_fill_at_ms,
             average_entry_price=response.average_entry_price,
             closure=response.closure,
+            entry_order_link_id=response.entry_order_link_id,
+            entry_order_id=response.entry_order_id,
         )

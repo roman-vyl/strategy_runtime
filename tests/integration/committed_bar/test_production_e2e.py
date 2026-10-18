@@ -196,7 +196,15 @@ def _dispatch_outcomes(journal_path: Path) -> list[dict[str, object]]:
 
 def _open_position_closed() -> FakeResponse:
     return FakeResponse(
-        200, {"position_open": False, "first_fill_at_ms": None, "average_entry_price": None}
+        200,
+        {
+            "position_open": False,
+            "first_fill_at_ms": None,
+            "average_entry_price": None,
+            "closure": None,
+            "entry_order_link_id": None,
+            "entry_order_id": None,
+        },
     )
 
 
@@ -207,6 +215,9 @@ def _open_position_open(first_fill_at_ms: int, average_entry_price: str) -> Fake
             "position_open": True,
             "first_fill_at_ms": first_fill_at_ms,
             "average_entry_price": average_entry_price,
+            "closure": None,
+            "entry_order_link_id": "abi-ep-link",
+            "entry_order_id": "bybit-order-1",
         },
     )
 

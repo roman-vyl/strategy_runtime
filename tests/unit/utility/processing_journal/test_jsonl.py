@@ -227,3 +227,50 @@ def test_entry_package_applied_serializes_its_payload(tmp_path: Path) -> None:
         "order_link_id": "link-1",
         "order_id": None,
     }
+
+
+def test_trade_cycle_opened_serializes_its_payload(tmp_path: Path) -> None:
+    path = tmp_path / "runtime.jsonl"
+    journal = make_journal(path)
+
+    journal.trade_cycle_opened(
+        strategy_instance_id="dep-a",
+        trade_cycle_id="cycle-1",
+        bar_open_time_ms=None,
+        first_fill_at_ms=1_000_950,
+        average_entry_price="100.5",
+        entry_order_link_id="abi-ep-link",
+        entry_order_id=None,
+    )
+
+    record = json.loads(path.read_text())
+    assert record["event_type"] == "trade_cycle_opened"
+    assert record["schema_version"] == 2
+    assert record["severity"] == "info"
+    assert record["strategy_instance_id"] == "dep-a"
+    assert record["payload"] == {
+        "trade_cycle_id": "cycle-1",
+        "bar_open_time_ms": None,
+        "first_fill_at_ms": 1_000_950,
+        "average_entry_price": "100.5",
+        "entry_order_link_id": "abi-ep-link",
+        "entry_order_id": None,
+    }
+
+
+def test_trade_cycle_opened_failure_is_absorbed(tmp_path: Path) -> None:
+    path = tmp_path / "blocked"
+    path.mkdir()
+    journal = make_journal(path)
+
+    journal.trade_cycle_opened(
+        strategy_instance_id="dep-a",
+        trade_cycle_id="cycle-1",
+        bar_open_time_ms=1000,
+        first_fill_at_ms=950,
+        average_entry_price="100.5",
+        entry_order_link_id="abi-ep-link",
+        entry_order_id="bybit-order-1",
+    )
+
+    assert journal.failure_count == 1

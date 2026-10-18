@@ -51,6 +51,10 @@ class PositionOpenRecoveryState:
     applied_entry_package: RecoveryStateAppliedEntryPackage
     first_fill_at_ms: int
     average_entry_price: str
+    # The cycle's own entry order whose fill ABI proved; the exchange id is
+    # None when ABI's confirmed row carried none (runtime-trade-cycle-opened-v1).
+    entry_order_link_id: str
+    entry_order_id: str | None
 
     kind: ClassVar[Literal["position_open"]] = "position_open"
 
@@ -61,6 +65,12 @@ class PositionOpenRecoveryState:
             raise ValueError("first_fill_at_ms must be a strictly positive integer")
         if not is_positive_exact_decimal_text(self.average_entry_price):
             raise ValueError("average_entry_price must be positive exact-decimal text")
+        if type(self.entry_order_link_id) is not str or len(self.entry_order_link_id) == 0:
+            raise ValueError("entry_order_link_id must be a non-empty string")
+        if self.entry_order_id is not None and (
+            type(self.entry_order_id) is not str or len(self.entry_order_id) == 0
+        ):
+            raise ValueError("entry_order_id must be a non-empty string or None")
 
 
 @dataclass(frozen=True, slots=True)

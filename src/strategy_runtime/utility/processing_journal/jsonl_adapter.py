@@ -202,6 +202,31 @@ class JsonlProcessingJournal:
             },
         )
 
+    def trade_cycle_opened(
+        self,
+        *,
+        strategy_instance_id: str,
+        trade_cycle_id: str,
+        bar_open_time_ms: int | None,
+        first_fill_at_ms: int,
+        average_entry_price: str,
+        entry_order_link_id: str,
+        entry_order_id: str | None,
+    ) -> None:
+        self._record(
+            event_type=ProcessingJournalEventType.TRADE_CYCLE_OPENED,
+            severity="info",
+            strategy_instance_id=strategy_instance_id,
+            payload={
+                "trade_cycle_id": trade_cycle_id,
+                "bar_open_time_ms": bar_open_time_ms,
+                "first_fill_at_ms": first_fill_at_ms,
+                "average_entry_price": average_entry_price,
+                "entry_order_link_id": entry_order_link_id,
+                "entry_order_id": entry_order_id,
+            },
+        )
+
     def _record(
         self,
         *,

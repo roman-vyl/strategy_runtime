@@ -111,6 +111,8 @@ def test_authoritative_openapi_success_examples_decode_via_runtime_codec() -> No
         ),
         first_fill_at_ms=position_open_value["first_fill_at_ms"],
         average_entry_price=position_open_value["average_entry_price"],
+        entry_order_link_id=position_open_value["entry_order_link_id"],
+        entry_order_id=position_open_value["entry_order_id"],
     )
 
     terminal_without_fill = decode_recovery_state_response(

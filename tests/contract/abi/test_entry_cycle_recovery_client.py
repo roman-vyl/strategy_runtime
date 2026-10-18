@@ -116,6 +116,8 @@ def test_decodes_entry_order_live() -> None:
                 "applied_entry_package": _applied_entry_package_body(),
                 "first_fill_at_ms": None,
                 "average_entry_price": None,
+                "entry_order_link_id": None,
+                "entry_order_id": None,
             },
         )
     )
@@ -134,6 +136,8 @@ def test_decodes_entry_order_not_found_only_with_all_conditional_fields_null() -
                 "applied_entry_package": None,
                 "first_fill_at_ms": None,
                 "average_entry_price": None,
+                "entry_order_link_id": None,
+                "entry_order_id": None,
             },
         )
     )
@@ -152,6 +156,8 @@ def test_decodes_position_open() -> None:
                 "applied_entry_package": _applied_entry_package_body(),
                 "first_fill_at_ms": 1785000012345,
                 "average_entry_price": "100000",
+                "entry_order_link_id": "abi-ep-link",
+                "entry_order_id": "bybit-order-1",
             },
         )
     )
@@ -162,7 +168,78 @@ def test_decodes_position_open() -> None:
         applied_entry_package=_applied_entry_package(),
         first_fill_at_ms=1785000012345,
         average_entry_price="100000",
+        entry_order_link_id="abi-ep-link",
+        entry_order_id="bybit-order-1",
     )
+
+
+def test_decodes_position_open_without_an_exchange_order_id() -> None:
+    body = {
+        "recovery_state": "position_open",
+        "applied_entry_package": _applied_entry_package_body(),
+        "first_fill_at_ms": 1785000012345,
+        "average_entry_price": "100000",
+        "entry_order_link_id": "abi-ep-link",
+        "entry_order_id": None,
+    }
+    fake = FakeAbi(lambda _: json_response(200, body))
+
+    result = query(fake, strategy_instance_id="instance", trade_cycle_id="cycle")
+
+    assert isinstance(result, PositionOpenRecoveryState)
+    assert result.entry_order_link_id == "abi-ep-link"
+    assert result.entry_order_id is None
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # pre-identity ABI body
+        {
+            "recovery_state": "terminal_without_fill",
+            "applied_entry_package": None,
+            "first_fill_at_ms": None,
+            "average_entry_price": None,
+        },
+        {
+            "recovery_state": "position_open",
+            "applied_entry_package": _applied_entry_package_body(),
+            "first_fill_at_ms": 1,
+            "average_entry_price": "1",
+            "entry_order_link_id": None,
+            "entry_order_id": None,
+        },
+        {
+            "recovery_state": "position_open",
+            "applied_entry_package": _applied_entry_package_body(),
+            "first_fill_at_ms": 1,
+            "average_entry_price": "1",
+            "entry_order_link_id": "abi-ep-link",
+            "entry_order_id": "",
+        },
+        {
+            "recovery_state": "entry_order_live",
+            "applied_entry_package": _applied_entry_package_body(),
+            "first_fill_at_ms": None,
+            "average_entry_price": None,
+            "entry_order_link_id": "abi-ep-link",
+            "entry_order_id": None,
+        },
+        {
+            "recovery_state": "terminal_after_fill",
+            "applied_entry_package": None,
+            "first_fill_at_ms": None,
+            "average_entry_price": None,
+            "entry_order_link_id": None,
+            "entry_order_id": "bybit-order-1",
+        },
+    ],
+)
+def test_entry_order_identity_shape_is_strict(body: dict[str, object]) -> None:
+    fake = FakeAbi(lambda _: json_response(200, body))
+
+    with pytest.raises(AbiEntryCycleRecoveryProtocolError):
+        query(fake, strategy_instance_id="instance", trade_cycle_id="cycle")
 
 
 def test_decodes_terminal_without_fill() -> None:
@@ -182,6 +259,8 @@ def test_decodes_terminal_after_fill() -> None:
                 "applied_entry_package": None,
                 "first_fill_at_ms": None,
                 "average_entry_price": None,
+                "entry_order_link_id": None,
+                "entry_order_id": None,
             },
         )
     )
@@ -199,36 +278,48 @@ def test_decodes_terminal_after_fill() -> None:
             "applied_entry_package": None,
             "first_fill_at_ms": None,
             "average_entry_price": None,
+            "entry_order_link_id": None,
+            "entry_order_id": None,
         },
         {
             "recovery_state": "entry_order_not_found",
             "applied_entry_package": _applied_entry_package_body(),
             "first_fill_at_ms": None,
             "average_entry_price": None,
+            "entry_order_link_id": None,
+            "entry_order_id": None,
         },
         {
             "recovery_state": "entry_order_not_found",
             "applied_entry_package": None,
             "first_fill_at_ms": 1,
             "average_entry_price": None,
+            "entry_order_link_id": None,
+            "entry_order_id": None,
         },
         {
             "recovery_state": "terminal_without_fill",
             "applied_entry_package": {"anything": True},
             "first_fill_at_ms": None,
             "average_entry_price": None,
+            "entry_order_link_id": None,
+            "entry_order_id": None,
         },
         {
             "recovery_state": "position_open",
             "applied_entry_package": None,
             "first_fill_at_ms": 1,
             "average_entry_price": "1",
+            "entry_order_link_id": "abi-ep-link",
+            "entry_order_id": "bybit-order-1",
         },
         {
             "recovery_state": "entry_order_live",
             "applied_entry_package": None,
             "first_fill_at_ms": 1,
             "average_entry_price": None,
+            "entry_order_link_id": None,
+            "entry_order_id": None,
         },
     ],
 )
@@ -248,6 +339,8 @@ def test_undocumented_recovery_state_value_fails_closed() -> None:
                 "applied_entry_package": None,
                 "first_fill_at_ms": None,
                 "average_entry_price": None,
+                "entry_order_link_id": None,
+                "entry_order_id": None,
             },
         )
     )
@@ -415,6 +508,8 @@ def terminal_without_fill_body() -> dict[str, object]:
         "applied_entry_package": None,
         "first_fill_at_ms": None,
         "average_entry_price": None,
+        "entry_order_link_id": None,
+        "entry_order_id": None,
     }
 
 

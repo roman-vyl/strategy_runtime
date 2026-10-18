@@ -111,6 +111,9 @@ def test_decodes_open_position_with_domain_normalized_decimal() -> None:
                 "position_open": True,
                 "first_fill_at_ms": 1720000000000,
                 "average_entry_price": "+061234.500e0",
+                "closure": None,
+                "entry_order_link_id": "abi-ep-link",
+                "entry_order_id": "bybit-order-1",
             },
         )
     )
@@ -121,7 +124,101 @@ def test_decodes_open_position_with_domain_normalized_decimal() -> None:
         position_open=True,
         first_fill_at_ms=1720000000000,
         average_entry_price="61234.5",
+        entry_order_link_id="abi-ep-link",
+        entry_order_id="bybit-order-1",
     )
+
+
+def test_open_position_without_an_exchange_order_id_keeps_null() -> None:
+    fake = FakeAbi(
+        lambda _: json_response(
+            200,
+            {
+                "position_open": True,
+                "first_fill_at_ms": 1720000000000,
+                "average_entry_price": "61234.5",
+                "closure": None,
+                "entry_order_link_id": "abi-ep-link",
+                "entry_order_id": None,
+            },
+        )
+    )
+
+    result = lookup(fake, make_request())
+
+    assert result.entry_order_link_id == "abi-ep-link"
+    assert result.entry_order_id is None
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # pre-identity ABI body: no new keys
+        {
+            "position_open": False,
+            "first_fill_at_ms": None,
+            "average_entry_price": None,
+            "closure": None,
+        },
+        # pre-closure ABI body
+        {"position_open": False, "first_fill_at_ms": None, "average_entry_price": None},
+        # open without the entry order's own link id
+        {
+            "position_open": True,
+            "first_fill_at_ms": 1720000000000,
+            "average_entry_price": "61234.5",
+            "closure": None,
+            "entry_order_link_id": None,
+            "entry_order_id": "bybit-order-1",
+        },
+        {
+            "position_open": True,
+            "first_fill_at_ms": 1720000000000,
+            "average_entry_price": "61234.5",
+            "closure": None,
+            "entry_order_link_id": "",
+            "entry_order_id": None,
+        },
+        {
+            "position_open": True,
+            "first_fill_at_ms": 1720000000000,
+            "average_entry_price": "61234.5",
+            "closure": None,
+            "entry_order_link_id": "abi-ep-link",
+            "entry_order_id": "",
+        },
+        {
+            "position_open": True,
+            "first_fill_at_ms": 1720000000000,
+            "average_entry_price": "61234.5",
+            "closure": None,
+            "entry_order_link_id": "abi-ep-link",
+            "entry_order_id": 123,
+        },
+        # identifiers on a closed position
+        {
+            "position_open": False,
+            "first_fill_at_ms": None,
+            "average_entry_price": None,
+            "closure": None,
+            "entry_order_link_id": "abi-ep-link",
+            "entry_order_id": None,
+        },
+        {
+            "position_open": False,
+            "first_fill_at_ms": None,
+            "average_entry_price": None,
+            "closure": None,
+            "entry_order_link_id": None,
+            "entry_order_id": "bybit-order-1",
+        },
+    ],
+)
+def test_entry_order_identity_shape_is_strict(body: dict[str, object]) -> None:
+    fake = FakeAbi(lambda _: json_response(200, body))
+
+    with pytest.raises(OpenPositionLookupProtocolError):
+        lookup(fake, make_request())
 
 
 @pytest.mark.parametrize("first_fill_at_ms", [0, -1])
@@ -133,6 +230,9 @@ def test_non_positive_first_fill_at_ms_is_rejected(first_fill_at_ms: int) -> Non
                 "position_open": True,
                 "first_fill_at_ms": first_fill_at_ms,
                 "average_entry_price": "61234.5",
+                "closure": None,
+                "entry_order_link_id": "abi-ep-link",
+                "entry_order_id": "bybit-order-1",
             },
         )
     )
@@ -168,6 +268,9 @@ def test_malformed_open_success_body_fails_closed(
         "position_open": True,
         "first_fill_at_ms": 1720000000000,
         "average_entry_price": "61234.5",
+        "closure": None,
+        "entry_order_link_id": "abi-ep-link",
+        "entry_order_id": "bybit-order-1",
     }
     mutate(body)
     fake = FakeAbi(lambda _: json_response(200, body))
@@ -201,21 +304,33 @@ def test_legacy_pre_alignment_success_shape_is_rejected() -> None:
             "position_open": False,
             "first_fill_at_ms": 1720000000000,
             "average_entry_price": None,
+            "closure": None,
+            "entry_order_link_id": None,
+            "entry_order_id": None,
         },
         {
             "position_open": False,
             "first_fill_at_ms": None,
             "average_entry_price": "61234.5",
+            "closure": None,
+            "entry_order_link_id": None,
+            "entry_order_id": None,
         },
         {
             "position_open": True,
             "first_fill_at_ms": None,
             "average_entry_price": "61234.5",
+            "closure": None,
+            "entry_order_link_id": "abi-ep-link",
+            "entry_order_id": "bybit-order-1",
         },
         {
             "position_open": True,
             "first_fill_at_ms": 1720000000000,
             "average_entry_price": None,
+            "closure": None,
+            "entry_order_link_id": "abi-ep-link",
+            "entry_order_id": "bybit-order-1",
         },
     ],
 )
@@ -509,6 +624,9 @@ def closed_body() -> dict[str, object]:
         "position_open": False,
         "first_fill_at_ms": None,
         "average_entry_price": None,
+        "closure": None,
+        "entry_order_link_id": None,
+        "entry_order_id": None,
     }
 
 

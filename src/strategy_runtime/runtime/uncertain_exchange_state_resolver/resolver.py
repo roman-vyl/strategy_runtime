@@ -29,6 +29,10 @@ from strategy_runtime.runtime.abi.entry_package_models import (
     EntryPackageWireDesiredEntry,
 )
 from strategy_runtime.runtime.coordination import StrategyInstanceKeyedMutexRegistry
+from strategy_runtime.runtime.first_fill.journal import (
+    TradeCycleOpenedJournalPort,
+    journal_trade_cycle_opened,
+)
 from strategy_runtime.runtime.first_fill.state_applier import apply_first_fill
 from strategy_runtime.runtime.position_management_decision.models import ClosePosition
 from strategy_runtime.runtime.position_management_execution.errors import (
@@ -70,12 +74,14 @@ class UncertainExchangeStateResolver:
         abi_entry_cycle_recovery: AbiEntryCycleRecoveryPort,
         position_management_execution: PositionManagementExecutionPort,
         trade_cycle_closed_journal: TradeCycleClosedJournalPort | None = None,
+        trade_cycle_opened_journal: TradeCycleOpenedJournalPort | None = None,
     ) -> None:
         self._state_repository = state_repository
         self._keyed_mutex_registry = keyed_mutex_registry
         self._abi_entry_cycle_recovery = abi_entry_cycle_recovery
         self._position_management_execution = position_management_execution
         self._trade_cycle_closed_journal = trade_cycle_closed_journal
+        self._trade_cycle_opened_journal = trade_cycle_opened_journal
 
     def attempt(self, strategy_instance_id: str) -> None:
         """Resolve, or leave untouched, the one instance's pending recovery marker."""
@@ -155,6 +161,18 @@ class UncertainExchangeStateResolver:
                     reconstructed, trade_cycle_id, response.first_fill_at_ms
                 )
             self._state_repository.save(reconstructed)
+            if isinstance(response, PositionOpenRecoveryState):
+                # No committed bar is processed here, so there is no bar time.
+                journal_trade_cycle_opened(
+                    self._trade_cycle_opened_journal,
+                    strategy_instance_id=state.strategy_instance_id,
+                    trade_cycle_id=trade_cycle_id,
+                    bar_open_time_ms=None,
+                    first_fill_at_ms=response.first_fill_at_ms,
+                    average_entry_price=response.average_entry_price,
+                    entry_order_link_id=response.entry_order_link_id,
+                    entry_order_id=response.entry_order_id,
+                )
             return
 
         if isinstance(response, (TerminalWithoutFillRecoveryState, TerminalAfterFillRecoveryState)):

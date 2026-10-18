@@ -20,7 +20,14 @@ from strategy_runtime.runtime.abi.entry_cycle_recovery_models import (
 from strategy_runtime.runtime.abi.entry_package_models import EntryPackageWireDesiredEntry
 
 _SUCCESS_FIELDS = frozenset(
-    {"recovery_state", "applied_entry_package", "first_fill_at_ms", "average_entry_price"}
+    {
+        "recovery_state",
+        "applied_entry_package",
+        "first_fill_at_ms",
+        "average_entry_price",
+        "entry_order_link_id",
+        "entry_order_id",
+    }
 )
 _APPLIED_ENTRY_PACKAGE_FIELDS = frozenset({"applied_desired_entry", "calculated_quantity"})
 _DESIRED_ENTRY_FIELDS = frozenset(
@@ -67,10 +74,14 @@ def _decode_success(payload: object) -> RecoveryStateResponse:
         applied_payload = body["applied_entry_package"]
         first_fill_payload = body["first_fill_at_ms"]
         average_price_payload = body["average_entry_price"]
+        link_id_payload = body["entry_order_link_id"]
+        order_id_payload = body["entry_order_id"]
 
         if recovery_state == "entry_order_live":
             _require_none(first_fill_payload, "first_fill_at_ms")
             _require_none(average_price_payload, "average_entry_price")
+            _require_none(link_id_payload, "entry_order_link_id")
+            _require_none(order_id_payload, "entry_order_id")
             return EntryOrderLiveRecoveryState(
                 applied_entry_package=_decode_applied_entry_package(applied_payload)
             )
@@ -79,6 +90,8 @@ def _decode_success(payload: object) -> RecoveryStateResponse:
             _require_none(applied_payload, "applied_entry_package")
             _require_none(first_fill_payload, "first_fill_at_ms")
             _require_none(average_price_payload, "average_entry_price")
+            _require_none(link_id_payload, "entry_order_link_id")
+            _require_none(order_id_payload, "entry_order_id")
             return EntryOrderNotFoundRecoveryState()
 
         if recovery_state == "position_open":
@@ -86,12 +99,20 @@ def _decode_success(payload: object) -> RecoveryStateResponse:
                 applied_entry_package=_decode_applied_entry_package(applied_payload),
                 first_fill_at_ms=_int(first_fill_payload, "first_fill_at_ms"),
                 average_entry_price=_string(average_price_payload, "average_entry_price"),
+                entry_order_link_id=_string(link_id_payload, "entry_order_link_id"),
+                entry_order_id=(
+                    None
+                    if order_id_payload is None
+                    else _string(order_id_payload, "entry_order_id")
+                ),
             )
 
         if recovery_state in _TERMINAL_STATES:
             _require_none(applied_payload, "applied_entry_package")
             _require_none(first_fill_payload, "first_fill_at_ms")
             _require_none(average_price_payload, "average_entry_price")
+            _require_none(link_id_payload, "entry_order_link_id")
+            _require_none(order_id_payload, "entry_order_id")
             if recovery_state == "terminal_without_fill":
                 return TerminalWithoutFillRecoveryState()
             return TerminalAfterFillRecoveryState()

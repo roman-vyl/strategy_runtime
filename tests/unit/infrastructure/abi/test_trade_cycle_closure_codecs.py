@@ -37,13 +37,24 @@ def _lookup(body: dict[str, object]) -> object:
 
 
 def _closed_body(**extra: object) -> dict[str, object]:
-    return {"position_open": False, "first_fill_at_ms": None, "average_entry_price": None, **extra}
+    body: dict[str, object] = {
+        "position_open": False,
+        "first_fill_at_ms": None,
+        "average_entry_price": None,
+        "closure": None,
+        "entry_order_link_id": None,
+        "entry_order_id": None,
+    }
+    body.update(extra)
+    return body
 
 
-def test_lookup_without_closure_key_decodes_as_before() -> None:
-    response = _lookup(_closed_body())
+def test_lookup_without_closure_key_is_rejected() -> None:
+    body = _closed_body()
+    del body["closure"]
 
-    assert response.closure is None  # type: ignore[attr-defined]
+    with pytest.raises(OpenPositionLookupProtocolError):
+        _lookup(body)
 
 
 def test_lookup_with_null_closure_means_no_closure() -> None:
@@ -66,6 +77,8 @@ def test_lookup_rejects_closure_on_open_position() -> None:
         "first_fill_at_ms": 1,
         "average_entry_price": "81660.6",
         "closure": _stop_closure(),
+        "entry_order_link_id": "abi-ep-link",
+        "entry_order_id": None,
     }
 
     with pytest.raises(OpenPositionLookupProtocolError):
