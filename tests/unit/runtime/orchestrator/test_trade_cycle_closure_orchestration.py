@@ -314,3 +314,76 @@ def test_pending_close_without_closure_writes_no_record() -> None:
     )
 
     assert recorder.calls == [("save", True)]
+
+
+class _FailingSaveRepository(_RecordingRepository):
+    def __init__(self, recorder: _Recorder) -> None:
+        super().__init__(recorder)
+        self.fail = False
+
+    def save(self, state: StrategyInstanceRuntimeState) -> StrategyInstanceRuntimeState:
+        if self.fail:
+            raise OSError("disk full")
+        return super().save(state)
+
+
+def _closed_resolver() -> _Resolver:
+    return _Resolver(
+        position_open=False,
+        first_fill_at_ms=None,
+        average_entry_price=None,
+        closure=_stop_closure(),
+    )
+
+
+def test_failed_save_writes_no_record_and_the_next_bar_ends_the_cycle_once() -> None:
+    recorder = _Recorder()
+    repository = _FailingSaveRepository(recorder)
+    before = _state_with_cycle(repository)
+    recorder.calls.clear()
+    orchestrator = _orchestrator(recorder, repository, _closed_resolver())
+
+    repository.fail = True
+    with pytest.raises(OSError):
+        orchestrator.process(_unit())
+    assert recorder.calls == []
+    assert repository.get(_SID) == before
+
+    # ABI answers the same stored closure on the next bar.
+    repository.fail = False
+    result = orchestrator.process(_unit())
+    assert result.current_trade_cycle is None
+    assert recorder.calls == [("save", True), ("journal", _STOP_RECORD)]
+
+
+def test_a_repeated_closure_after_the_cycle_ended_changes_nothing_twice() -> None:
+    recorder = _Recorder()
+    repository = _RecordingRepository(recorder)
+    _state_with_cycle(repository)
+    recorder.calls.clear()
+    orchestrator = _orchestrator(recorder, repository, _closed_resolver())
+    orchestrator.process(_unit())
+    ended = repository.get(_SID)
+    recorder.calls.clear()
+
+    with pytest.raises(PositionManagementExecutionInvariantError):
+        orchestrator.process(_unit())
+
+    assert recorder.calls == []
+    assert repository.get(_SID) == ended
+
+
+def test_pending_close_with_failed_save_keeps_the_marker_and_writes_no_record() -> None:
+    recorder = _Recorder()
+    repository = _FailingSaveRepository(recorder)
+    before = _state_with_cycle(repository, pending_close=True)
+    recorder.calls.clear()
+    repository.fail = True
+
+    with pytest.raises(OSError):
+        _resolver_with_close(
+            repository, recorder, PositionClosedConfirmation(_SID, _CYCLE, _stop_closure())
+        ).attempt(_SID)
+
+    assert recorder.calls == []
+    assert repository.get(_SID) == before
