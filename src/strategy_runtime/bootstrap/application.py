@@ -208,6 +208,7 @@ def build_application(
             abi_entry_cycle_recovery=entry_cycle_recovery_client,
             position_management_execution=position_management_client,
             trade_cycle_closed_journal=journal,
+            trade_cycle_opened_journal=journal,
         )
         strategy_runtime_orchestrator = StrategyRuntimeOrchestrator(
             state_repository=state_repository,
@@ -218,6 +219,7 @@ def build_application(
             position_management_orchestrator=position_management_orchestrator,
             live_entry_journal=journal,
             trade_cycle_closed_journal=journal,
+            trade_cycle_opened_journal=journal,
         )
         abi_execution_event_orchestrator = AbiExecutionEventOrchestrator(
             state_repository=state_repository,

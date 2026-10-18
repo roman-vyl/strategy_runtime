@@ -15,10 +15,17 @@ from strategy_runtime.runtime.open_position.errors import (
 from strategy_runtime.runtime.open_position.models import OpenPositionLookupResponse
 from strategy_runtime.utility.deployment_catalog.models import FrozenJsonValue, freeze_json
 
-_SUCCESS_FIELDS = frozenset({"position_open", "first_fill_at_ms", "average_entry_price"})
-# ABI sends `closure` once it ships abi-trade-cycle-closure-confirmation-v1; until
-# then the key is absent, and both shapes are accepted.
-_SUCCESS_FIELDS_WITH_CLOSURE = _SUCCESS_FIELDS | {CLOSURE_FIELD}
+# runtime-trade-cycle-opened-v1 D1: exactly these keys, no compatibility shape.
+_SUCCESS_FIELDS = frozenset(
+    {
+        "position_open",
+        "first_fill_at_ms",
+        "average_entry_price",
+        CLOSURE_FIELD,
+        "entry_order_link_id",
+        "entry_order_id",
+    }
+)
 _VALIDATION_DETAIL_FIELDS = frozenset({"path", "message"})
 _ERROR_ENVELOPE_FIELDS = frozenset({"error"})
 _ERROR_OBJECT_FIELDS_WITHOUT_DETAILS = frozenset({"code", "message"})
@@ -70,6 +77,8 @@ def _decode_success(payload: object) -> OpenPositionLookupResponse:
             else _string(average_price_payload, "average_entry_price")
         )
         closure = decode_optional_closure(body)
+        entry_order_link_id = _optional_string(body["entry_order_link_id"], "entry_order_link_id")
+        entry_order_id = _optional_string(body["entry_order_id"], "entry_order_id")
     except (KeyError, TypeError, ValueError) as exc:
         raise OpenPositionLookupProtocolError(
             f"invalid ABI open-position success response: {exc}"
@@ -81,6 +90,8 @@ def _decode_success(payload: object) -> OpenPositionLookupResponse:
             first_fill_at_ms=first_fill_at_ms,
             average_entry_price=average_entry_price,
             closure=closure,
+            entry_order_link_id=entry_order_link_id,
+            entry_order_id=entry_order_id,
         )
     except (TypeError, ValueError) as exc:
         raise OpenPositionLookupProtocolError(
@@ -89,8 +100,6 @@ def _decode_success(payload: object) -> OpenPositionLookupResponse:
 
 
 def _success_object(payload: object) -> dict[str, object]:
-    if type(payload) is dict and CLOSURE_FIELD in payload:
-        return _closed_object(payload, _SUCCESS_FIELDS_WITH_CLOSURE, "success response")
     return _closed_object(payload, _SUCCESS_FIELDS, "success response")
 
 
@@ -223,6 +232,12 @@ def _string(value: object, name: str) -> str:
     if type(value) is not str:
         raise TypeError(f"{name} must be a string")
     return value
+
+
+def _optional_string(value: object, name: str) -> str | None:
+    if value is None:
+        return None
+    return _string(value, name)
 
 
 def _non_empty_string(value: object, name: str) -> str:

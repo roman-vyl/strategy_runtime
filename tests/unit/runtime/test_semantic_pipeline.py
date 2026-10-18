@@ -160,7 +160,7 @@ def resolved_state(
 ) -> PositionResolvedStrategyInstanceRuntimeState:
     target_state = state or frozen_trade_state() if position_open else (state or runtime_state())
     response = (
-        OpenPositionLookupResponse(True, 950, "100.5")
+        OpenPositionLookupResponse(True, 950, "100.5", entry_order_link_id="abi-ep-link")
         if position_open
         else OpenPositionLookupResponse(False)
     )
@@ -233,7 +233,7 @@ def test_open_position_response_rejects_invalid_fact_combinations(
 def test_position_resolver_skips_abi_with_no_current_trade_cycle() -> None:
     state = runtime_state()
     assert state.current_trade_cycle is None
-    abi = Abi(OpenPositionLookupResponse(True, 950, "100.5"))
+    abi = Abi(OpenPositionLookupResponse(True, 950, "100.5", entry_order_link_id="abi-ep-link"))
 
     resolved = OpenPositionResolver(abi).resolve(state)
 
@@ -246,7 +246,7 @@ def test_position_resolver_skips_abi_with_no_current_trade_cycle() -> None:
 
 def test_position_resolver_calls_abi_with_existing_trade_cycle_id() -> None:
     state = frozen_trade_state()
-    abi = Abi(OpenPositionLookupResponse(True, 950, "100.5000"))
+    abi = Abi(OpenPositionLookupResponse(True, 950, "100.5000", entry_order_link_id="abi-ep-link"))
 
     resolved = OpenPositionResolver(abi).resolve(state)
 

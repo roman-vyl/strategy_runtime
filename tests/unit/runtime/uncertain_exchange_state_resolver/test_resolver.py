@@ -155,10 +155,19 @@ class FakePositionManagementExecutionPort:
         return self.close_result  # type: ignore[return-value]
 
 
+class _OpenedJournal:
+    def __init__(self) -> None:
+        self.records: list[dict[str, object]] = []
+
+    def trade_cycle_opened(self, **fields: object) -> None:
+        self.records.append(fields)
+
+
 def _make_resolver(
     repository: InMemoryStrategyInstanceRuntimeStateRepository,
     port: FakeAbiEntryCycleRecoveryPort,
     position_management_execution: FakePositionManagementExecutionPort | None = None,
+    opened_journal: _OpenedJournal | None = None,
 ) -> UncertainExchangeStateResolver:
     return UncertainExchangeStateResolver(
         state_repository=repository,
@@ -169,6 +178,7 @@ def _make_resolver(
             if position_management_execution is not None
             else FakePositionManagementExecutionPort()
         ),  # type: ignore[arg-type]
+        trade_cycle_opened_journal=opened_journal,  # type: ignore[arg-type]
     )
 
 
@@ -235,9 +245,12 @@ def test_uncertain_apply_position_open_reconstructs_the_cycle_and_freezes_first_
             applied_entry_package=applied_entry_package(),
             first_fill_at_ms=1_000_000,
             average_entry_price="100",
+            entry_order_link_id="abi-ep-link",
+            entry_order_id="bybit-order-1",
         )
     )
-    resolver = _make_resolver(repository, port)
+    journal = _OpenedJournal()
+    resolver = _make_resolver(repository, port, opened_journal=journal)
 
     resolver.attempt(_SID)
 
@@ -248,6 +261,46 @@ def test_uncertain_apply_position_open_reconstructs_the_cycle_and_freezes_first_
     assert result.current_trade_cycle.trade_cycle_id == "cycle-new"
     assert result.current_trade_cycle.frozen_entry_context is not None
     assert result.current_trade_cycle.frozen_entry_context.first_fill_at_ms == 1_000_000
+    # One Open Trade record, with no bar time on the recovery path.
+    assert journal.records == [
+        {
+            "strategy_instance_id": _SID,
+            "trade_cycle_id": "cycle-new",
+            "bar_open_time_ms": None,
+            "first_fill_at_ms": 1_000_000,
+            "average_entry_price": "100",
+            "entry_order_link_id": "abi-ep-link",
+            "entry_order_id": "bybit-order-1",
+        }
+    ]
+
+
+def test_uncertain_apply_position_open_writes_no_record_when_the_save_fails() -> None:
+    repository, _ = _repository_with_state(
+        current_trade_cycle=None,
+        pending_entry_recovery=PendingEntryRecovery("cycle-new"),
+    )
+    port = FakeAbiEntryCycleRecoveryPort(
+        query_result=PositionOpenRecoveryState(
+            applied_entry_package=applied_entry_package(),
+            first_fill_at_ms=1_000_000,
+            average_entry_price="100",
+            entry_order_link_id="abi-ep-link",
+            entry_order_id=None,
+        )
+    )
+    journal = _OpenedJournal()
+    resolver = _make_resolver(repository, port, opened_journal=journal)
+
+    def failing_save(state: object) -> object:
+        raise OSError("disk full")
+
+    repository.save = failing_save  # type: ignore[method-assign]
+
+    with pytest.raises(OSError):
+        resolver.attempt(_SID)
+
+    assert journal.records == []
 
 
 def test_uncertain_apply_terminal_without_fill_forgets_the_attempt() -> None:
@@ -401,12 +454,17 @@ def test_uncertain_removal_position_open_means_the_removal_lost_the_race() -> No
             applied_entry_package=applied_entry_package(),
             first_fill_at_ms=1_000_000,
             average_entry_price="100",
+            entry_order_link_id="abi-ep-link",
+            entry_order_id="bybit-order-1",
         )
     )
-    resolver = _make_resolver(repository, port)
+    journal = _OpenedJournal()
+    resolver = _make_resolver(repository, port, opened_journal=journal)
 
     resolver.attempt(_SID)
 
+    # No freeze here, so no Open Trade record; the bar path writes it.
+    assert journal.records == []
     result = repository.get(_SID)
     assert result is not None
     assert result.pending_entry_recovery is None

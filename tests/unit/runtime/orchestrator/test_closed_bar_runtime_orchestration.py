@@ -126,7 +126,9 @@ def _resolved_state(
 ) -> PositionResolvedStrategyInstanceRuntimeState:
     target = state or _runtime_state()
     response = (
-        OpenPositionLookupResponse(True, first_fill_at_ms, "100.5")
+        OpenPositionLookupResponse(
+            True, first_fill_at_ms, "100.5", entry_order_link_id="abi-ep-link"
+        )
         if position_open
         else OpenPositionLookupResponse(False)
     )
@@ -1669,3 +1671,80 @@ class TestProcessReturnsFinalState:
         result = orch.dispatch(unit)
         assert isinstance(result, StrategyCycleDispatchOutcome)
         assert not isinstance(result, StrategyInstanceRuntimeState)
+
+
+class _OpenedJournal:
+    def __init__(self, repo: Any) -> None:
+        self._repo = repo
+        self.records: list[dict[str, object]] = []
+        self.saves_before: list[int] = []
+
+    def trade_cycle_opened(self, **fields: object) -> None:
+        self.records.append(fields)
+        self.saves_before.append(len(self._repo.save_calls))
+
+
+class TestTradeCycleOpenedJournal:
+    """runtime-trade-cycle-opened-v1: one record per Open Trade transition."""
+
+    def _orchestrator(self, repo: Any, resolved: Any, journal: _OpenedJournal) -> Any:
+        router = MagicMock(route=MagicMock(side_effect=_open_trade_projection))
+        return StrategyRuntimeOrchestrator(
+            state_repository=repo,
+            open_position_resolver=MagicMock(resolve=MagicMock(return_value=resolved)),
+            use_case_router=router,
+            keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
+            position_management_orchestrator=PositionManagementOrchestrator(
+                _FakePositionManagementExecutionPort(), repo
+            ),
+            entry_reconciliation_orchestrator=MagicMock(),
+            trade_cycle_opened_journal=journal,  # type: ignore[arg-type]
+        )
+
+    def _unit(self) -> Any:
+        return replace(
+            _processing_unit(), committed_bar=CommittedBarEvent("BTCUSDT.P", "5m", 300_000)
+        )
+
+    def test_first_freeze_writes_one_record_after_the_save(self) -> None:
+        state = _open_trade_state(frozen=False)
+        resolved = _resolved_state(position_open=True, state=state, first_fill_at_ms=300_950)
+        repo = _FakeRepository(state)
+        journal = _OpenedJournal(repo)
+
+        self._orchestrator(repo, resolved, journal).process(self._unit())
+
+        assert state.current_trade_cycle is not None
+        assert journal.records == [
+            {
+                "strategy_instance_id": state.strategy_instance_id,
+                "trade_cycle_id": state.current_trade_cycle.trade_cycle_id,
+                "bar_open_time_ms": 300_000,
+                "first_fill_at_ms": 300_950,
+                "average_entry_price": "100.5",
+                "entry_order_link_id": "abi-ep-link",
+                "entry_order_id": None,
+            }
+        ]
+        assert journal.saves_before == [1]
+
+    def test_already_frozen_cycle_writes_no_record(self) -> None:
+        state = _open_trade_state(frozen=True, first_fill_at_ms=300_950)
+        resolved = _resolved_state(position_open=True, state=state, first_fill_at_ms=300_950)
+        repo = _FakeRepository(state)
+        journal = _OpenedJournal(repo)
+
+        self._orchestrator(repo, resolved, journal).process(self._unit())
+
+        assert journal.records == []
+
+    def test_failed_save_writes_no_record(self) -> None:
+        state = _open_trade_state(frozen=False)
+        resolved = _resolved_state(position_open=True, state=state, first_fill_at_ms=300_950)
+        repo = _FailingRepository(state, save_error=OSError("disk full"))
+        journal = _OpenedJournal(repo)
+
+        with pytest.raises(OSError):
+            self._orchestrator(repo, resolved, journal).process(self._unit())
+
+        assert journal.records == []

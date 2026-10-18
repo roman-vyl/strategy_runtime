@@ -243,7 +243,10 @@ def test_bar_close_with_a_closure_journals_after_the_save() -> None:
     _state_with_cycle(repository)
     recorder.calls.clear()
     resolver = _Resolver(
-        position_open=True, first_fill_at_ms=1_200_000, average_entry_price="81660.6"
+        position_open=True,
+        first_fill_at_ms=1_200_000,
+        average_entry_price="81660.6",
+        entry_order_link_id="abi-ep-link",
     )
     port = _ClosePort(PositionClosedConfirmation(_SID, _CYCLE, _stop_closure()))
 
@@ -260,7 +263,10 @@ def test_bar_close_without_closure_writes_no_record() -> None:
     repository = _RecordingRepository(recorder)
     _state_with_cycle(repository)
     resolver = _Resolver(
-        position_open=True, first_fill_at_ms=1_200_000, average_entry_price="81660.6"
+        position_open=True,
+        first_fill_at_ms=1_200_000,
+        average_entry_price="81660.6",
+        entry_order_link_id="abi-ep-link",
     )
 
     result = _orchestrator(recorder, repository, resolver, close=True).process(_unit())
