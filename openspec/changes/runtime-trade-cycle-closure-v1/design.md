@@ -34,6 +34,17 @@ A confirmation with `closure: null` (never-filled cycle) clears state as today a
 
 `trade_cycle_closed`, schema version 2, `strategy_instance_id` in the envelope, payload `{trade_cycle_id, bar_open_time_ms, reason, order_id, order_link_id, parent_order_link_id}` verbatim from ABI. Written only after the durable save succeeded; best effort like other records. `bar_open_time_ms` is the bar on which Runtime learned of the closure, not the exchange execution time.
 
+### D6. Contract alignment with ABI
+
+ABI (`abi-trade-cycle-closure-confirmation-v1`, D6) sends `closure` as a required key in both the open-position and the close success objects once it ships. Runtime ships first and accepts both shapes in both operations: a missing key and `null` both mean no closure. The closure object shape and its validation are identical in the two clients. After the ABI rollout every response carries the key; Runtime keeps the tolerance, it does not change any decision.
+
+### Invariants kept
+
+- No new durable state: `CurrentTradeCycle`, `PendingCloseRecovery`, `PositionClosedConfirmation` and the existing applier are reused.
+- A closure from the lookup is handled before Engine; cycle identifiers are checked; the save precedes the journal record; no entry on that bar.
+- Pending-close recovery keeps its path and only gains journaling; `bar_open_time_ms` is `null` there, never a substitute value.
+- An absent closure is never treated as a proven close.
+
 ## Risks
 
 - Rollout order: Runtime first (accepts both shapes), then ABI.
