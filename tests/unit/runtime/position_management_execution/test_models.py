@@ -62,10 +62,13 @@ def test_protection_applied_confirmation_has_exact_minimal_fields() -> None:
 def test_position_closed_confirmation_carries_no_execution_lifecycle_field() -> None:
     confirmation = PositionClosedConfirmation("instance", "cycle-1")
 
+    # `closure` is ABI's proven completion fact, not an execution lifecycle field.
     assert tuple(field.name for field in fields(confirmation)) == (
         "strategy_instance_id",
         "trade_cycle_id",
+        "closure",
     )
+    assert confirmation.closure is None
 
 
 @pytest.mark.parametrize("identity", [None, 1, ""])

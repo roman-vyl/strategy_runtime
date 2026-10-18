@@ -162,6 +162,11 @@ class _PositionManagement:
         self._recorder.calls.append(("position_management", None))
         return projection.source.resolved_state.runtime_state
 
+    def execute_with_closure(
+        self, projection: OpenTradeProjectedStrategyInstance
+    ) -> tuple[StrategyInstanceRuntimeState, None]:
+        return self.execute(projection), None
+
 
 def _build(
     recorder: _Recorder,

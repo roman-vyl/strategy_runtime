@@ -53,6 +53,7 @@ from strategy_runtime.runtime.state.models import (
 from strategy_runtime.runtime.state.repository import (
     InMemoryStrategyInstanceRuntimeStateRepository,
 )
+from strategy_runtime.runtime.trade_cycle_closure import TradeCycleClosure
 from strategy_runtime.utility.committed_bar.models import (
     CommittedBarEvent,
     StrategyBarProcessingUnit,
@@ -868,7 +869,7 @@ class TestConcurrencyAndRelease:
         )
         position_management_orchestrator = MagicMock()
         if error_label == "position_management":
-            position_management_orchestrator.execute.side_effect = error
+            position_management_orchestrator.execute_with_closure.side_effect = error
 
         orch = StrategyRuntimeOrchestrator(
             state_repository=repo,
@@ -1006,16 +1007,16 @@ class TestTypedBranchAndErrorBoundary:
         repo = _FakeRepository(state)
         port = _FakePositionManagementExecutionPort()
         position_orch = PositionManagementOrchestrator(port, repo)
-        real_execute = position_orch.execute
+        real_execute = position_orch.execute_with_closure
         received: list[OpenTradeProjectedStrategyInstance] = []
 
         def _tracked_execute(
             exact_projection: OpenTradeProjectedStrategyInstance,
-        ) -> StrategyInstanceRuntimeState:
+        ) -> tuple[StrategyInstanceRuntimeState, TradeCycleClosure | None]:
             received.append(exact_projection)
             return real_execute(exact_projection)
 
-        position_orch.execute = _tracked_execute  # type: ignore[method-assign]
+        position_orch.execute_with_closure = _tracked_execute  # type: ignore[method-assign]
 
         orch = StrategyRuntimeOrchestrator(
             state_repository=repo,

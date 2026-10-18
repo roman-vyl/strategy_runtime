@@ -3,6 +3,10 @@
 import json
 from typing import NoReturn, cast
 
+from strategy_runtime.infrastructure.abi.trade_cycle_closure_codec import (
+    CLOSURE_FIELD,
+    decode_optional_closure,
+)
 from strategy_runtime.runtime.position_management_execution.errors import (
     PositionManagementExecutionProtocolError,
     PositionManagementExecutionPublicError,
@@ -22,6 +26,8 @@ _PROTECTION_SUCCESS_FIELDS = frozenset(
     {"strategy_instance_id", "trade_cycle_id", "status", "stop_price", "take_price"}
 )
 _CLOSE_SUCCESS_FIELDS = frozenset({"strategy_instance_id", "trade_cycle_id", "status"})
+# ABI adds `closure` with abi-trade-cycle-closure-confirmation-v1; both shapes are accepted.
+_CLOSE_SUCCESS_FIELDS_WITH_CLOSURE = _CLOSE_SUCCESS_FIELDS | {CLOSURE_FIELD}
 _ERROR_ENVELOPE_FIELDS = frozenset({"error"})
 _ERROR_FIELDS_WITHOUT_DETAILS = frozenset({"code", "message"})
 _ERROR_FIELDS_WITH_DETAILS = frozenset({"code", "message", "details"})
@@ -135,7 +141,12 @@ def _decode_close_success(
     payload: object, command: ClosePositionCommand
 ) -> PositionClosedConfirmation:
     try:
-        body = _closed_object(payload, _CLOSE_SUCCESS_FIELDS, "success response")
+        fields = (
+            _CLOSE_SUCCESS_FIELDS_WITH_CLOSURE
+            if type(payload) is dict and CLOSURE_FIELD in payload
+            else _CLOSE_SUCCESS_FIELDS
+        )
+        body = _closed_object(payload, fields, "success response")
         if body["status"] != "trade_cycle_closed":
             raise ValueError("success status is not trade_cycle_closed")
         confirmation = PositionClosedConfirmation(
@@ -143,6 +154,7 @@ def _decode_close_success(
                 body["strategy_instance_id"], "strategy_instance_id"
             ),
             trade_cycle_id=_non_empty_string(body["trade_cycle_id"], "trade_cycle_id"),
+            closure=decode_optional_closure(body),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise PositionManagementExecutionProtocolError(

@@ -14,6 +14,9 @@ from strategy_runtime.runtime.open_position.models import (
 from strategy_runtime.runtime.open_position.ports import OpenPositionResolverPort
 from strategy_runtime.runtime.orchestrator.errors import UnknownStrategyProjectionError
 from strategy_runtime.runtime.orchestrator.ports import LiveEntryEvaluationJournalPort
+from strategy_runtime.runtime.position_management_execution import (
+    apply_detected_trade_cycle_closure,
+)
 from strategy_runtime.runtime.position_management_orchestrator import (
     PositionManagementOrchestrator,
 )
@@ -28,6 +31,11 @@ from strategy_runtime.runtime.state.models import (
     StrategyInstanceRuntimeState,
 )
 from strategy_runtime.runtime.state.repository import StrategyInstanceRuntimeStateRepository
+from strategy_runtime.runtime.trade_cycle_closure import (
+    TradeCycleClosedJournalPort,
+    TradeCycleClosure,
+    journal_trade_cycle_closed,
+)
 from strategy_runtime.utility.committed_bar.models import (
     StrategyBarProcessingUnit,
     StrategyCycleDispatchOutcome,
@@ -46,6 +54,7 @@ class StrategyRuntimeOrchestrator:
         entry_reconciliation_orchestrator: EntryReconciliationOrchestrator,
         position_management_orchestrator: PositionManagementOrchestrator,
         live_entry_journal: LiveEntryEvaluationJournalPort | None = None,
+        trade_cycle_closed_journal: TradeCycleClosedJournalPort | None = None,
     ) -> None:
         self._state_repository = state_repository
         self._open_position_resolver = open_position_resolver
@@ -54,6 +63,7 @@ class StrategyRuntimeOrchestrator:
         self._entry_reconciliation_orchestrator = entry_reconciliation_orchestrator
         self._position_management_orchestrator = position_management_orchestrator
         self._live_entry_journal = live_entry_journal
+        self._trade_cycle_closed_journal = trade_cycle_closed_journal
 
     def process(
         self, unit: StrategyBarProcessingUnit[DeploymentSpecification]
@@ -72,6 +82,18 @@ class StrategyRuntimeOrchestrator:
             if state.pending_entry_recovery is not None or state.pending_close_recovery is not None:
                 return state
             resolved = self._open_position_resolver.resolve(state)
+            if resolved.closure is not None:
+                # ABI proved the cycle ended on its own orders: end it before
+                # Engine, and place no entry on this bar.
+                saved_state = self._state_repository.save(
+                    apply_detected_trade_cycle_closure(state, resolved.closure)
+                )
+                journal_trade_cycle_closed(
+                    self._trade_cycle_closed_journal,
+                    resolved.closure,
+                    unit.committed_bar.open_time_ms,
+                )
+                return saved_state
             if resolved.position_open:
                 resolved = self._ensure_first_fill_frozen(resolved)
                 current_cycle = resolved.runtime_state.current_trade_cycle
@@ -83,6 +105,7 @@ class StrategyRuntimeOrchestrator:
             projection = self._use_case_router.route(
                 PositionResolvedStrategyInstance(unit, resolved)
             )
+            closure: TradeCycleClosure | None = None
 
             if type(projection) is LiveEntryProjectedStrategyInstance:
                 source_state = projection.source.resolved_state.runtime_state
@@ -90,13 +113,20 @@ class StrategyRuntimeOrchestrator:
                 resulting_state = self._entry_reconciliation_orchestrator.execute(projection)
             elif type(projection) is OpenTradeProjectedStrategyInstance:
                 source_state = projection.source.resolved_state.runtime_state
-                resulting_state = self._position_management_orchestrator.execute(projection)
+                resulting_state, closure = (
+                    self._position_management_orchestrator.execute_with_closure(projection)
+                )
             else:
                 raise UnknownStrategyProjectionError
 
             if resulting_state == source_state:
                 return resulting_state
-            return self._state_repository.save(resulting_state)
+            saved_state = self._state_repository.save(resulting_state)
+            if closure is not None:
+                journal_trade_cycle_closed(
+                    self._trade_cycle_closed_journal, closure, unit.committed_bar.open_time_ms
+                )
+            return saved_state
 
     def dispatch(
         self, unit: StrategyBarProcessingUnit[DeploymentSpecification]

@@ -52,6 +52,10 @@ from strategy_runtime.runtime.state.models import (
     StrategyInstanceRuntimeState,
 )
 from strategy_runtime.runtime.state.repository import StrategyInstanceRuntimeStateRepository
+from strategy_runtime.runtime.trade_cycle_closure import (
+    TradeCycleClosedJournalPort,
+    journal_trade_cycle_closed,
+)
 
 
 class UncertainExchangeStateResolver:
@@ -65,11 +69,13 @@ class UncertainExchangeStateResolver:
         keyed_mutex_registry: StrategyInstanceKeyedMutexRegistry,
         abi_entry_cycle_recovery: AbiEntryCycleRecoveryPort,
         position_management_execution: PositionManagementExecutionPort,
+        trade_cycle_closed_journal: TradeCycleClosedJournalPort | None = None,
     ) -> None:
         self._state_repository = state_repository
         self._keyed_mutex_registry = keyed_mutex_registry
         self._abi_entry_cycle_recovery = abi_entry_cycle_recovery
         self._position_management_execution = position_management_execution
+        self._trade_cycle_closed_journal = trade_cycle_closed_journal
 
     def attempt(self, strategy_instance_id: str) -> None:
         """Resolve, or leave untouched, the one instance's pending recovery marker."""
@@ -128,6 +134,9 @@ class UncertainExchangeStateResolver:
             return
 
         self._state_repository.save(resulting_state)
+        if confirmation.closure is not None:
+            # No committed bar is processed here, so there is no bar time.
+            journal_trade_cycle_closed(self._trade_cycle_closed_journal, confirmation.closure, None)
 
     def _resolve_uncertain_apply(
         self,
