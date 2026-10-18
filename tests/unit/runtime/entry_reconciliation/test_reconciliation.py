@@ -10,6 +10,7 @@ from strategy_runtime.runtime.entry_reconciliation.models import (
     Apply,
     Cancel,
     NoOp,
+    Replace,
 )
 from strategy_runtime.runtime.entry_reconciliation.reconciliation import (
     decide_entry_reconciliation,
@@ -59,7 +60,7 @@ def cycle(entry: DesiredEntry, *, trade_cycle_id: str = "cycle-1") -> CurrentTra
         (
             desired_entry(planned_entry_price="101"),
             cycle(desired_entry()),
-            Cancel("cycle-1"),
+            Replace("cycle-1", desired_entry(planned_entry_price="101")),
         ),
         (None, cycle(desired_entry()), Cancel("cycle-1")),
     ],
@@ -67,7 +68,7 @@ def cycle(entry: DesiredEntry, *, trade_cycle_id: str = "cycle-1") -> CurrentTra
 def test_complete_reconciliation_table(
     new_entry: DesiredEntry | None,
     current_cycle: CurrentTradeCycle | None,
-    expected: NoOp | Apply | Cancel,
+    expected: NoOp | Apply | Replace | Cancel,
 ) -> None:
     assert decide_entry_reconciliation(new_entry, current_cycle) == expected
 
@@ -96,7 +97,7 @@ def test_every_desired_entry_field_participates_in_exact_equivalence(
     original = desired_entry()
 
     assert not desired_entries_equivalent(original, changed)
-    assert decide_entry_reconciliation(changed, cycle(original)) == Cancel("cycle-1")
+    assert decide_entry_reconciliation(changed, cycle(original)) == Replace("cycle-1", changed)
 
 
 def test_equivalence_uses_canonical_domain_value_without_tolerance() -> None:
@@ -150,3 +151,27 @@ def test_frozen_entry_context_fails_closed_before_any_decision(
 def test_invalid_current_cycle_type_fails_closed_before_frozen_check() -> None:
     with pytest.raises(TypeError, match="current_trade_cycle must be CurrentTradeCycle or None"):
         decide_entry_reconciliation(desired_entry(), cast("CurrentTradeCycle", object()))
+
+
+@pytest.mark.parametrize(
+    ("trade_cycle_id", "entry", "error"),
+    [
+        ("", desired_entry(), ValueError),
+        (cast("str", None), desired_entry(), ValueError),
+        ("cycle-1", cast("DesiredEntry", object()), TypeError),
+    ],
+)
+def test_replace_is_a_validated_value(
+    trade_cycle_id: str, entry: DesiredEntry, error: type[Exception]
+) -> None:
+    with pytest.raises(error):
+        Replace(trade_cycle_id, entry)
+
+
+def test_changed_desired_entry_carries_the_new_entry_unchanged() -> None:
+    changed = desired_entry(planned_entry_price="101")
+
+    decision = decide_entry_reconciliation(changed, cycle(desired_entry()))
+
+    assert type(decision) is Replace
+    assert decision.desired_entry is changed

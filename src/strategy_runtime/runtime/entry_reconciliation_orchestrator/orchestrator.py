@@ -10,6 +10,7 @@ from strategy_runtime.runtime.entry_reconciliation import (
     EntryReconciliationCommand,
     EntryReconciliationInvariantError,
     NoOp,
+    Replace,
     apply_success_confirmation,
     build_entry_reconciliation_command,
     decide_entry_reconciliation,
@@ -51,10 +52,38 @@ class EntryReconciliationOrchestrator:
         )
         if type(decision) is NoOp:
             return source_state
+        if type(decision) is Replace:
+            # Confirmed CANCEL first; APPLY is sent only after absence is
+            # confirmed, from the absent state durably re-marked with the new
+            # identity (the boundary save inside the second step).
+            absent_state = self._execute_one(
+                projection, source_state, Cancel(decision.trade_cycle_id), None
+            )
+            return self._execute_one(
+                projection,
+                absent_state,
+                Apply(decision.desired_entry),
+                self._trade_cycle_id_factory(),
+            )
+        if type(decision) is Apply:
+            return self._execute_one(
+                projection, source_state, decision, self._trade_cycle_id_factory()
+            )
+        if type(decision) is Cancel:
+            return self._execute_one(projection, source_state, decision, None)
+        raise EntryReconciliationInvariantError(
+            "unknown command-bearing entry reconciliation decision"
+        )
 
-        apply_trade_cycle_id = self._trade_cycle_id_factory() if type(decision) is Apply else None
+    def _execute_one(
+        self,
+        projection: LiveEntryProjectedStrategyInstance,
+        state: StrategyInstanceRuntimeState,
+        decision: Apply | Cancel,
+        apply_trade_cycle_id: str | None,
+    ) -> StrategyInstanceRuntimeState:
         command = build_entry_reconciliation_command(
-            source_state,
+            state,
             decision,
             apply_trade_cycle_id,
         )
@@ -65,12 +94,12 @@ class EntryReconciliationOrchestrator:
 
         pending_state = self._state_repository.save(
             replace(
-                source_state,
+                state,
                 pending_entry_recovery=PendingEntryRecovery(command.trade_cycle_id),
             )
         )
 
-        confirmation = self._execution_port.execute(command, source_state)
+        confirmation = self._execution_port.execute(command, state)
         if type(confirmation) not in {EntryAppliedConfirmation, EntryAbsentConfirmation}:
             raise EntryReconciliationInvariantError(
                 "execution port must return a successful entry confirmation"
@@ -82,15 +111,11 @@ class EntryReconciliationOrchestrator:
                 projection.source.processing_unit.committed_bar.open_time_ms,
             )
 
-        if isinstance(decision, (Apply, Cancel)):
-            return apply_success_confirmation(
-                pending_state,
-                decision,
-                command,
-                confirmation,
-            )
-        raise EntryReconciliationInvariantError(
-            "unknown command-bearing entry reconciliation decision"
+        return apply_success_confirmation(
+            pending_state,
+            decision,
+            command,
+            confirmation,
         )
 
     def _journal_entry_applied(

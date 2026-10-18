@@ -13,6 +13,7 @@ from strategy_runtime.runtime.entry_reconciliation.models import (
     EntryAppliedConfirmation,
     EntryReconciliationCommand,
     NoOp,
+    Replace,
 )
 from strategy_runtime.runtime.entry_reconciliation.state_applier import (
     apply_success_confirmation,
@@ -351,6 +352,21 @@ def test_applier_rejects_no_op_instead_of_returning_a_failure_result() -> None:
         apply_success_confirmation(
             state,
             cast("Apply | Cancel", NoOp()),
+            command(trade_cycle_id="cycle-new", entry=desired_entry()),
+            applied_confirmation(trade_cycle_id="cycle-new", entry=desired_entry()),
+        )
+
+
+def test_applier_rejects_replace_which_only_the_orchestrator_decomposes() -> None:
+    state = runtime_state()
+
+    with pytest.raises(
+        EntryReconciliationInvariantError,
+        match="requires APPLY or CANCEL",
+    ):
+        apply_success_confirmation(
+            state,
+            cast("Apply | Cancel", Replace("cycle-1", desired_entry())),
             command(trade_cycle_id="cycle-new", entry=desired_entry()),
             applied_confirmation(trade_cycle_id="cycle-new", entry=desired_entry()),
         )

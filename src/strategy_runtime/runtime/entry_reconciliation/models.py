@@ -31,7 +31,24 @@ class Cancel:
         _require_non_empty_string(self.trade_cycle_id, "trade_cycle_id")
 
 
-EntryReconciliationDecision = NoOp | Apply | Cancel
+@dataclass(frozen=True, slots=True)
+class Replace:
+    """Replace the package on an acknowledged current cycle with a new desired entry.
+
+    A logical decision only: the orchestrator executes it as a confirmed
+    ``Cancel`` of ``trade_cycle_id`` followed by an ``Apply`` of
+    ``desired_entry`` under a newly reserved trade-cycle identity.
+    """
+
+    trade_cycle_id: str
+    desired_entry: DesiredEntry
+
+    def __post_init__(self) -> None:
+        _require_non_empty_string(self.trade_cycle_id, "trade_cycle_id")
+        _require_desired_entry(self.desired_entry, "desired_entry")
+
+
+EntryReconciliationDecision = NoOp | Apply | Replace | Cancel
 
 
 @dataclass(frozen=True, slots=True)
