@@ -19,6 +19,7 @@ from strategy_runtime.runtime.position_management_execution.models import (
 )
 from strategy_runtime.runtime.recipes.position_management import DesiredProtection
 from strategy_runtime.runtime.state.models import CurrentTradeCycle, StrategyInstanceRuntimeState
+from strategy_runtime.runtime.trade_cycle_closure import TradeCycleClosure
 
 
 def apply_position_management_confirmation(
@@ -90,6 +91,32 @@ def _close_position(
     _require_cycle_identity(current_cycle.trade_cycle_id, decision.trade_cycle_id)
     _require_cycle_identity(decision.trade_cycle_id, sent_command.trade_cycle_id)
     _require_cycle_identity(sent_command.trade_cycle_id, confirmation.trade_cycle_id)
+    return replace(state, current_trade_cycle=None, pending_close_recovery=None)
+
+
+def apply_detected_trade_cycle_closure(
+    state: StrategyInstanceRuntimeState,
+    closure: TradeCycleClosure,
+) -> StrategyInstanceRuntimeState:
+    """End the current cycle on an ABI-proven closure Runtime did not command.
+
+    Same resulting state as a confirmed CLOSE_POSITION, but it takes no decision or
+    command, so "Runtime closed it" and "Runtime found it closed" stay distinct.
+    """
+    if type(state) is not StrategyInstanceRuntimeState:
+        raise PositionManagementExecutionInvariantError(
+            "closure application requires StrategyInstanceRuntimeState"
+        )
+    if type(closure) is not TradeCycleClosure:
+        raise PositionManagementExecutionInvariantError(
+            "closure application requires TradeCycleClosure"
+        )
+    current_cycle = _require_current_cycle(state, "TRADE_CYCLE_CLOSURE")
+    if closure.strategy_instance_id != state.strategy_instance_id:
+        raise PositionManagementExecutionInvariantError(
+            "closure strategy_instance_id does not match source state"
+        )
+    _require_cycle_identity(current_cycle.trade_cycle_id, closure.trade_cycle_id)
     return replace(state, current_trade_cycle=None, pending_close_recovery=None)
 
 

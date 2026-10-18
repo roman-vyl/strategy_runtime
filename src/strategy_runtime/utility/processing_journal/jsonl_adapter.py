@@ -177,6 +177,31 @@ class JsonlProcessingJournal:
             },
         )
 
+    def trade_cycle_closed(
+        self,
+        *,
+        strategy_instance_id: str,
+        trade_cycle_id: str,
+        bar_open_time_ms: int | None,
+        reason: str,
+        order_id: str,
+        order_link_id: str | None,
+        parent_order_link_id: str | None,
+    ) -> None:
+        self._record(
+            event_type=ProcessingJournalEventType.TRADE_CYCLE_CLOSED,
+            severity="info",
+            strategy_instance_id=strategy_instance_id,
+            payload={
+                "trade_cycle_id": trade_cycle_id,
+                "bar_open_time_ms": bar_open_time_ms,
+                "reason": reason,
+                "order_id": order_id,
+                "order_link_id": order_link_id,
+                "parent_order_link_id": parent_order_link_id,
+            },
+        )
+
     def _record(
         self,
         *,

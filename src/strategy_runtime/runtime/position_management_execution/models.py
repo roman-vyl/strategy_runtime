@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 
 from strategy_runtime.runtime.recipes.position_management import DesiredProtection
+from strategy_runtime.runtime.trade_cycle_closure import TradeCycleClosure
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,10 +65,19 @@ class PositionClosedConfirmation:
 
     strategy_instance_id: str
     trade_cycle_id: str
+    closure: TradeCycleClosure | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty_string(self.strategy_instance_id, "strategy_instance_id")
         _require_non_empty_string(self.trade_cycle_id, "trade_cycle_id")
+        if self.closure is not None:
+            if type(self.closure) is not TradeCycleClosure:
+                raise TypeError("closure must be TradeCycleClosure or None")
+            if (
+                self.closure.strategy_instance_id != self.strategy_instance_id
+                or self.closure.trade_cycle_id != self.trade_cycle_id
+            ):
+                raise ValueError("closure identity does not match the confirmation")
 
 
 PositionManagementExecutionCommand = ApplyProtectionCommand | ClosePositionCommand

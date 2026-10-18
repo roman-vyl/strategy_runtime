@@ -134,7 +134,13 @@ def test_authoritative_abi_openapi_matches_runtime_close_position_contract() -> 
     assert success_schema == {"$ref": "#/components/schemas/TradeCycleClosedResponse"}
     success = schemas["TradeCycleClosedResponse"]
     assert success["additionalProperties"] is False
-    assert set(success["required"]) == {"strategy_instance_id", "trade_cycle_id", "status"}
+    # "closure" is required once ABI ships trade-cycle closure; an older ABI
+    # checkout omits it and Runtime accepts both.
+    assert set(success["required"]) - {"closure"} == {
+        "strategy_instance_id",
+        "trade_cycle_id",
+        "status",
+    }
     assert success["properties"]["status"] == {"const": "trade_cycle_closed"}
 
     error_schema = operation["responses"]["422"]["content"]["application/json"]["schema"]
@@ -219,10 +225,17 @@ def test_authoritative_close_example_decodes_successfully_via_runtime_codec() ->
         content=json.dumps(example).encode("utf-8"),
         command=command,
     )
-    assert result == PositionClosedConfirmation(
-        strategy_instance_id=example["strategy_instance_id"],
-        trade_cycle_id=example["trade_cycle_id"],
-    )
+    assert result.strategy_instance_id == example["strategy_instance_id"]
+    assert result.trade_cycle_id == example["trade_cycle_id"]
+    if example.get("closure") is None:
+        assert result == PositionClosedConfirmation(
+            strategy_instance_id=example["strategy_instance_id"],
+            trade_cycle_id=example["trade_cycle_id"],
+        )
+    else:
+        assert result.closure is not None
+        assert result.closure.reason == example["closure"]["reason"]
+        assert result.closure.order_id == example["closure"]["order_id"]
 
 
 def test_authoritative_protection_business_error_examples_decode_via_runtime_codec() -> None:

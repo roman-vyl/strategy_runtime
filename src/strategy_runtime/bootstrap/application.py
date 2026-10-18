@@ -207,6 +207,7 @@ def build_application(
             keyed_mutex_registry=keyed_mutex_registry,
             abi_entry_cycle_recovery=entry_cycle_recovery_client,
             position_management_execution=position_management_client,
+            trade_cycle_closed_journal=journal,
         )
         strategy_runtime_orchestrator = StrategyRuntimeOrchestrator(
             state_repository=state_repository,
@@ -216,6 +217,7 @@ def build_application(
             entry_reconciliation_orchestrator=entry_reconciliation_orchestrator,
             position_management_orchestrator=position_management_orchestrator,
             live_entry_journal=journal,
+            trade_cycle_closed_journal=journal,
         )
         abi_execution_event_orchestrator = AbiExecutionEventOrchestrator(
             state_repository=state_repository,

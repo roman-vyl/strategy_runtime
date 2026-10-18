@@ -23,6 +23,7 @@ from strategy_runtime.runtime.position_management_orchestrator.ports import (
 from strategy_runtime.runtime.routing.models import OpenTradeProjectedStrategyInstance
 from strategy_runtime.runtime.state.models import PendingCloseRecovery, StrategyInstanceRuntimeState
 from strategy_runtime.runtime.state.repository import StrategyInstanceRuntimeStateRepository
+from strategy_runtime.runtime.trade_cycle_closure import TradeCycleClosure
 
 
 class PositionManagementOrchestrator:
@@ -41,13 +42,20 @@ class PositionManagementOrchestrator:
         projection: OpenTradeProjectedStrategyInstance,
     ) -> StrategyInstanceRuntimeState:
         """Return unchanged source state or one confirmed replacement aggregate."""
+        return self.execute_with_closure(projection)[0]
+
+    def execute_with_closure(
+        self,
+        projection: OpenTradeProjectedStrategyInstance,
+    ) -> tuple[StrategyInstanceRuntimeState, TradeCycleClosure | None]:
+        """Like `execute`, plus ABI's closure when a confirmed close carried one."""
         source_state = projection.source.resolved_state.runtime_state
         decision = decide_position_management(
             projection.position_management_recipe,
             source_state.current_trade_cycle,
         )
         if type(decision) is NoOp:
-            return source_state
+            return source_state, None
 
         command = build_position_management_command(source_state, decision)
 
@@ -57,11 +65,14 @@ class PositionManagementOrchestrator:
                     "APPLY_PROTECTION must produce an ApplyProtectionCommand"
                 )
             protection_confirmation = self._execution_port.apply_protection(command)
-            return apply_position_management_confirmation(
-                source_state,
-                decision,
-                command,
-                protection_confirmation,
+            return (
+                apply_position_management_confirmation(
+                    source_state,
+                    decision,
+                    command,
+                    protection_confirmation,
+                ),
+                None,
             )
 
         if type(decision) is ClosePosition:
@@ -76,11 +87,14 @@ class PositionManagementOrchestrator:
                 )
             )
             close_confirmation = self._execution_port.close_position(command)
-            return apply_position_management_confirmation(
-                pending_state,
-                decision,
-                command,
-                close_confirmation,
+            return (
+                apply_position_management_confirmation(
+                    pending_state,
+                    decision,
+                    command,
+                    close_confirmation,
+                ),
+                close_confirmation.closure,
             )
 
         raise PositionManagementExecutionInvariantError(

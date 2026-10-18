@@ -35,4 +35,5 @@ class OpenPositionResolver:
             position_open=response.position_open,
             first_fill_at_ms=response.first_fill_at_ms,
             average_entry_price=response.average_entry_price,
+            closure=response.closure,
         )
