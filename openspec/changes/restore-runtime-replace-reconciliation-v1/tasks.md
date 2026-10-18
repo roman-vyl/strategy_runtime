@@ -28,7 +28,9 @@
 
 - [ ] 3.1 Test that `StrategyRuntimeOrchestrator.process` saves the final applied aggregate once after a replace, and that `live_entry_evaluated` stays one record per bar.
 - [ ] 3.2 Resolver tests for the two durable shapes: cycle C with marker C resolves as an uncertain removal; no cycle with marker N resolves as an uncertain apply (`entry_order_not_found` clears, live adopts, filled freezes the first fill). No resolver code change is expected.
-- [ ] 3.3 Update the production e2e test that expects a changed desired entry to cancel without applying.
+- [ ] 3.3 Test the XRP scenario: 5 consecutive bars with a changing desired entry produce a live order on every bar (one cancel plus one apply per bar after the first).
+- [ ] 3.4 Test the fill race: the old order fills before the cancel, the cancel is not absent → no apply; the next bar freezes the first fill of C.
+- [ ] 3.5 Update the production e2e test that expects a changed desired entry to cancel without applying.
 
 ## 4. Specs and checks
 
