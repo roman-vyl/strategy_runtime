@@ -57,6 +57,18 @@ def test_authoritative_openapi_examples_decode_successfully_via_runtime_codec() 
     )
     assert closed_result == OpenPositionLookupResponse(position_open=False)
 
+    # ABI with trade-cycle closure (abi-trade-cycle-closure-confirmation-v1);
+    # absent from an older checkout, which Runtime accepts unchanged.
+    if "closed_by_stop_loss" in examples:
+        stop = decode_open_position_response(
+            status_code=200,
+            content_type="application/json",
+            content=json.dumps(examples["closed_by_stop_loss"]["value"]).encode("utf-8"),
+        )
+        assert stop.position_open is False
+        assert stop.closure is not None
+        assert stop.closure.reason == "stop_loss"
+
 
 def test_authoritative_openapi_business_error_examples_decode_via_runtime_codec() -> None:
     document = read_authoritative_openapi()
@@ -130,7 +142,7 @@ def assert_success_schemas(schemas: dict[str, Any], operation: dict[str, Any]) -
 
     open_schema = schemas["OpenPositionOpenResponse"]
     assert open_schema["additionalProperties"] is False
-    assert set(open_schema["required"]) == {
+    assert set(open_schema["required"]) - {"closure"} == {
         "position_open",
         "first_fill_at_ms",
         "average_entry_price",
@@ -147,7 +159,7 @@ def assert_success_schemas(schemas: dict[str, Any], operation: dict[str, Any]) -
 
     closed_schema = schemas["OpenPositionClosedResponse"]
     assert closed_schema["additionalProperties"] is False
-    assert set(closed_schema["required"]) == {
+    assert set(closed_schema["required"]) - {"closure"} == {
         "position_open",
         "first_fill_at_ms",
         "average_entry_price",
