@@ -59,7 +59,7 @@ Owner review, 2026-10-18 19:18, sets this scope:
 - Once uncertainty is resolved, the next bar decides afresh from Engine. The old Y is never re-sent.
 - The identity N is durably saved before APPLY is sent (step 5), so a timeout always knows which order to look for. This save is the only part of the boundary that must not be removed.
 
-The existing resolver never treats an unknown order as confirmed absent. "Not found" leads to one corrective CANCEL and is cleared only on an exact `entry_package_absent`. An unknown binding, where ABI never received APPLY N, leaves the marker in place until a positive answer arrives.
+The existing resolver never treats an unknown order as confirmed absent. "Not found" leads to one corrective CANCEL and is cleared only on an exact `entry_package_absent`. An unknown binding, where ABI never received APPLY N, leaves the marker in place until a positive answer arrives. This happens after a crash between the boundary save and sending APPLY, and also when the APPLY request fails at the network level before reaching ABI.
 
 This is safe, but it can need manual intervention: the same stuck shape as the ETH smoke cycle `3e2e0f79`. It is accepted for V1 as the price of simplicity. No new recovery is added for it in this change.
 
