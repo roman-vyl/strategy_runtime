@@ -9,7 +9,7 @@
   - fidelity: record equals the decoded Engine answer field by field (fake Engine with trailing-zero prices, null take, every close-signal field set), no extra keys;
   - NoOp bar writes one `open_trade_evaluated` with `side`, protection and inactive close signal, and no `protection_applied`;
   - codec: six-key body with both legs accepted; old five-key body, missing/extra leg keys, empty `order_id`, bad decimals rejected; `take_price: null` with a `take` leg accepted;
-  - ApplyProtection writes one `open_trade_evaluated` and one `protection_applied` with ABI's confirmed values, both orders' ids, trigger prices and quantities, and this bar's time, `protection_applied` before the save;
+  - ApplyProtection writes one `open_trade_evaluated` and one `protection_applied` with ABI's confirmed values, the position quantity, both orders' ids and trigger prices, and this bar's time, `protection_applied` before the save;
   - ClosePosition writes `open_trade_evaluated` with the active close signal and no `protection_applied`;
   - short position journals `side: "short"`; `take_price: null` journaled as JSON `null`;
   - no record on pending recovery skip, closure on resolve, entry bar after committed bar, Engine failure; no `protection_applied` on ABI failure while `open_trade_evaluated` stays;

@@ -12,7 +12,7 @@ The processing journal SHALL provide an `open_trade_evaluated` event (schema ver
 - **THEN** orchestration continues and the state is unchanged
 
 ### Requirement: Protection applied event
-The processing journal SHALL provide a `protection_applied` event (schema version 2, `strategy_instance_id` in the envelope) with payload `trade_cycle_id`, `bar_open_time_ms`, `stop_price`, `take_price`, `stop_order` and `take_order`, each order being `{order_id, trigger_price, quantity}` exactly as ABI returned them; `take_price` SHALL be JSON `null` when absent while `take_order` is still present. A write failure SHALL NOT raise into orchestration and SHALL NOT change Runtime state.
+The processing journal SHALL provide a `protection_applied` event (schema version 2, `strategy_instance_id` in the envelope) with payload `trade_cycle_id`, `bar_open_time_ms`, `stop_price`, `take_price`, `position_quantity`, `stop_order` and `take_order`, each order being `{order_id, trigger_price}`, all exactly as ABI returned them; `take_price` SHALL be JSON `null` when absent while `take_order` is still present. A write failure SHALL NOT raise into orchestration and SHALL NOT change Runtime state.
 
 #### Scenario: No take requested
 - **WHEN** the confirmed protection has `take_price: null`

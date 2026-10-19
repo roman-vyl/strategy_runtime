@@ -55,8 +55,9 @@ Written in `PositionManagementOrchestrator.execute_with_closure`, `ApplyProtecti
 trade_cycle_id,
 bar_open_time_ms,                 # projection.source.processing_unit.committed_bar.open_time_ms
 stop_price, take_price | null,    # confirmed_protection, as today
-stop_order: { order_id, trigger_price, quantity },
-take_order: { order_id, trigger_price, quantity }
+position_quantity,                # protection_orders.quantity: position size the legs protect
+stop_order: { order_id, trigger_price },
+take_order: { order_id, trigger_price }
 ```
 
 Symmetry with `entry_package_applied` (`trigger_price, stop_loss, take_profit, quantity, order_link_id, order_id`): the requested protection plus the concrete exchange orders that carry it. All order values come from ABI's response unchanged (exchange text, not normalized). There is no `order_link_id`: Bybit native protective children have an empty `orderLinkId` (ABI `nativeProtectionAttribution.ts`), ABI attributes them by `parentOrderLinkId` = the entry order's link id, already in `entry_package_applied` and `trade_cycle_opened`.
@@ -65,12 +66,13 @@ Symmetry with `entry_package_applied` (`trigger_price, stop_loss, take_profit, q
 
 ### D6 ABI contract: `protection_orders`
 
-ABI already holds both legs after every successful protection write: the read-back after amend (`reconciled`) or the initial read (`already_satisfied`), each with `orderId`, `triggerPrice`, `qty` (`AttachedProtectionLeg`). Today they are dropped before the response. The success body gains one required key:
+ABI already holds both legs after every successful protection write: the read-back after amend (`reconciled`) or the initial read (`already_satisfied`), each with `orderId`, `triggerPrice`, `qty` (`AttachedProtectionLeg`); both legs carry the same `qty`, the cycle's current own filled position quantity. Today they are dropped before the response. The success body gains one required key:
 
 ```
 protection_orders: {
-  stop: { order_id, trigger_price, quantity },
-  take: { order_id, trigger_price, quantity }
+  quantity,
+  stop: { order_id, trigger_price },
+  take: { order_id, trigger_price }
 }
 ```
 
