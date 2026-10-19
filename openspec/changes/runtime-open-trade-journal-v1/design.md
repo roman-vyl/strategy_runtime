@@ -54,15 +54,20 @@ Written in `PositionManagementOrchestrator.execute_with_closure`, `ApplyProtecti
 ```
 trade_cycle_id,
 bar_open_time_ms,                 # projection.source.processing_unit.committed_bar.open_time_ms
-stop_price, take_price | null,    # confirmed_protection, as today
+requested_protection: { stop_price, take_price | null },   # ApplyProtectionCommand.desired_protection sent by Runtime
+confirmed_protection: { stop_price, take_price | null },   # ProtectionAppliedConfirmation.confirmed_protection from ABI
 position_quantity,                # protection_orders.quantity: position size the legs protect
 stop_order: { order_id, trigger_price },
 take_order: { order_id, trigger_price }
 ```
 
+Requested and confirmed levels are two separate facts, both written even though today's codec requires them to be equal; a reader never has to assume one from the other.
+
 Symmetry with `entry_package_applied` (`trigger_price, stop_loss, take_profit, quantity, order_link_id, order_id`): the requested protection plus the concrete exchange orders that carry it. All order values come from ABI's response unchanged (exchange text, not normalized). There is no `order_link_id`: Bybit native protective children have an empty `orderLinkId` (ABI `nativeProtectionAttribution.ts`), ABI attributes them by `parentOrderLinkId` = the entry order's link id, already in `entry_package_applied` and `trade_cycle_opened`.
 
-`take_order` is always present. When Engine's `take_price` is `null`, ABI keeps a far surrogate take order on the exchange (`nativeProtectionReconciliation.ts`, `computeSurrogateTakePrice`); the record shows that real order and its real trigger price next to `take_price: null`.
+`take_order` is always present. When Engine's `take_price` is `null`, ABI keeps a far surrogate take order on the exchange (`nativeProtectionReconciliation.ts`, `computeSurrogateTakePrice`); the record shows that real order and its real trigger price next to `take_price: null` (owner decision 2026-10-19, option A). Two independent truths are kept: the strategy's wish (`take_price: null`) and what is actually on the exchange (`take_order`). The journal never hides or replaces either; marking such a take as technical is a later frontend concern. ABI behaviour is not changed.
+
+`position_quantity` is the quantity of this trade cycle that both legs protect, not the whole physical position on the instrument (owner decision 2026-10-19).
 
 ### D6 ABI contract: `protection_orders`
 

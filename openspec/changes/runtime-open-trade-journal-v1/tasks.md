@@ -11,7 +11,7 @@
   - codec: six-key body with both legs accepted; old five-key body, missing/extra leg keys, empty `order_id`, bad decimals rejected; `take_price: null` with a `take` leg accepted;
   - ApplyProtection writes one `open_trade_evaluated` and one `protection_applied` with ABI's confirmed values, the position quantity, both orders' ids and trigger prices, and this bar's time, `protection_applied` before the save;
   - ClosePosition writes `open_trade_evaluated` with the active close signal and no `protection_applied`;
-  - short position journals `side: "short"`; `take_price: null` journaled as JSON `null`;
+  - short position journals `side: "short"`; `take_price: null` journaled as JSON `null` in requested and confirmed levels while `take_order` holds the real exchange order;
   - no record on pending recovery skip, closure on resolve, entry bar after committed bar, Engine failure; no `protection_applied` on ABI failure while `open_trade_evaluated` stays;
   - journal failure does not raise and does not change state; no diagnostics in the payload;
   - existing flows unchanged.
