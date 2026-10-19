@@ -74,7 +74,7 @@ protection_orders: {
 }
 ```
 
-taken from the same read-back that proved the write; no extra exchange call. Runtime decoding is strict, like `abi-open-position-entry-order-identity-v1`: exact key sets, non-empty `order_id`, positive exact decimal text for `trigger_price` and `quantity`; anything else is `PositionManagementExecutionProtocolError`. Runtime does not compare these values to the command (ABI already proves the match before answering) and does not use them in any decision or persist them in state; `ProtectionAppliedConfirmation` carries them transiently to the journal. The existing echo check of `stop_price`/`take_price` stays. Old ABI bodies without the key are rejected, so Runtime and ABI are deployed together (same as Runtime #25 / ABI #24). The ABI OpenSpec is a separate change.
+taken from the same read-back that proved the write; no extra exchange call. Runtime decoding is strict, like `abi-open-position-entry-order-identity-v1`: exact key sets, non-empty `order_id`, positive exact decimal text for `trigger_price` and `quantity`; anything else is `PositionManagementExecutionProtocolError`. Runtime does not compare these values to the command (ABI already proves the match before answering) and does not use them in any decision or persist them in state; `ProtectionAppliedConfirmation` carries them transiently to the journal. The existing echo check of `stop_price`/`take_price` stays. Old ABI bodies without the key are rejected, so Runtime and ABI are deployed together (same as Runtime #25 / ABI #24). The ABI side is `abi_executor_bot` change `abi-protection-orders-identity-v1`.
 
 ### D5 Ports and journal mechanics
 
