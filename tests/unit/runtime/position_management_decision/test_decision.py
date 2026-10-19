@@ -18,6 +18,7 @@ from strategy_runtime.runtime.recipes.entry import DesiredEntry
 from strategy_runtime.runtime.recipes.position_management import (
     CloseSignal,
     DesiredProtection,
+    EngineDesiredProtectionText,
     PositionManagementRecipe,
 )
 from strategy_runtime.runtime.state.models import (
@@ -68,6 +69,7 @@ def recipe(
         desired_protection=DesiredProtection(stop_price, take_price),
         close_signal=CloseSignal(active),
         diagnostics=diagnostics or {},
+        engine_desired_protection_text=EngineDesiredProtectionText(stop_price, take_price),
     )
 
 
@@ -79,6 +81,7 @@ class TestClosePriority:
             desired_protection=DesiredProtection("99", "103"),
             close_signal=close_signal,
             diagnostics={},
+            engine_desired_protection_text=EngineDesiredProtectionText("99", "103"),
         )
 
         result = decide_position_management(active_recipe, cycle)
@@ -92,6 +95,7 @@ class TestClosePriority:
             desired_protection=DesiredProtection("50", None),
             close_signal=close_signal,
             diagnostics={},
+            engine_desired_protection_text=EngineDesiredProtectionText("50", None),
         )
 
         result = decide_position_management(active_recipe, cycle)

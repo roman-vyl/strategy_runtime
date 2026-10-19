@@ -18,6 +18,8 @@ from strategy_runtime.runtime.position_management_execution.models import (
     ClosePositionCommand,
     PositionClosedConfirmation,
     ProtectionAppliedConfirmation,
+    ProtectionOrder,
+    ProtectionOrders,
 )
 from strategy_runtime.runtime.position_management_orchestrator.orchestrator import (
     PositionManagementOrchestrator,
@@ -26,6 +28,7 @@ from strategy_runtime.runtime.recipes.entry import DesiredEntry
 from strategy_runtime.runtime.recipes.position_management import (
     CloseSignal,
     DesiredProtection,
+    EngineDesiredProtectionText,
     PositionManagementRecipe,
 )
 from strategy_runtime.runtime.routing.models import (
@@ -48,6 +51,8 @@ from strategy_runtime.utility.committed_bar.models import (
     StrategyBarProcessingUnit,
 )
 from strategy_runtime.utility.deployment_catalog.models import DeploymentSpecification
+
+ORDERS = ProtectionOrders("0.01", ProtectionOrder("stop-1", "98"), ProtectionOrder("take-1", "103"))
 
 
 def desired_entry(
@@ -93,6 +98,7 @@ def recipe(
         desired_protection=DesiredProtection(stop_price, take_price),
         close_signal=CloseSignal(active),
         diagnostics={},
+        engine_desired_protection_text=EngineDesiredProtectionText(stop_price, take_price),
     )
 
 
@@ -195,7 +201,7 @@ def test_apply_protection_calls_only_apply_protection_exactly_once() -> None:
     snapshot = replace(source_state)
     protection = DesiredProtection("98", "103")
     item = projection(source_state, recipe(stop_price="98", take_price="103"))
-    confirmation = ProtectionAppliedConfirmation("instance", "cycle-1", protection)
+    confirmation = ProtectionAppliedConfirmation("instance", "cycle-1", protection, ORDERS)
     port = FakeExecutionPort(apply_result=confirmation)
 
     result = PositionManagementOrchestrator(port, registered_repository(source_state)).execute(item)
@@ -279,6 +285,7 @@ def test_constructor_receives_execution_port_and_state_repository_but_no_mutex()
         "self",
         "execution_port",
         "state_repository",
+        "protection_applied_journal",
     )
 
 
@@ -337,3 +344,88 @@ def test_failed_pre_write_never_calls_close_position() -> None:
         PositionManagementOrchestrator(port, repository).execute(item)
 
     assert port.close_calls == []
+
+
+# -- protection_applied journal (runtime-open-trade-journal-v1) ---------------
+
+
+class RecordingJournal:
+    def __init__(self) -> None:
+        self.records: list[dict[str, object]] = []
+
+    def protection_applied(self, **fields: object) -> None:
+        self.records.append(fields)
+
+
+def test_confirmed_protection_is_journaled_once_with_abi_orders_and_bar_time() -> None:
+    source_state = runtime_state()
+    protection = DesiredProtection("98", None)
+    item = projection(source_state, recipe(stop_price="98", take_price=None))
+    surrogate = ProtectionOrders(
+        "0.010", ProtectionOrder("stop-1", "98.0"), ProtectionOrder("take-1", "990000")
+    )
+    port = FakeExecutionPort(
+        apply_result=ProtectionAppliedConfirmation("instance", "cycle-1", protection, surrogate)
+    )
+    journal = RecordingJournal()
+
+    result = PositionManagementOrchestrator(
+        port, registered_repository(source_state), protection_applied_journal=journal
+    ).execute(item)
+
+    assert journal.records == [
+        {
+            "strategy_instance_id": "instance",
+            "trade_cycle_id": "cycle-1",
+            "bar_open_time_ms": 1000,
+            "requested_protection": {"stop_price": "98", "take_price": None},
+            "confirmed_protection": {"stop_price": "98", "take_price": None},
+            "position_quantity": "0.010",
+            "stop_order": {"order_id": "stop-1", "trigger_price": "98.0"},
+            "take_order": {"order_id": "take-1", "trigger_price": "990000"},
+        }
+    ]
+    assert result.current_trade_cycle is not None
+    assert result.current_trade_cycle.latest_confirmed_management_protection == protection
+
+
+@pytest.mark.parametrize("active", [False, True], ids=["no_op", "close_position"])
+def test_no_protection_applied_for_no_op_or_close(active: bool) -> None:
+    source_state = runtime_state()
+    item = projection(source_state, recipe(active=active))
+    port = FakeExecutionPort(close_result=PositionClosedConfirmation("instance", "cycle-1"))
+    journal = RecordingJournal()
+
+    PositionManagementOrchestrator(
+        port, registered_repository(source_state), protection_applied_journal=journal
+    ).execute(item)
+
+    assert journal.records == []
+
+
+def test_no_protection_applied_when_abi_fails() -> None:
+    source_state = runtime_state()
+    item = projection(source_state, recipe(stop_price="98"))
+    port = FakeExecutionPort(error=RuntimeError("executor unreachable"))
+    journal = RecordingJournal()
+
+    with pytest.raises(RuntimeError):
+        PositionManagementOrchestrator(
+            port, registered_repository(source_state), protection_applied_journal=journal
+        ).execute(item)
+
+    assert journal.records == []
+
+
+def test_wrong_confirmation_type_is_rejected_before_any_journal_write() -> None:
+    source_state = runtime_state()
+    item = projection(source_state, recipe(stop_price="98"))
+    port = FakeExecutionPort(apply_result=PositionClosedConfirmation("instance", "cycle-1"))
+    journal = RecordingJournal()
+
+    with pytest.raises(PositionManagementExecutionInvariantError):
+        PositionManagementOrchestrator(
+            port, registered_repository(source_state), protection_applied_journal=journal
+        ).execute(item)
+
+    assert journal.records == []

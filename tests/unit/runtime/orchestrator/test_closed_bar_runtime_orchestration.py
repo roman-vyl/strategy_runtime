@@ -28,6 +28,8 @@ from strategy_runtime.runtime.position_management_execution.models import (
     ClosePositionCommand,
     PositionClosedConfirmation,
     ProtectionAppliedConfirmation,
+    ProtectionOrder,
+    ProtectionOrders,
 )
 from strategy_runtime.runtime.position_management_orchestrator import (
     PositionManagementOrchestrator,
@@ -36,6 +38,7 @@ from strategy_runtime.runtime.recipes.entry import DesiredEntry
 from strategy_runtime.runtime.recipes.position_management import (
     CloseSignal,
     DesiredProtection,
+    EngineDesiredProtectionText,
     PositionManagementRecipe,
 )
 from strategy_runtime.runtime.routing.models import (
@@ -162,16 +165,25 @@ def _open_trade_state(*, frozen: bool, first_fill_at_ms: int = 950) -> StrategyI
     return replace(_runtime_state(), current_trade_cycle=cycle)
 
 
+_PROTECTION_ORDERS = ProtectionOrders(
+    "0.01", ProtectionOrder("stop-1", "98"), ProtectionOrder("take-1", "103")
+)
+
+
 def _open_trade_projection(
     item: PositionResolvedStrategyInstance,
     *,
     desired_protection: DesiredProtection | None = None,
     close_active: bool = False,
 ) -> OpenTradeProjectedStrategyInstance:
+    protection = desired_protection or DesiredProtection("99", "103")
     recipe = PositionManagementRecipe(
-        desired_protection=desired_protection or DesiredProtection("99", "103"),
+        desired_protection=protection,
         close_signal=CloseSignal(close_active),
         diagnostics={},
+        engine_desired_protection_text=EngineDesiredProtectionText(
+            protection.stop_price, protection.take_price
+        ),
     )
     return OpenTradeProjectedStrategyInstance(item, recipe)
 
@@ -1047,7 +1059,7 @@ class TestTypedBranchAndErrorBoundary:
         repo = _FakeRepository(state)
         port = _FakePositionManagementExecutionPort(
             protection_confirmation=ProtectionAppliedConfirmation(
-                _SID, "cycle-1", desired_protection
+                _SID, "cycle-1", desired_protection, _PROTECTION_ORDERS
             )
         )
 
@@ -1532,7 +1544,7 @@ class TestPostFreezeTemporalGuard:
         )
         port = _FakePositionManagementExecutionPort(
             protection_confirmation=ProtectionAppliedConfirmation(
-                _SID, "cycle-1", desired_protection
+                _SID, "cycle-1", desired_protection, _PROTECTION_ORDERS
             )
         )
 
@@ -1567,7 +1579,7 @@ class TestPostFreezeTemporalGuard:
         )
         port = _FakePositionManagementExecutionPort(
             protection_confirmation=ProtectionAppliedConfirmation(
-                _SID, "cycle-1", desired_protection
+                _SID, "cycle-1", desired_protection, _PROTECTION_ORDERS
             )
         )
 

@@ -17,14 +17,26 @@ from strategy_runtime.runtime.position_management_execution.models import (
     ClosePositionCommand,
     PositionClosedConfirmation,
     ProtectionAppliedConfirmation,
+    ProtectionOrder,
+    ProtectionOrders,
 )
 from strategy_runtime.runtime.recipes.position_management import DesiredProtection
 from strategy_runtime.shared.decimal_text import is_positive_exact_decimal_text
 from strategy_runtime.utility.deployment_catalog.models import FrozenJsonValue, freeze_json
 
 _PROTECTION_SUCCESS_FIELDS = frozenset(
-    {"strategy_instance_id", "trade_cycle_id", "status", "stop_price", "take_price"}
+    {
+        "strategy_instance_id",
+        "trade_cycle_id",
+        "status",
+        "stop_price",
+        "take_price",
+        "protection_orders",
+    }
 )
+# abi-protection-orders-identity-v1: required; bodies without it are rejected.
+_PROTECTION_ORDERS_FIELDS = frozenset({"quantity", "stop", "take"})
+_PROTECTION_ORDER_FIELDS = frozenset({"order_id", "trigger_price"})
 _CLOSE_SUCCESS_FIELDS = frozenset({"strategy_instance_id", "trade_cycle_id", "status"})
 # ABI adds `closure` with abi-trade-cycle-closure-confirmation-v1; both shapes are accepted.
 _CLOSE_SUCCESS_FIELDS_WITH_CLOSURE = _CLOSE_SUCCESS_FIELDS | {CLOSURE_FIELD}
@@ -116,11 +128,14 @@ def _decode_protection_success(
         trade_cycle_id = _non_empty_string(body["trade_cycle_id"], "trade_cycle_id")
         stop_price = _positive_exact_decimal_string(body["stop_price"], "stop_price")
         take_price = _optional_positive_exact_decimal_string(body["take_price"], "take_price")
+        protection_orders = _decode_protection_orders(body["protection_orders"])
     except (KeyError, TypeError, ValueError) as exc:
         raise PositionManagementExecutionProtocolError(
             f"invalid ABI protection success response: {exc}"
         ) from exc
 
+    # Only the echoed levels are checked against the command; `protection_orders`
+    # is ABI's proven read-back, carried to the journal unchanged.
     if (
         strategy_instance_id != command.strategy_instance_id
         or trade_cycle_id != command.trade_cycle_id
@@ -134,6 +149,26 @@ def _decode_protection_success(
         strategy_instance_id=strategy_instance_id,
         trade_cycle_id=trade_cycle_id,
         confirmed_protection=DesiredProtection(stop_price=stop_price, take_price=take_price),
+        protection_orders=protection_orders,
+    )
+
+
+def _decode_protection_orders(value: object) -> ProtectionOrders:
+    body = _closed_object(value, _PROTECTION_ORDERS_FIELDS, "protection_orders")
+    return ProtectionOrders(
+        quantity=_positive_exact_decimal_string(body["quantity"], "protection_orders.quantity"),
+        stop=_decode_protection_order(body["stop"], "protection_orders.stop"),
+        take=_decode_protection_order(body["take"], "protection_orders.take"),
+    )
+
+
+def _decode_protection_order(value: object, name: str) -> ProtectionOrder:
+    body = _closed_object(value, _PROTECTION_ORDER_FIELDS, name)
+    return ProtectionOrder(
+        order_id=_non_empty_string(body["order_id"], f"{name}.order_id"),
+        trigger_price=_positive_exact_decimal_string(
+            body["trigger_price"], f"{name}.trigger_price"
+        ),
     )
 
 

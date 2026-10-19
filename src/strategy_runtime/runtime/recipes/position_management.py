@@ -19,6 +19,18 @@ class DesiredProtection:
 
 
 @dataclass(frozen=True, slots=True)
+class EngineDesiredProtectionText:
+    """Engine's `desired_protection` price strings exactly as received on the wire.
+
+    Journal-only: never normalized and never read by a decision, command or
+    state; `DesiredProtection` stays the only decision input.
+    """
+
+    stop_price: str
+    take_price: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class CloseSignal:
     active: bool
     reason: str | None = None
@@ -31,6 +43,8 @@ class PositionManagementRecipe:
     desired_protection: DesiredProtection
     close_signal: CloseSignal
     diagnostics: Mapping[str, FrozenJsonValue]
+    # Transient, for `open_trade_evaluated` only (see EngineDesiredProtectionText).
+    engine_desired_protection_text: EngineDesiredProtectionText
 
     def __post_init__(self) -> None:
         frozen = freeze_json(dict(self.diagnostics))

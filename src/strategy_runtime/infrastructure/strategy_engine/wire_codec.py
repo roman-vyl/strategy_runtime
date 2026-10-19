@@ -18,7 +18,11 @@ from strategy_runtime.runtime.engine.open_trade import (
     OpenTradeProjectionResponse,
 )
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
-from strategy_runtime.runtime.recipes.position_management import CloseSignal, DesiredProtection
+from strategy_runtime.runtime.recipes.position_management import (
+    CloseSignal,
+    DesiredProtection,
+    EngineDesiredProtectionText,
+)
 from strategy_runtime.utility.deployment_catalog.models import FrozenJsonValue, freeze_json
 
 _DOCUMENTED_ENGINE_ERROR_STATUSES = frozenset({404, 409, 422, 500, 501, 502, 503})
@@ -174,7 +178,7 @@ def _decode_wire_desired_entry(payload: object) -> DesiredEntry:
 def _decode_open_trade_success(payload: object) -> OpenTradeProjectionResponse:
     try:
         body = _closed_object(payload, _OPEN_TRADE_SUCCESS_FIELDS, "open-trade success response")
-        protection = _decode_desired_protection(body["desired_protection"])
+        protection, protection_text = _decode_desired_protection(body["desired_protection"])
         close_signal = _decode_close_signal(body["close_signal"])
         diagnostics_payload = _json_object(body["diagnostics"], "diagnostics")
     except (KeyError, TypeError, ValueError) as exc:
@@ -190,15 +194,23 @@ def _decode_open_trade_success(payload: object) -> OpenTradeProjectionResponse:
         desired_protection=protection,
         close_signal=close_signal,
         diagnostics=frozen_diagnostics,
+        engine_desired_protection_text=protection_text,
     )
 
 
-def _decode_desired_protection(payload: object) -> DesiredProtection:
+def _decode_desired_protection(
+    payload: object,
+) -> tuple[DesiredProtection, EngineDesiredProtectionText]:
     body = _closed_object(payload, _DESIRED_PROTECTION_FIELDS, "desired_protection")
     stop_price = _string(body["stop_price"], "stop_price")
     take_price_payload = body["take_price"]
     take_price = None if take_price_payload is None else _string(take_price_payload, "take_price")
-    return DesiredProtection(stop_price=stop_price, take_price=take_price)
+    # DesiredProtection validates and normalizes; the validated wire strings are
+    # kept apart, unchanged, for the journal only.
+    return (
+        DesiredProtection(stop_price=stop_price, take_price=take_price),
+        EngineDesiredProtectionText(stop_price=stop_price, take_price=take_price),
+    )
 
 
 def _decode_close_signal(payload: object) -> CloseSignal:

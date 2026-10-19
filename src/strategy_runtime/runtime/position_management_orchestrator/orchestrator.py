@@ -1,6 +1,6 @@
 """Application sequencing for position-management execution."""
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 from strategy_runtime.runtime.position_management_decision.decision import (
     decide_position_management,
@@ -14,11 +14,13 @@ from strategy_runtime.runtime.position_management_execution import (
     ApplyProtectionCommand,
     ClosePositionCommand,
     PositionManagementExecutionInvariantError,
+    ProtectionAppliedConfirmation,
     apply_position_management_confirmation,
     build_position_management_command,
 )
 from strategy_runtime.runtime.position_management_orchestrator.ports import (
     PositionManagementExecutionPort,
+    ProtectionAppliedJournalPort,
 )
 from strategy_runtime.runtime.routing.models import OpenTradeProjectedStrategyInstance
 from strategy_runtime.runtime.state.models import PendingCloseRecovery, StrategyInstanceRuntimeState
@@ -33,9 +35,11 @@ class PositionManagementOrchestrator:
         self,
         execution_port: PositionManagementExecutionPort,
         state_repository: StrategyInstanceRuntimeStateRepository,
+        protection_applied_journal: ProtectionAppliedJournalPort | None = None,
     ) -> None:
         self._execution_port = execution_port
         self._state_repository = state_repository
+        self._protection_applied_journal = protection_applied_journal
 
     def execute(
         self,
@@ -65,6 +69,17 @@ class PositionManagementOrchestrator:
                     "APPLY_PROTECTION must produce an ApplyProtectionCommand"
                 )
             protection_confirmation = self._execution_port.apply_protection(command)
+            if type(protection_confirmation) is not ProtectionAppliedConfirmation:
+                raise PositionManagementExecutionInvariantError(
+                    "APPLY_PROTECTION requires ProtectionAppliedConfirmation"
+                )
+            # After ABI confirms, before the confirmation is applied; the save
+            # stays in the caller (same order as `entry_package_applied`).
+            self._journal_protection_applied(
+                command,
+                protection_confirmation,
+                projection.source.processing_unit.committed_bar.open_time_ms,
+            )
             return (
                 apply_position_management_confirmation(
                     source_state,
@@ -99,4 +114,24 @@ class PositionManagementOrchestrator:
 
         raise PositionManagementExecutionInvariantError(
             "unknown command-bearing position-management decision"
+        )
+
+    def _journal_protection_applied(
+        self,
+        command: ApplyProtectionCommand,
+        confirmation: ProtectionAppliedConfirmation,
+        bar_open_time_ms: int,
+    ) -> None:
+        if self._protection_applied_journal is None:
+            return
+        orders = confirmation.protection_orders
+        self._protection_applied_journal.protection_applied(
+            strategy_instance_id=confirmation.strategy_instance_id,
+            trade_cycle_id=confirmation.trade_cycle_id,
+            bar_open_time_ms=bar_open_time_ms,
+            requested_protection=asdict(command.desired_protection),
+            confirmed_protection=asdict(confirmation.confirmed_protection),
+            position_quantity=orders.quantity,
+            stop_order=asdict(orders.stop),
+            take_order=asdict(orders.take),
         )

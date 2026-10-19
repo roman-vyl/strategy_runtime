@@ -227,6 +227,60 @@ class JsonlProcessingJournal:
             },
         )
 
+    def open_trade_evaluated(
+        self,
+        *,
+        strategy_instance_id: str,
+        instrument: str,
+        timeframe: str,
+        bar_open_time_ms: int,
+        trade_cycle_id: str,
+        side: str,
+        desired_protection: Mapping[str, JsonValue],
+        close_signal: Mapping[str, JsonValue],
+    ) -> None:
+        self._record(
+            event_type=ProcessingJournalEventType.OPEN_TRADE_EVALUATED,
+            severity="info",
+            strategy_instance_id=strategy_instance_id,
+            payload={
+                "instrument": instrument,
+                "timeframe": timeframe,
+                "bar_open_time_ms": bar_open_time_ms,
+                "trade_cycle_id": trade_cycle_id,
+                "side": side,
+                "desired_protection": desired_protection,
+                "close_signal": close_signal,
+            },
+        )
+
+    def protection_applied(
+        self,
+        *,
+        strategy_instance_id: str,
+        trade_cycle_id: str,
+        bar_open_time_ms: int,
+        requested_protection: Mapping[str, JsonValue],
+        confirmed_protection: Mapping[str, JsonValue],
+        position_quantity: str,
+        stop_order: Mapping[str, JsonValue],
+        take_order: Mapping[str, JsonValue],
+    ) -> None:
+        self._record(
+            event_type=ProcessingJournalEventType.PROTECTION_APPLIED,
+            severity="info",
+            strategy_instance_id=strategy_instance_id,
+            payload={
+                "trade_cycle_id": trade_cycle_id,
+                "bar_open_time_ms": bar_open_time_ms,
+                "requested_protection": requested_protection,
+                "confirmed_protection": confirmed_protection,
+                "position_quantity": position_quantity,
+                "stop_order": stop_order,
+                "take_order": take_order,
+            },
+        )
+
     def _record(
         self,
         *,

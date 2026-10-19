@@ -13,6 +13,8 @@ from strategy_runtime.runtime.position_management_execution.models import (
     PositionManagementExecutionCommand,
     PositionManagementExecutionConfirmation,
     ProtectionAppliedConfirmation,
+    ProtectionOrder,
+    ProtectionOrders,
 )
 from strategy_runtime.runtime.position_management_execution.state_applier import (
     apply_detected_trade_cycle_closure,
@@ -27,6 +29,8 @@ __all__ = (
     "PositionManagementExecutionConfirmation",
     "PositionManagementExecutionInvariantError",
     "ProtectionAppliedConfirmation",
+    "ProtectionOrder",
+    "ProtectionOrders",
     "apply_detected_trade_cycle_closure",
     "apply_position_management_confirmation",
     "build_position_management_command",

@@ -201,6 +201,7 @@ def build_application(
         position_management_orchestrator = PositionManagementOrchestrator(
             execution_port=position_management_client,
             state_repository=state_repository,
+            protection_applied_journal=journal,
         )
         uncertain_exchange_state_resolver = UncertainExchangeStateResolver(
             state_repository=state_repository,
@@ -220,6 +221,7 @@ def build_application(
             live_entry_journal=journal,
             trade_cycle_closed_journal=journal,
             trade_cycle_opened_journal=journal,
+            open_trade_journal=journal,
         )
         abi_execution_event_orchestrator = AbiExecutionEventOrchestrator(
             state_repository=state_repository,
