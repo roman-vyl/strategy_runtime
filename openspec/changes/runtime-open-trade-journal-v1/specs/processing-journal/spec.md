@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Open-trade evaluation event
-The processing journal SHALL provide an `open_trade_evaluated` event (schema version 2, `strategy_instance_id` in the envelope) with payload `instrument`, `timeframe`, `bar_open_time_ms`, `trade_cycle_id`, `side`, `desired_protection` (`stop_price`, `take_price`) and `close_signal` (`active`, `reason`, `component_id`, `layer`). Decimals SHALL be exact decimal text; an absent `take_price` and absent close signal fields SHALL be JSON `null`. The payload SHALL NOT contain Engine diagnostics. A write failure SHALL NOT raise into orchestration and SHALL NOT change Runtime state.
+The processing journal SHALL provide an `open_trade_evaluated` event (schema version 2, `strategy_instance_id` in the envelope) with payload `instrument`, `timeframe`, `bar_open_time_ms`, `trade_cycle_id`, `side`, `desired_protection` (`stop_price`, `take_price`) and `close_signal` (`active`, `reason`, `component_id`, `layer`). Prices SHALL be Engine's own wire text, unchanged; an absent `take_price` and absent close signal fields SHALL be JSON `null`. The payload SHALL NOT contain Engine diagnostics. A write failure SHALL NOT raise into orchestration and SHALL NOT change Runtime state.
 
 #### Scenario: Short position with no take
 - **WHEN** the event is written for a short position whose desired protection has no take price

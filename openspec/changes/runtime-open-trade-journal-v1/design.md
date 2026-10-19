@@ -37,11 +37,13 @@ desired_protection: { stop_price, take_price | null },
 close_signal: { active, reason | null, component_id | null, layer | null }
 ```
 
-`trade_cycle_id` and `side` come from the current cycle's `frozen_entry_context` (the same values sent to Engine). Decimals as exact decimal text, as in `live_entry_evaluated`. Engine `diagnostics` are not written.
+`trade_cycle_id` and `side` come from the current cycle's `frozen_entry_context` (the same values sent to Engine). Prices as Engine's own text (D2a). Engine `diagnostics` are not written.
 
 ### D2a Fidelity: Engine's answer as it is
 
-`desired_protection` and `close_signal` are copied field by field from the decoded Engine response (`OpenTradeProjectionResponse`, held unchanged in `projection.position_management_recipe`), taken right after routing, before any decision code runs. Runtime does not recompute, round, snap to tick, compare, or label them, and the record carries no decision result (no NoOp / Apply / Close field). The only transformation is the one the codec already applies to every Engine price: canonical decimal text (`normalize_decimal_text`: `"100.50"` is written as `"100.5"`, same exact value, no float), identical to `live_entry_evaluated`. `close_signal` strings are written byte for byte; `null` stays `null`.
+`desired_protection` and `close_signal` are Engine's open-trade answer exactly as Engine sent it (owner decision 2026-10-19, option 1a). Runtime does not recompute, round, snap to tick, compare, reformat or label them, and the record carries no decision result (no NoOp / Apply / Close field).
+
+Today `DesiredProtection.__post_init__` rewrites every price to canonical decimal text (`normalize_decimal_text`: `"105.150"` becomes `"105.15"`). The record must not carry that rewrite. So the Engine wire codec keeps the validated wire strings of `desired_protection` (`stop_price`, `take_price`) as they arrived, in a separate transient field of `OpenTradeProjectionResponse` (`engine_desired_protection_text`), carried unchanged through `PositionManagementRecipe` to the journal call. The normalized `DesiredProtection` stays the only input of decisions, commands and state; nothing that decides reads the wire text. `close_signal` strings are already kept byte for byte; `null` stays `null`. `live_entry_evaluated` is not changed by this change.
 
 `side` is not part of the open-trade answer. It is the `side` Runtime sent to Engine in this request, i.e. Engine's own live-entry answer frozen in `frozen_entry_context.desired_entry` when the cycle was opened. It is copied, never derived from prices.
 

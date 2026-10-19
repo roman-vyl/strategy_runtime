@@ -1,12 +1,13 @@
 ## 1. strategy_runtime
 
+- [ ] 0.1 Engine wire codec keeps the `desired_protection` wire strings in `OpenTradeProjectionResponse.engine_desired_protection_text`; router carries them in `PositionManagementRecipe`; decisions keep the normalized `DesiredProtection` (D2a).
 - [ ] 1.0 ABI position management codec and `ProtectionAppliedConfirmation` carry `protection_orders` per D6.
 - [ ] 1.1 `ProcessingJournalEventType.OPEN_TRADE_EVALUATED` and `PROTECTION_APPLIED`; `JsonlProcessingJournal.open_trade_evaluated` and `.protection_applied` per D2/D4/D5.
 - [ ] 1.2 `OpenTradeEvaluationJournalPort` and the orchestrator call per D1.
 - [ ] 1.3 `ProtectionAppliedJournalPort` and the position management call per D3.
 - [ ] 1.4 Production composition wires the JSONL journal into both ports.
 - [ ] 1.5 Tests:
-  - fidelity: record equals the decoded Engine answer field by field (fake Engine with trailing-zero prices, null take, every close-signal field set), no extra keys;
+  - fidelity: record equals Engine's wire answer byte for byte (fake Engine with trailing-zero prices such as `"105.150"`, null take, every close-signal field set), no extra keys; the decision for the same bar uses the normalized value;
   - NoOp bar writes one `open_trade_evaluated` with `side`, protection and inactive close signal, and no `protection_applied`;
   - codec: six-key body with both legs accepted; old five-key body, missing/extra leg keys, empty `order_id`, bad decimals rejected; `take_price: null` with a `take` leg accepted;
   - ApplyProtection writes one `open_trade_evaluated` and one `protection_applied` with ABI's confirmed values, the position quantity, both orders' ids and trigger prices, and this bar's time, `protection_applied` before the save;
