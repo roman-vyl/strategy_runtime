@@ -11,7 +11,7 @@ Owner decisions (2026-10-19):
 
 1. `side` — explicit trade direction in `open_trade_evaluated`.
 2. Engine diagnostics — not journaled (symmetry with `live_entry_evaluated`).
-3. `protection_applied` — ABI's current confirmed answer; ABI contract unchanged.
+3. `protection_applied` — first agreed as ABI's current answer without a contract change; revised by the owner the same day (15:28): full symmetry with `entry_package_applied`, including the identifiers of the concrete protective orders. The ABI contract is extended for that.
 4. Exit price and time — separate change.
 5. One OpenSpec per service, Runtime first.
 
@@ -19,7 +19,7 @@ Owner decisions (2026-10-19):
 
 **Goals:** per-bar record of what Engine asked for during an open position; record of every protection ABI confirmed; same mechanics as the pre-entry pair.
 
-**Non-Goals:** diagnostics; exit price/time; any ABI, Engine, decision, state or recovery change; Journal service ingestion; Workbench display; a record for a close command (the close is already covered by `trade_cycle_closed`).
+**Non-Goals:** diagnostics; exit price/time; any Engine, decision, state or recovery change; Journal service ingestion; Workbench display; a record for a close command (the close is already covered by `trade_cycle_closed`).
 
 ## Decisions
 
@@ -53,11 +53,28 @@ Written in `PositionManagementOrchestrator.execute_with_closure`, `ApplyProtecti
 
 ```
 trade_cycle_id,
-bar_open_time_ms,          # projection.source.processing_unit.committed_bar.open_time_ms
-stop_price, take_price | null   # from ProtectionAppliedConfirmation.confirmed_protection
+bar_open_time_ms,                 # projection.source.processing_unit.committed_bar.open_time_ms
+stop_price, take_price | null,    # confirmed_protection, as today
+stop_order: { order_id, trigger_price, quantity },
+take_order: { order_id, trigger_price, quantity }
 ```
 
-Values come from ABI's current confirmed answer. Today ABI echoes Runtime's command after reconciling with the exchange, and the Runtime codec requires an exact match; the record therefore equals the command, and ABI's contract is not changed.
+Symmetry with `entry_package_applied` (`trigger_price, stop_loss, take_profit, quantity, order_link_id, order_id`): the requested protection plus the concrete exchange orders that carry it. All order values come from ABI's response unchanged (exchange text, not normalized). There is no `order_link_id`: Bybit native protective children have an empty `orderLinkId` (ABI `nativeProtectionAttribution.ts`), ABI attributes them by `parentOrderLinkId` = the entry order's link id, already in `entry_package_applied` and `trade_cycle_opened`.
+
+`take_order` is always present. When Engine's `take_price` is `null`, ABI keeps a far surrogate take order on the exchange (`nativeProtectionReconciliation.ts`, `computeSurrogateTakePrice`); the record shows that real order and its real trigger price next to `take_price: null`.
+
+### D6 ABI contract: `protection_orders`
+
+ABI already holds both legs after every successful protection write: the read-back after amend (`reconciled`) or the initial read (`already_satisfied`), each with `orderId`, `triggerPrice`, `qty` (`AttachedProtectionLeg`). Today they are dropped before the response. The success body gains one required key:
+
+```
+protection_orders: {
+  stop: { order_id, trigger_price, quantity },
+  take: { order_id, trigger_price, quantity }
+}
+```
+
+taken from the same read-back that proved the write; no extra exchange call. Runtime decoding is strict, like `abi-open-position-entry-order-identity-v1`: exact key sets, non-empty `order_id`, positive exact decimal text for `trigger_price` and `quantity`; anything else is `PositionManagementExecutionProtocolError`. Runtime does not compare these values to the command (ABI already proves the match before answering) and does not use them in any decision or persist them in state; `ProtectionAppliedConfirmation` carries them transiently to the journal. The existing echo check of `stop_price`/`take_price` stays. Old ABI bodies without the key are rejected, so Runtime and ABI are deployed together (same as Runtime #25 / ABI #24). The ABI OpenSpec is a separate change.
 
 ### D5 Ports and journal mechanics
 
@@ -71,4 +88,5 @@ Values come from ABI's current confirmed answer. Today ABI echoes Runtime's comm
 - A protection confirmed by ABI but followed by a failed save is journaled, and the next bar repeats the Apply and journals it again: two records for one change. Same accepted behaviour as `entry_package_applied`. Readers take the latest record per cycle.
 - Best-effort journal: a lost write loses one record; trading is unaffected.
 - One `open_trade_evaluated` per bar per open position adds one line per bar per position to `runtime.jsonl`; size is small compared to `live_entry_evaluated`, which already runs every bar.
+- Contract break: a Runtime deployed without the matching ABI fails every protection apply with a protocol error (position management stops moving stops). Mitigation: deploy both together, rollback both together.
 - The audit document said "after ABI confirmation and save" for `protection_applied`; the code copy of `entry_package_applied` is "after confirmation, before save". This change follows the code.
