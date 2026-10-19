@@ -1,7 +1,16 @@
 ## ADDED Requirements
 
 ### Requirement: Every successful open-trade evaluation is journaled
-Runtime SHALL write exactly one `open_trade_evaluated` event for every successful Strategy Engine `open-trade` answer, after routing and before position management runs, whatever the following decision. `trade_cycle_id` and `side` SHALL come from the current cycle's frozen entry context; `bar_open_time_ms` SHALL be the committed bar; `desired_protection` and `close_signal` SHALL be Engine's answer unchanged. The record SHALL NOT be used in any decision.
+Runtime SHALL write exactly one `open_trade_evaluated` event for every successful Strategy Engine `open-trade` answer, after routing and before position management runs, whatever the following decision. `trade_cycle_id` and `side` SHALL come from the current cycle's frozen entry context; `bar_open_time_ms` SHALL be the committed bar; `desired_protection` and `close_signal` SHALL be copied field by field from the decoded Engine response before any decision code runs, without recomputation, rounding, comparison or a decision label; the only allowed change is canonical decimal text of prices, as for `live_entry_evaluated`. `side` SHALL be copied from the frozen desired entry sent to Engine in the same request. The record SHALL NOT be used in any decision.
+
+#### Scenario: Record equals Engine's answer
+- **WHEN** Engine answers with `desired_protection` `{stop_price: "101.50", take_price: null}` and `close_signal` `{active: false, reason: null, component_id: null, layer: null}`
+- **THEN** the record has `desired_protection` `{stop_price: "101.5", take_price: null}` and the same `close_signal`, with no added, recomputed or decision field
+- **AND** the only difference from the wire is canonical decimal text, the same as `live_entry_evaluated`
+
+#### Scenario: Side is the side sent to Engine
+- **WHEN** the current cycle's frozen desired entry has `side: "short"`
+- **THEN** the record has `side: "short"`, copied from the frozen entry context, not derived from prices
 
 #### Scenario: Engine asks for no change
 - **WHEN** Engine's answer equals the current protection and the close signal is inactive

@@ -5,6 +5,7 @@
 - [ ] 1.3 `ProtectionAppliedJournalPort` and the position management call per D3.
 - [ ] 1.4 Production composition wires the JSONL journal into both ports.
 - [ ] 1.5 Tests:
+  - fidelity: record equals the decoded Engine answer field by field (fake Engine with trailing-zero prices, null take, every close-signal field set), no extra keys;
   - NoOp bar writes one `open_trade_evaluated` with `side`, protection and inactive close signal, and no `protection_applied`;
   - ApplyProtection writes one `open_trade_evaluated` and one `protection_applied` with ABI's confirmed values and this bar's time, `protection_applied` before the save;
   - ClosePosition writes `open_trade_evaluated` with the active close signal and no `protection_applied`;

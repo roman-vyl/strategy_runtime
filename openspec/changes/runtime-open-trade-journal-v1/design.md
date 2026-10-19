@@ -39,6 +39,12 @@ close_signal: { active, reason | null, component_id | null, layer | null }
 
 `trade_cycle_id` and `side` come from the current cycle's `frozen_entry_context` (the same values sent to Engine). Decimals as exact decimal text, as in `live_entry_evaluated`. Engine `diagnostics` are not written.
 
+### D2a Fidelity: Engine's answer as it is
+
+`desired_protection` and `close_signal` are copied field by field from the decoded Engine response (`OpenTradeProjectionResponse`, held unchanged in `projection.position_management_recipe`), taken right after routing, before any decision code runs. Runtime does not recompute, round, snap to tick, compare, or label them, and the record carries no decision result (no NoOp / Apply / Close field). The only transformation is the one the codec already applies to every Engine price: canonical decimal text (`normalize_decimal_text`: `"100.50"` is written as `"100.5"`, same exact value, no float), identical to `live_entry_evaluated`. `close_signal` strings are written byte for byte; `null` stays `null`.
+
+`side` is not part of the open-trade answer. It is the `side` Runtime sent to Engine in this request, i.e. Engine's own live-entry answer frozen in `frozen_entry_context.desired_entry` when the cycle was opened. It is copied, never derived from prices.
+
 ### D3 `protection_applied` — where and when
 
 Written in `PositionManagementOrchestrator.execute_with_closure`, `ApplyProtection` branch, right after `apply_protection` returns and before `apply_position_management_confirmation`; the save stays in the caller. This copies `entry_package_applied`, which is also written after ABI confirmation and before the state is applied and saved. Not written for `NoOp`, `ClosePosition` or when ABI fails.
