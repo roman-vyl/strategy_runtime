@@ -5,7 +5,11 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
-from strategy_runtime.runtime.recipes.position_management import CloseSignal, DesiredProtection
+from strategy_runtime.runtime.recipes.position_management import (
+    CloseSignal,
+    DesiredProtection,
+    EngineDesiredProtectionText,
+)
 from strategy_runtime.utility.deployment_catalog.models import FrozenJsonValue
 
 
@@ -25,6 +29,8 @@ class OpenTradeProjectionResponse:
     desired_protection: DesiredProtection
     close_signal: CloseSignal
     diagnostics: Mapping[str, FrozenJsonValue]
+    # Engine's own price text of `desired_protection`, kept for the journal only.
+    engine_desired_protection_text: EngineDesiredProtectionText
 
 
 class StrategyEngineOpenTradePort(Protocol):

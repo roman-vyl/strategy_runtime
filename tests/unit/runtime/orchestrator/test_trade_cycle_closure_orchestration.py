@@ -23,6 +23,7 @@ from strategy_runtime.runtime.recipes.entry import DesiredEntry
 from strategy_runtime.runtime.recipes.position_management import (
     CloseSignal,
     DesiredProtection,
+    EngineDesiredProtectionText,
     PositionManagementRecipe,
 )
 from strategy_runtime.runtime.routing.models import (
@@ -143,7 +144,10 @@ class _Router:
     def route(self, item: PositionResolvedStrategyInstance) -> object:
         self._recorder.calls.append(("engine", None))
         recipe = PositionManagementRecipe(
-            DesiredProtection("81963.2", "79929.8"), CloseSignal(active=self._close), {}
+            DesiredProtection("81963.2", "79929.8"),
+            CloseSignal(active=self._close),
+            {},
+            EngineDesiredProtectionText("81963.2", "79929.8"),
         )
         return OpenTradeProjectedStrategyInstance(item, recipe)
 

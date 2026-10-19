@@ -25,6 +25,7 @@ from strategy_runtime.runtime.recipes.entry import DesiredEntry
 from strategy_runtime.runtime.recipes.position_management import (
     CloseSignal,
     DesiredProtection,
+    EngineDesiredProtectionText,
     PositionManagementRecipe,
 )
 from strategy_runtime.runtime.routing.models import (
@@ -132,7 +133,10 @@ class _Router:
             raise self._engine_error
         if self._open_trade:
             recipe = PositionManagementRecipe(
-                DesiredProtection("99", "103"), CloseSignal(active=False), {}
+                DesiredProtection("99", "103"),
+                CloseSignal(active=False),
+                {},
+                EngineDesiredProtectionText("99", "103"),
             )
             return OpenTradeProjectedStrategyInstance(item, recipe)
         return LiveEntryProjectedStrategyInstance(item, self._desired_entry)

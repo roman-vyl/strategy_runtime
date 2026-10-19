@@ -16,6 +16,8 @@ from strategy_runtime.runtime.position_management_execution.models import (
     ClosePositionCommand,
     PositionClosedConfirmation,
     ProtectionAppliedConfirmation,
+    ProtectionOrder,
+    ProtectionOrders,
 )
 from strategy_runtime.runtime.position_management_execution.state_applier import (
     apply_position_management_confirmation,
@@ -32,6 +34,9 @@ from strategy_runtime.runtime.state.models import (
 from strategy_runtime.runtime.state.repository import (
     InMemoryStrategyInstanceRuntimeStateRepository,
 )
+
+# ABI's read-back of the protective orders; carried, never compared or decided on.
+ORDERS = ProtectionOrders("0.01", ProtectionOrder("stop-1", "98"), ProtectionOrder("take-1", "103"))
 
 
 def desired_entry() -> DesiredEntry:
@@ -73,7 +78,7 @@ def test_apply_protection_updates_confirmed_value_and_preserves_other_fields() -
         state,
         ApplyProtection("cycle-1", protection),
         ApplyProtectionCommand("instance", "cycle-1", protection),
-        ProtectionAppliedConfirmation("instance", "cycle-1", protection),
+        ProtectionAppliedConfirmation("instance", "cycle-1", protection, ORDERS),
     )
 
     assert state == snapshot
@@ -117,7 +122,7 @@ def test_wrong_confirmation_variant_fails_closed() -> None:
             state,
             ClosePosition("cycle-1", CloseSignal(True)),
             ClosePositionCommand("instance", "cycle-1"),
-            ProtectionAppliedConfirmation("instance", "cycle-1", protection),
+            ProtectionAppliedConfirmation("instance", "cycle-1", protection, ORDERS),
         )
     assert state == snapshot
 
@@ -127,11 +132,15 @@ def test_wrong_confirmation_variant_fails_closed() -> None:
     [
         (
             ApplyProtectionCommand("other", "cycle-1", DesiredProtection("98", "103")),
-            ProtectionAppliedConfirmation("instance", "cycle-1", DesiredProtection("98", "103")),
+            ProtectionAppliedConfirmation(
+                "instance", "cycle-1", DesiredProtection("98", "103"), ORDERS
+            ),
         ),
         (
             ApplyProtectionCommand("instance", "cycle-1", DesiredProtection("98", "103")),
-            ProtectionAppliedConfirmation("other", "cycle-1", DesiredProtection("98", "103")),
+            ProtectionAppliedConfirmation(
+                "other", "cycle-1", DesiredProtection("98", "103"), ORDERS
+            ),
         ),
     ],
 )
@@ -173,7 +182,7 @@ def test_apply_protection_rejects_every_trade_cycle_mismatch(
             state,
             ApplyProtection("cycle-1", protection),
             ApplyProtectionCommand("instance", sent_cycle_id, protection),
-            ProtectionAppliedConfirmation("instance", confirmed_cycle_id, protection),
+            ProtectionAppliedConfirmation("instance", confirmed_cycle_id, protection, ORDERS),
         )
 
     assert state == snapshot
@@ -199,7 +208,7 @@ def test_apply_protection_rejects_every_protection_value_mismatch(
             state,
             ApplyProtection("cycle-1", decided),
             ApplyProtectionCommand("instance", "cycle-1", decided),
-            ProtectionAppliedConfirmation("instance", "cycle-1", confirmed_protection),
+            ProtectionAppliedConfirmation("instance", "cycle-1", confirmed_protection, ORDERS),
         )
 
     assert state == snapshot
@@ -223,7 +232,7 @@ def test_missing_current_trade_cycle_fails_closed() -> None:
             state,
             ApplyProtection("cycle-1", protection),
             ApplyProtectionCommand("instance", "cycle-1", protection),
-            ProtectionAppliedConfirmation("instance", "cycle-1", protection),
+            ProtectionAppliedConfirmation("instance", "cycle-1", protection, ORDERS),
         )
 
 
@@ -239,5 +248,5 @@ def test_applier_rejects_no_op_instead_of_returning_a_failure_result() -> None:
             state,
             cast("ApplyProtection | ClosePosition", NoOp()),
             ApplyProtectionCommand("instance", "cycle-1", protection),
-            ProtectionAppliedConfirmation("instance", "cycle-1", protection),
+            ProtectionAppliedConfirmation("instance", "cycle-1", protection, ORDERS),
         )

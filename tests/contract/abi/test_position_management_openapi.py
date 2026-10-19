@@ -16,6 +16,8 @@ from strategy_runtime.runtime.position_management_execution.models import (
     ClosePositionCommand,
     PositionClosedConfirmation,
     ProtectionAppliedConfirmation,
+    ProtectionOrder,
+    ProtectionOrders,
 )
 from strategy_runtime.runtime.recipes.position_management import DesiredProtection
 
@@ -63,10 +65,31 @@ def test_authoritative_abi_openapi_matches_runtime_apply_protection_contract() -
         "status",
         "stop_price",
         "take_price",
+        "protection_orders",
     }
     assert success["properties"]["status"] == {"const": "protection_applied"}
     assert success["properties"]["stop_price"] == price_format
     assert success["properties"]["take_price"] == nullable_price_format
+    assert success["properties"]["protection_orders"] == {
+        "$ref": "#/components/schemas/ProtectionOrders"
+    }
+    protection_orders = schemas["ProtectionOrders"]
+    assert protection_orders["additionalProperties"] is False
+    assert set(protection_orders["required"]) == {"quantity", "stop", "take"}
+    assert set(protection_orders["properties"]) == {"quantity", "stop", "take"}
+    assert _without_description(protection_orders["properties"]["quantity"]) == price_format
+    for leg in ("stop", "take"):
+        assert protection_orders["properties"][leg] == {
+            "$ref": "#/components/schemas/ProtectionOrder"
+        }
+    protection_order = schemas["ProtectionOrder"]
+    assert protection_order["additionalProperties"] is False
+    assert set(protection_order["required"]) == {"order_id", "trigger_price"}
+    assert _without_description(protection_order["properties"]["order_id"]) == {
+        "type": "string",
+        "minLength": 1,
+    }
+    assert _without_description(protection_order["properties"]["trigger_price"]) == price_format
 
     error_schema = operation["responses"]["422"]["content"]["application/json"]["schema"]
     assert error_schema == {"$ref": "#/components/schemas/ProtectionBusinessError"}
@@ -205,6 +228,11 @@ def test_authoritative_protection_examples_decode_successfully_via_runtime_codec
         confirmed_protection=DesiredProtection(
             stop_price=example["stop_price"], take_price=example["take_price"]
         ),
+        protection_orders=ProtectionOrders(
+            quantity=example["protection_orders"]["quantity"],
+            stop=ProtectionOrder(**example["protection_orders"]["stop"]),
+            take=ProtectionOrder(**example["protection_orders"]["take"]),
+        ),
     )
 
 
@@ -294,6 +322,10 @@ def test_missing_sibling_checkout_raises_an_actionable_error(tmp_path: Path) -> 
 
     with pytest.raises(MissingAuthoritativeOpenApiDocument, match="canonical sibling checkout"):
         _resolve_authoritative_openapi_path(fake_repository_root)
+
+
+def _without_description(schema: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in schema.items() if key != "description"}
 
 
 def read_authoritative_openapi() -> dict[str, Any]:

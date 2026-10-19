@@ -19,7 +19,11 @@ from strategy_runtime.runtime.open_position.models import (
 )
 from strategy_runtime.runtime.open_position.resolver import OpenPositionResolver
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
-from strategy_runtime.runtime.recipes.position_management import CloseSignal, DesiredProtection
+from strategy_runtime.runtime.recipes.position_management import (
+    CloseSignal,
+    DesiredProtection,
+    EngineDesiredProtectionText,
+)
 from strategy_runtime.runtime.routing.errors import (
     OpenTradeContextUnavailable,
     StrategyEngineProjectionUnavailable,
@@ -147,9 +151,10 @@ class OpenEngine:
         if self.error is not None:
             raise self.error
         return OpenTradeProjectionResponse(
-            desired_protection=DesiredProtection("99.5", None),
+            desired_protection=DesiredProtection("99.50", None),
             close_signal=CloseSignal(False),
             diagnostics=self.diagnostics,
+            engine_desired_protection_text=EngineDesiredProtectionText("99.50", None),
         )
 
 
@@ -384,6 +389,8 @@ def test_router_routes_open_position_with_frozen_context() -> None:
     assert recipe.desired_protection == DesiredProtection("99.5", None)
     assert recipe.close_signal == CloseSignal(False)
     assert dict(recipe.diagnostics) == {"phase": "protected", "bars_in_trade": 3}
+    # Engine's own price text rides along unchanged, beside the normalized value.
+    assert recipe.engine_desired_protection_text == EngineDesiredProtectionText("99.50", None)
 
 
 def test_router_propagates_typed_engine_transport_failures_for_open_trade() -> None:

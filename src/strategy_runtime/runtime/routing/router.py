@@ -78,6 +78,7 @@ class StrategyUseCaseRouter:
             desired_protection=open_response.desired_protection,
             close_signal=open_response.close_signal,
             diagnostics=open_response.diagnostics,
+            engine_desired_protection_text=open_response.engine_desired_protection_text,
         )
         return OpenTradeProjectedStrategyInstance(source=item, position_management_recipe=recipe)
 

@@ -17,7 +17,10 @@ from strategy_runtime.runtime.open_position.models import (
 )
 from strategy_runtime.runtime.open_position.ports import OpenPositionResolverPort
 from strategy_runtime.runtime.orchestrator.errors import UnknownStrategyProjectionError
-from strategy_runtime.runtime.orchestrator.ports import LiveEntryEvaluationJournalPort
+from strategy_runtime.runtime.orchestrator.ports import (
+    LiveEntryEvaluationJournalPort,
+    OpenTradeEvaluationJournalPort,
+)
 from strategy_runtime.runtime.position_management_execution import (
     apply_detected_trade_cycle_closure,
 )
@@ -60,6 +63,7 @@ class StrategyRuntimeOrchestrator:
         live_entry_journal: LiveEntryEvaluationJournalPort | None = None,
         trade_cycle_closed_journal: TradeCycleClosedJournalPort | None = None,
         trade_cycle_opened_journal: TradeCycleOpenedJournalPort | None = None,
+        open_trade_journal: OpenTradeEvaluationJournalPort | None = None,
     ) -> None:
         self._state_repository = state_repository
         self._open_position_resolver = open_position_resolver
@@ -70,6 +74,7 @@ class StrategyRuntimeOrchestrator:
         self._live_entry_journal = live_entry_journal
         self._trade_cycle_closed_journal = trade_cycle_closed_journal
         self._trade_cycle_opened_journal = trade_cycle_opened_journal
+        self._open_trade_journal = open_trade_journal
 
     def process(
         self, unit: StrategyBarProcessingUnit[DeploymentSpecification]
@@ -119,6 +124,7 @@ class StrategyRuntimeOrchestrator:
                 resulting_state = self._entry_reconciliation_orchestrator.execute(projection)
             elif type(projection) is OpenTradeProjectedStrategyInstance:
                 source_state = projection.source.resolved_state.runtime_state
+                self._journal_open_trade(unit, projection)
                 resulting_state, closure = (
                     self._position_management_orchestrator.execute_with_closure(projection)
                 )
@@ -155,6 +161,31 @@ class StrategyRuntimeOrchestrator:
             desired_entry=(
                 None if projection.desired_entry is None else asdict(projection.desired_entry)
             ),
+        )
+
+    def _journal_open_trade(
+        self,
+        unit: StrategyBarProcessingUnit[DeploymentSpecification],
+        projection: OpenTradeProjectedStrategyInstance,
+    ) -> None:
+        if self._open_trade_journal is None:
+            return
+        current_cycle = projection.source.resolved_state.runtime_state.current_trade_cycle
+        assert current_cycle is not None
+        frozen_context = current_cycle.frozen_entry_context
+        assert frozen_context is not None
+        recipe = projection.position_management_recipe
+        # Engine's answer as received: the wire price text, not the normalized
+        # DesiredProtection; `side` is the frozen side sent in the same request.
+        self._open_trade_journal.open_trade_evaluated(
+            strategy_instance_id=unit.strategy_instance_id,
+            instrument=unit.deployment.instrument,
+            timeframe=unit.deployment.base_timeframe,
+            bar_open_time_ms=unit.committed_bar.open_time_ms,
+            trade_cycle_id=current_cycle.trade_cycle_id,
+            side=frozen_context.desired_entry.side,
+            desired_protection=asdict(recipe.engine_desired_protection_text),
+            close_signal=asdict(recipe.close_signal),
         )
 
     def _ensure_first_fill_frozen(

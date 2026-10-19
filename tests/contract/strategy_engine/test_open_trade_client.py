@@ -18,7 +18,11 @@ from strategy_runtime.runtime.engine.errors import (
 )
 from strategy_runtime.runtime.engine.open_trade import OpenTradeProjectionRequest
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
-from strategy_runtime.runtime.recipes.position_management import CloseSignal, DesiredProtection
+from strategy_runtime.runtime.recipes.position_management import (
+    CloseSignal,
+    DesiredProtection,
+    EngineDesiredProtectionText,
+)
 from strategy_runtime.runtime.routing.errors import (
     StrategyEngineProjectionUnavailable as RoutedStrategyEngineProjectionUnavailable,
 )
@@ -148,10 +152,40 @@ def test_decodes_null_take_price_and_active_close_signal() -> None:
 
 
 @pytest.mark.parametrize(
+    ("stop_price", "take_price", "normalized_stop", "normalized_take"),
+    [
+        ("105.150", None, "105.15", None),
+        ("101.50", "120.000", "101.5", "120"),
+        ("0099.0", "1e2", "99", "100"),
+    ],
+)
+def test_keeps_engine_wire_price_text_beside_the_normalized_protection(
+    stop_price: str,
+    take_price: str | None,
+    normalized_stop: str,
+    normalized_take: str | None,
+) -> None:
+    body = success_body()
+    body["desired_protection"] = {"stop_price": stop_price, "take_price": take_price}
+    fake = FakeEngine(lambda _: json_response(200, body))
+
+    result = project(fake, make_request())
+
+    # Decisions read the normalized value; the journal reads Engine's own text.
+    assert result.desired_protection == DesiredProtection(normalized_stop, normalized_take)
+    assert result.desired_protection.stop_price == normalized_stop
+    assert result.engine_desired_protection_text == EngineDesiredProtectionText(
+        stop_price, take_price
+    )
+
+
+@pytest.mark.parametrize(
     "mutate",
     [
         lambda body: body.update({"extra": True}),
         lambda body: body.pop("close_signal"),
+        lambda body: body["desired_protection"].update({"stop_price": "abc"}),
+        lambda body: body["desired_protection"].update({"take_price": 200}),
         lambda body: body["desired_protection"].update({"extra": True}),
         lambda body: body["desired_protection"].update({"stop_price": 100}),
         lambda body: body["close_signal"].update({"active": "yes"}),

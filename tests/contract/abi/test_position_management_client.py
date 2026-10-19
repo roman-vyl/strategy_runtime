@@ -19,6 +19,8 @@ from strategy_runtime.runtime.position_management_execution.models import (
     ClosePositionCommand,
     PositionClosedConfirmation,
     ProtectionAppliedConfirmation,
+    ProtectionOrder,
+    ProtectionOrders,
 )
 from strategy_runtime.runtime.recipes.position_management import DesiredProtection
 
@@ -48,6 +50,11 @@ def test_apply_protection_sends_a_put_with_closed_body() -> None:
         strategy_instance_id="instance-1",
         trade_cycle_id="cycle-1",
         confirmed_protection=DesiredProtection(stop_price="99000", take_price="103000"),
+        protection_orders=ProtectionOrders(
+            quantity="0.010",
+            stop=ProtectionOrder(order_id="stop-order-1", trigger_price="99000.0"),
+            take=ProtectionOrder(order_id="take-order-1", trigger_price="103000.0"),
+        ),
     )
     assert len(fake.requests) == 1
     sent = fake.requests[0]
@@ -68,6 +75,7 @@ def test_apply_protection_with_null_take_price_is_sent_explicitly() -> None:
                 "status": "protection_applied",
                 "stop_price": "99000",
                 "take_price": None,
+                "protection_orders": protection_orders_body(take_trigger_price="990000"),
             },
         )
     )
@@ -78,6 +86,8 @@ def test_apply_protection_with_null_take_price_is_sent_explicitly() -> None:
     )
 
     assert result.confirmed_protection == DesiredProtection("99000", None)
+    # No requested take, yet ABI's real (surrogate) take order is still carried.
+    assert result.protection_orders.take == ProtectionOrder("take-order-1", "990000")
     assert json.loads(fake.requests[0].content) == {"stop_price": "99000", "take_price": None}
 
 
@@ -252,6 +262,81 @@ def test_protection_response_rejects_non_positive_exact_decimal_wire_text(
 
     with pytest.raises(PositionManagementExecutionProtocolError):
         apply_protection(fake, make_protection_command())
+
+
+# -- protection_orders: strict, carried, never compared ----------------------
+
+
+def test_protection_response_without_protection_orders_is_rejected() -> None:
+    body = protection_applied_body()
+    del body["protection_orders"]
+    fake = FakeAbi(lambda _: json_response(200, body))
+
+    with pytest.raises(PositionManagementExecutionProtocolError):
+        apply_protection(fake, make_protection_command())
+
+
+def _orders(body: dict[str, object]) -> dict[str, object]:
+    return body["protection_orders"]  # type: ignore[return-value]
+
+
+def _leg(body: dict[str, object], name: str) -> dict[str, object]:
+    return _orders(body)[name]  # type: ignore[return-value]
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda body: body.update({"protection_orders": None}),
+        lambda body: body.update({"protection_orders": []}),
+        lambda body: body.update({"extra": 1}),
+        lambda body: _orders(body).pop("quantity"),
+        lambda body: _orders(body).pop("stop"),
+        lambda body: _orders(body).pop("take"),
+        lambda body: _orders(body).update({"extra": 1}),
+        lambda body: _orders(body).update({"quantity": "0"}),
+        lambda body: _orders(body).update({"quantity": "-0.01"}),
+        lambda body: _orders(body).update({"quantity": "abc"}),
+        lambda body: _orders(body).update({"quantity": 0.01}),
+        lambda body: _orders(body).update({"take": None}),
+        lambda body: _leg(body, "stop").pop("order_id"),
+        lambda body: _leg(body, "stop").pop("trigger_price"),
+        lambda body: _leg(body, "take").update({"order_link_id": ""}),
+        lambda body: _leg(body, "stop").update({"order_id": ""}),
+        lambda body: _leg(body, "take").update({"order_id": None}),
+        lambda body: _leg(body, "take").update({"order_id": 7}),
+        lambda body: _leg(body, "stop").update({"trigger_price": "0"}),
+        lambda body: _leg(body, "stop").update({"trigger_price": "-1"}),
+        lambda body: _leg(body, "take").update({"trigger_price": "1.2.3"}),
+        lambda body: _leg(body, "take").update({"trigger_price": ""}),
+        lambda body: _leg(body, "take").update({"trigger_price": 103000}),
+    ],
+)
+def test_malformed_protection_orders_are_rejected(
+    mutate: Callable[[dict[str, object]], object],
+) -> None:
+    body = protection_applied_body()
+    mutate(body)
+    fake = FakeAbi(lambda _: json_response(200, body))
+
+    with pytest.raises(PositionManagementExecutionProtocolError):
+        apply_protection(fake, make_protection_command())
+
+
+def test_protection_orders_are_not_compared_with_the_command() -> None:
+    body = protection_applied_body()
+    body["protection_orders"] = {
+        "quantity": "5",
+        "stop": {"order_id": "s", "trigger_price": "1"},
+        "take": {"order_id": "t", "trigger_price": "2"},
+    }
+    fake = FakeAbi(lambda _: json_response(200, body))
+
+    result = apply_protection(fake, make_protection_command())
+
+    assert result.protection_orders == ProtectionOrders(
+        "5", ProtectionOrder("s", "1"), ProtectionOrder("t", "2")
+    )
 
 
 # -- documented public errors share one shape --------------------------------
@@ -547,6 +632,15 @@ def protection_applied_body(
         "status": "protection_applied",
         "stop_price": "99000",
         "take_price": "103000",
+        "protection_orders": protection_orders_body(),
+    }
+
+
+def protection_orders_body(*, take_trigger_price: str = "103000.0") -> dict[str, object]:
+    return {
+        "quantity": "0.010",
+        "stop": {"order_id": "stop-order-1", "trigger_price": "99000.0"},
+        "take": {"order_id": "take-order-1", "trigger_price": take_trigger_price},
     }
 
 

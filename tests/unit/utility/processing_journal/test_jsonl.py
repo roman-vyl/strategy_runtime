@@ -274,3 +274,96 @@ def test_trade_cycle_opened_failure_is_absorbed(tmp_path: Path) -> None:
     )
 
     assert journal.failure_count == 1
+
+
+def test_open_trade_evaluated_serializes_its_payload(tmp_path: Path) -> None:
+    path = tmp_path / "runtime.jsonl"
+    journal = make_journal(path)
+
+    journal.open_trade_evaluated(
+        strategy_instance_id="dep-a",
+        instrument="BTCUSDT.P",
+        timeframe="5m",
+        bar_open_time_ms=1000,
+        trade_cycle_id="cycle-1",
+        side="short",
+        desired_protection={"stop_price": "105.150", "take_price": None},
+        close_signal={"active": False, "reason": None, "component_id": None, "layer": None},
+    )
+
+    record = json.loads(path.read_text())
+    assert record["event_type"] == "open_trade_evaluated"
+    assert record["schema_version"] == 2
+    assert record["severity"] == "info"
+    assert record["strategy_instance_id"] == "dep-a"
+    assert record["diagnostics"] == {}
+    assert record["payload"] == {
+        "instrument": "BTCUSDT.P",
+        "timeframe": "5m",
+        "bar_open_time_ms": 1000,
+        "trade_cycle_id": "cycle-1",
+        "side": "short",
+        "desired_protection": {"stop_price": "105.150", "take_price": None},
+        "close_signal": {"active": False, "reason": None, "component_id": None, "layer": None},
+    }
+
+
+def test_protection_applied_serializes_its_payload(tmp_path: Path) -> None:
+    path = tmp_path / "runtime.jsonl"
+    journal = make_journal(path)
+
+    journal.protection_applied(
+        strategy_instance_id="dep-a",
+        trade_cycle_id="cycle-1",
+        bar_open_time_ms=1000,
+        requested_protection={"stop_price": "99", "take_price": None},
+        confirmed_protection={"stop_price": "99", "take_price": None},
+        position_quantity="0.010",
+        stop_order={"order_id": "stop-1", "trigger_price": "99.0"},
+        take_order={"order_id": "take-1", "trigger_price": "990000"},
+    )
+
+    record = json.loads(path.read_text())
+    assert record["event_type"] == "protection_applied"
+    assert record["schema_version"] == 2
+    assert record["severity"] == "info"
+    assert record["strategy_instance_id"] == "dep-a"
+    assert record["diagnostics"] == {}
+    assert record["payload"] == {
+        "trade_cycle_id": "cycle-1",
+        "bar_open_time_ms": 1000,
+        "requested_protection": {"stop_price": "99", "take_price": None},
+        "confirmed_protection": {"stop_price": "99", "take_price": None},
+        "position_quantity": "0.010",
+        "stop_order": {"order_id": "stop-1", "trigger_price": "99.0"},
+        "take_order": {"order_id": "take-1", "trigger_price": "990000"},
+    }
+
+
+def test_open_trade_events_failures_are_absorbed(tmp_path: Path) -> None:
+    path = tmp_path / "blocked"
+    path.mkdir()
+    journal = make_journal(path)
+
+    journal.open_trade_evaluated(
+        strategy_instance_id="dep-a",
+        instrument="BTCUSDT.P",
+        timeframe="5m",
+        bar_open_time_ms=1000,
+        trade_cycle_id="cycle-1",
+        side="long",
+        desired_protection={"stop_price": "99", "take_price": "103"},
+        close_signal={"active": False, "reason": None, "component_id": None, "layer": None},
+    )
+    journal.protection_applied(
+        strategy_instance_id="dep-a",
+        trade_cycle_id="cycle-1",
+        bar_open_time_ms=1000,
+        requested_protection={"stop_price": "99", "take_price": "103"},
+        confirmed_protection={"stop_price": "99", "take_price": "103"},
+        position_quantity="0.01",
+        stop_order={"order_id": "stop-1", "trigger_price": "99"},
+        take_order={"order_id": "take-1", "trigger_price": "103"},
+    )
+
+    assert journal.failure_count == 2

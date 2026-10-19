@@ -21,6 +21,8 @@ class ProcessingJournalEventType(StrEnum):
     ENTRY_PACKAGE_APPLIED = "entry_package_applied"
     TRADE_CYCLE_CLOSED = "trade_cycle_closed"
     TRADE_CYCLE_OPENED = "trade_cycle_opened"
+    OPEN_TRADE_EVALUATED = "open_trade_evaluated"
+    PROTECTION_APPLIED = "protection_applied"
 
 
 def freeze_json(value: object) -> JsonValue:

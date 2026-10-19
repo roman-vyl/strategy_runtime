@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from strategy_runtime.runtime.recipes.position_management import DesiredProtection
 from strategy_runtime.runtime.trade_cycle_closure import TradeCycleClosure
+from strategy_runtime.shared.decimal_text import is_positive_exact_decimal_text
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,17 +47,56 @@ class ClosePositionCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class ProtectionOrder:
+    """One native protective order as ABI read it back: exchange text, unchanged."""
+
+    order_id: str
+    trigger_price: str
+
+    def __post_init__(self) -> None:
+        _require_non_empty_string(self.order_id, "order_id")
+        _require_positive_exact_decimal_text(self.trigger_price, "trigger_price")
+
+
+@dataclass(frozen=True, slots=True)
+class ProtectionOrders:
+    """The protective orders that carry a confirmed protection on the exchange.
+
+    `quantity` is the cycle's position quantity both legs protect. `take` is
+    always present: with no requested take it is ABI's surrogate take order.
+    """
+
+    quantity: str
+    stop: ProtectionOrder
+    take: ProtectionOrder
+
+    def __post_init__(self) -> None:
+        _require_positive_exact_decimal_text(self.quantity, "quantity")
+        if type(self.stop) is not ProtectionOrder:
+            raise TypeError("stop must be ProtectionOrder")
+        if type(self.take) is not ProtectionOrder:
+            raise TypeError("take must be ProtectionOrder")
+
+
+@dataclass(frozen=True, slots=True)
 class ProtectionAppliedConfirmation:
-    """The executor's verified confirmation that the requested protection is applied."""
+    """The executor's verified confirmation that the requested protection is applied.
+
+    `protection_orders` is transient, for the `protection_applied` journal
+    record only: never compared with the command, persisted or used in a decision.
+    """
 
     strategy_instance_id: str
     trade_cycle_id: str
     confirmed_protection: DesiredProtection
+    protection_orders: ProtectionOrders
 
     def __post_init__(self) -> None:
         _require_non_empty_string(self.strategy_instance_id, "strategy_instance_id")
         _require_non_empty_string(self.trade_cycle_id, "trade_cycle_id")
         _require_desired_protection(self.confirmed_protection, "confirmed_protection")
+        if type(self.protection_orders) is not ProtectionOrders:
+            raise TypeError("protection_orders must be ProtectionOrders")
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +127,11 @@ PositionManagementExecutionConfirmation = ProtectionAppliedConfirmation | Positi
 def _require_non_empty_string(value: str, name: str) -> None:
     if type(value) is not str or len(value) == 0:
         raise ValueError(f"{name} must be a non-empty string")
+
+
+def _require_positive_exact_decimal_text(value: str, name: str) -> None:
+    if type(value) is not str or not is_positive_exact_decimal_text(value):
+        raise ValueError(f"{name} must be positive exact-decimal text")
 
 
 def _require_desired_protection(value: DesiredProtection, name: str) -> None:

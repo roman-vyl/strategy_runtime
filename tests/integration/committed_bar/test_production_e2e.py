@@ -316,6 +316,11 @@ def _protection_applied(request: RecordedRequest) -> FakeResponse:
             "status": "protection_applied",
             "stop_price": body["stop_price"],
             "take_price": body["take_price"],
+            "protection_orders": {
+                "quantity": "0.010",
+                "stop": {"order_id": "stop-order-1", "trigger_price": "95.0"},
+                "take": {"order_id": "take-order-1", "trigger_price": "125.0"},
+            },
         },
     )
 
@@ -742,7 +747,8 @@ def test_open_trade_apply_protection_saves_verified_confirmation(
     _set_engine_routes(
         engine_server,
         live_entry=_live_entry_present(),
-        open_trade=_open_trade_success(stop_price="95", take_price="125"),
+        # Engine's own text "95.0": journaled as is, sent to ABI normalized.
+        open_trade=_open_trade_success(stop_price="95.0", take_price="125"),
     )
     _set_abi_routes(
         abi_server,
@@ -786,6 +792,30 @@ def test_open_trade_apply_protection_saves_verified_confirmation(
 
         outcomes = _dispatch_outcomes(tmp_path / "journal" / "runtime.jsonl")
         assert outcomes[-1]["event_type"] == "strategy_cycle_dispatch_succeeded"
+
+        # Production wires the JSONL journal into both open-trade ports.
+        records = _read_journal(tmp_path / "journal" / "runtime.jsonl")
+        (evaluated,) = [r for r in records if r["event_type"] == "open_trade_evaluated"]
+        (applied,) = [r for r in records if r["event_type"] == "protection_applied"]
+        assert records.index(evaluated) < records.index(applied)
+        cycle_id = state.current_trade_cycle.trade_cycle_id
+        assert evaluated["strategy_instance_id"] == _STRATEGY_INSTANCE_ID
+        assert evaluated["payload"]["trade_cycle_id"] == cycle_id
+        assert evaluated["payload"]["bar_open_time_ms"] == 1_720_000_200_000
+        assert evaluated["payload"]["desired_protection"] == {
+            "stop_price": "95.0",
+            "take_price": "125",
+        }
+        assert applied["strategy_instance_id"] == _STRATEGY_INSTANCE_ID
+        assert applied["payload"] == {
+            "trade_cycle_id": cycle_id,
+            "bar_open_time_ms": 1_720_000_200_000,
+            "requested_protection": {"stop_price": "95", "take_price": "125"},
+            "confirmed_protection": {"stop_price": "95", "take_price": "125"},
+            "position_quantity": "0.010",
+            "stop_order": {"order_id": "stop-order-1", "trigger_price": "95.0"},
+            "take_order": {"order_id": "take-order-1", "trigger_price": "125.0"},
+        }
 
 
 def test_open_trade_close_position_clears_cycle_after_verified_confirmation(
