@@ -249,3 +249,38 @@ Runtime decoder SHALL reject an ABI response that still carries such a field.
 - **WHEN** an ABI applied acknowledgement contains `accepted_risk_multiplier`
 - **THEN** the strict decoder reports an unknown field
 - **AND** does not return a success acknowledgement
+
+### Requirement: Applied response accepts four optional entry-order values
+
+Runtime's entry-package client MUST accept optional `trigger_price`, `stop_loss`,
+`take_profit` and `quantity` in the `entry_package_applied` response, decode them
+strictly, carry them on the applied confirmation, and not persist them.
+
+#### Scenario: Old-shape response
+- **WHEN** the applied response has none of the four fields
+- **THEN** it decodes exactly as before and the confirmation values are `None`
+
+#### Scenario: New-shape response
+- **WHEN** the applied response carries the four fields
+- **THEN** the confirmation exposes them unchanged
+
+#### Scenario: Invalid value or unknown key
+- **WHEN** a price or quantity is not exact-decimal text, or another unknown key is present
+- **THEN** the response fails decoding like any other malformed response
+
+### Requirement: Applied response accepts optional entry-order identifiers
+
+Runtime's entry-package client MUST accept optional `order_link_id` and `order_id` in the `entry_package_applied` response, decode each as a non-empty string when present, carry them on the applied confirmation, and not persist them.
+
+#### Scenario: Response without identifiers
+- **WHEN** the applied response has neither field
+- **THEN** it decodes as before and both confirmation values are `None`
+
+#### Scenario: Response with identifiers
+- **WHEN** the applied response carries both fields
+- **THEN** the confirmation exposes them unchanged
+
+#### Scenario: Invalid identifier
+- **WHEN** either field is an empty string or not a string
+- **THEN** the response fails decoding like any other malformed response
+

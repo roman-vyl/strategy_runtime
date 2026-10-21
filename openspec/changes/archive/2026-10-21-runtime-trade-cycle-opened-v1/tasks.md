@@ -14,5 +14,5 @@
 
 ## 2. Rollout (on owner's word only)
 
-- [ ] 2.1 Runtime PR merges before the ABI PR; Runtime and ABI are deployed together.
+- [x] 2.1 Runtime PR merges before the ABI PR; Runtime and ABI are deployed together.
 - [ ] 2.2 On the Mac demo: the next real entry fill gives exactly one `trade_cycle_opened` record in `runtime.jsonl`.

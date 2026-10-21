@@ -139,3 +139,104 @@ response, before entry reconciliation runs.
 - **WHEN** a duplicate committed-bar event causes a second successful evaluation of the same bar
 - **THEN** a second `live_entry_evaluated` event with its own `event_id` is appended
 
+### Requirement: Applied entry-order values are journaled
+
+The processing journal MUST provide an `entry_package_applied` event, and Runtime MUST
+emit one for every `entry_package_applied` response that carries the entry-order values,
+with the received values verbatim, before the state is applied, without using them in
+any decision or storing them in durable state.
+
+#### Scenario: Applied response with values
+- **WHEN** ABI returns `entry_package_applied` with the four values
+- **THEN** one event is appended with `strategy_instance_id` in the envelope and `trade_cycle_id` plus the four values exactly as received in the payload
+
+#### Scenario: No values in the response
+- **WHEN** the applied response carries none of the four values, or the response is a cancel, absent or error outcome
+- **THEN** no `entry_package_applied` event is appended
+
+#### Scenario: Journal failure
+- **WHEN** appending the event fails
+- **THEN** the failure is absorbed and counted and reconciliation proceeds unchanged
+
+### Requirement: The new event uses the existing journal mechanism
+
+The `entry_package_applied` event MUST be written by the existing processing journal
+adapter through the existing event envelope, carry `trade_cycle_id` in its payload, and
+MUST NOT change the envelope fields, `schema_version`, or any other event type.
+
+#### Scenario: Event shape
+- **WHEN** an `entry_package_applied` event is written
+- **THEN** the envelope has the same fields and `schema_version` as `live_entry_evaluated` and the payload holds `trade_cycle_id` and the four values
+
+#### Scenario: Existing event type
+- **WHEN** a `live_entry_evaluated` event is written
+- **THEN** it is unchanged
+
+### Requirement: Applied record links the evaluation and the order
+
+The `entry_package_applied` payload MUST also contain `bar_open_time_ms` of the committed bar whose processing sent the apply, and `order_link_id` and `order_id` exactly as received from ABI or `null` when not received. Runtime MUST write the record when the applied response carries any of the four entry-order values or either identifier, and MUST NOT use these values in any decision or store them in durable state.
+
+#### Scenario: Same bar as the evaluation
+- **WHEN** a bar's processing journals `live_entry_evaluated` and then receives `entry_package_applied`
+- **THEN** the `entry_package_applied` record has the same `strategy_instance_id` and `bar_open_time_ms` as that `live_entry_evaluated` event
+
+#### Scenario: Identifiers received
+- **WHEN** ABI returns `order_link_id` and `order_id`
+- **THEN** the record carries them verbatim next to `trade_cycle_id` and the four values
+
+#### Scenario: Identifiers not received
+- **WHEN** ABI returns the four values without identifiers
+- **THEN** the record is written with `order_link_id` and `order_id` equal to `null`
+
+#### Scenario: Nothing received
+- **WHEN** the applied response has none of the four values and no identifier, or the outcome is cancel, absent or error
+- **THEN** no record is written
+
+### Requirement: Every confirmed trade-cycle closure is journaled after the durable save
+Runtime SHALL write `trade_cycle_closed` (schema version 2, `strategy_instance_id` in the envelope) with payload `trade_cycle_id`, `bar_open_time_ms`, `reason`, `order_id`, `order_link_id`, `parent_order_link_id`, taken verbatim from ABI's closure, only after the state without the cycle was durably saved. `bar_open_time_ms` SHALL be the committed bar on which Runtime learned of the closure, or `null` when it was learned by the pending-close resolver. The record SHALL NOT be used in any decision.
+
+#### Scenario: Closure learned on a bar
+- **WHEN** a bar ends a cycle by a closure or by a confirmed close carrying one
+- **THEN** one record is written after the save with that bar's `bar_open_time_ms`
+
+#### Scenario: Save failed
+- **WHEN** saving the state without the cycle fails
+- **THEN** no `trade_cycle_closed` record is written
+
+### Requirement: Every Open Trade transition is journaled after the durable save
+Runtime SHALL write `trade_cycle_opened` (schema version 2, `strategy_instance_id` in the envelope) with payload `trade_cycle_id`, `bar_open_time_ms`, `first_fill_at_ms`, `average_entry_price`, `entry_order_link_id`, `entry_order_id`, only after the state with the newly frozen entry context was durably saved. The record SHALL mean the first confirmed execution of the cycle's entry order, a partial one included; `average_entry_price` SHALL be ABI's value at that observation, not a final entry price. `bar_open_time_ms` SHALL be the committed bar on which Runtime made the transition, or `null` on the recovery path. A write failure SHALL NOT raise into orchestration and SHALL NOT change Runtime state. The record SHALL NOT be used in any decision.
+
+#### Scenario: Partial fill
+- **WHEN** the transition is made from a partially filled entry order
+- **THEN** the record is written with ABI's current `average_entry_price`
+
+#### Scenario: Missing exchange order id
+- **WHEN** ABI reported `entry_order_id: null`
+- **THEN** the record carries `entry_order_id: null`
+
+#### Scenario: Journal write fails
+- **WHEN** appending the record fails
+- **THEN** the failure counter grows, no exception reaches orchestration, and the saved state is unchanged
+
+### Requirement: Open-trade evaluation event
+The processing journal SHALL provide an `open_trade_evaluated` event (schema version 2, `strategy_instance_id` in the envelope) with payload `instrument`, `timeframe`, `bar_open_time_ms`, `trade_cycle_id`, `side`, `desired_protection` (`stop_price`, `take_price`) and `close_signal` (`active`, `reason`, `component_id`, `layer`). Prices SHALL be Engine's own wire text, unchanged; an absent `take_price` and absent close signal fields SHALL be JSON `null`. The payload SHALL NOT contain Engine diagnostics. A write failure SHALL NOT raise into orchestration and SHALL NOT change Runtime state.
+
+#### Scenario: Short position with no take
+- **WHEN** the event is written for a short position whose desired protection has no take price
+- **THEN** the payload has `side: "short"` and `desired_protection.take_price: null`
+
+#### Scenario: Journal write fails
+- **WHEN** appending `open_trade_evaluated` fails
+- **THEN** orchestration continues and the state is unchanged
+
+### Requirement: Protection applied event
+The processing journal SHALL provide a `protection_applied` event (schema version 2, `strategy_instance_id` in the envelope) with payload `trade_cycle_id`, `bar_open_time_ms`, `requested_protection` and `confirmed_protection` (each `{stop_price, take_price}`), `position_quantity`, `stop_order` and `take_order` (each `{order_id, trigger_price}`). Requested levels SHALL be the ones Runtime sent; confirmed levels, quantity and orders SHALL be exactly as ABI returned them. `take_price` SHALL be JSON `null` when absent while `take_order` is still present; nothing SHALL be hidden or substituted. A write failure SHALL NOT raise into orchestration and SHALL NOT change Runtime state.
+
+#### Scenario: No take requested
+- **WHEN** Runtime requested `take_price: null`
+- **THEN** the record has `take_price: null` in both `requested_protection` and `confirmed_protection`, and `take_order` with the id and trigger price of the take order ABI actually keeps on the exchange
+
+#### Scenario: Journal write fails
+- **WHEN** appending `protection_applied` fails
+- **THEN** position management continues and the confirmed protection is still applied to state
+

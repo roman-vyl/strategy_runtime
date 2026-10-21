@@ -421,3 +421,66 @@ result.
 - **THEN** the existing repository atomic-save contract preserves the prior
   complete stored aggregate
 - **AND** the top-level orchestrator performs no partial merge or second save
+
+### Requirement: A proven closure ends the cycle before routing
+When the resolved state carries a closure, Runtime SHALL, inside the same keyed critical section and before first-fill freezing and routing: verify that the closure's `strategy_instance_id` and `trade_cycle_id` equal the state and its current trade cycle; durably save the state with `current_trade_cycle = None` and `pending_close_recovery = None`; then journal `trade_cycle_closed` with the committed bar's `bar_open_time_ms`; and return. Runtime SHALL NOT invoke Engine, entry reconciliation, position management or any ABI write for that bar. An identity mismatch SHALL raise and leave state unchanged. The transition SHALL take no close decision or command.
+
+#### Scenario: Stop filled since the previous bar
+- **WHEN** the lookup returns a `stop_loss` closure for the current cycle
+- **THEN** the saved state has no current trade cycle, one `trade_cycle_closed` record follows the save, and no Engine call or entry is made on this bar
+
+#### Scenario: Next bar after the closure
+- **WHEN** the following bar is processed
+- **THEN** Runtime makes no lookup and evaluates live entry as for any instance without a cycle
+
+#### Scenario: Mismatched closure
+- **WHEN** the closure's `trade_cycle_id` differs from the current cycle
+- **THEN** Runtime raises, saves nothing and journals nothing
+
+#### Scenario: Flat answer without closure is not a close
+- **WHEN** the lookup returns `position_open: false` without a closure for a cycle with a frozen entry context
+- **THEN** Runtime does not end the cycle
+
+### Requirement: The bar-path Open Trade transition is journaled once after the save
+When the first-fill transition on the bar path produces a new state and that state was durably saved, Runtime SHALL write one `trade_cycle_opened` record with the committed bar's `bar_open_time_ms`, the frozen `first_fill_at_ms`, and the resolved lookup's `average_entry_price`, `entry_order_link_id` and `entry_order_id`. When the cycle was already frozen, Runtime SHALL write no record. The record SHALL NOT change the flow of the bar.
+
+#### Scenario: First freeze on a bar
+- **WHEN** a bar resolves `position_open: true` for a cycle without a frozen entry context and the save succeeds
+- **THEN** exactly one `trade_cycle_opened` record is written after the save, with that bar's `bar_open_time_ms`
+
+#### Scenario: Later bars with the same open position
+- **WHEN** a later bar resolves `position_open: true` for the same, already frozen cycle
+- **THEN** no `trade_cycle_opened` record is written
+
+#### Scenario: Save failed
+- **WHEN** saving the frozen state fails
+- **THEN** no `trade_cycle_opened` record is written
+
+### Requirement: Every successful open-trade evaluation is journaled
+Runtime SHALL write exactly one `open_trade_evaluated` event for every successful Strategy Engine `open-trade` answer, after routing and before position management runs, whatever the following decision. `trade_cycle_id` and `side` SHALL come from the current cycle's frozen entry context; `bar_open_time_ms` SHALL be the committed bar; `desired_protection` and `close_signal` SHALL be Engine's answer exactly as received on the wire, prices as Engine's own text before any Runtime normalization, without recomputation, rounding, reformatting, comparison or a decision label. Decisions SHALL keep using the normalized protection and SHALL NOT read the wire text. `side` SHALL be copied from the frozen desired entry sent to Engine in the same request. The record SHALL NOT be used in any decision.
+
+#### Scenario: Record equals Engine's answer
+- **WHEN** Engine answers with `desired_protection` `{stop_price: "101.50", take_price: null}` and `close_signal` `{active: false, reason: null, component_id: null, layer: null}`
+- **THEN** the record has `desired_protection` `{stop_price: "101.50", take_price: null}` and the same `close_signal`, with no added, recomputed or decision field
+- **AND** the decision for that bar still compares the normalized value `101.5`
+
+#### Scenario: Side is the side sent to Engine
+- **WHEN** the current cycle's frozen desired entry has `side: "short"`
+- **THEN** the record has `side: "short"`, copied from the frozen entry context, not derived from prices
+
+#### Scenario: Engine asks for no change
+- **WHEN** Engine's answer equals the current protection and the close signal is inactive
+- **THEN** one `open_trade_evaluated` event is written for the bar
+
+#### Scenario: Engine asks to close
+- **WHEN** Engine's close signal is active
+- **THEN** one `open_trade_evaluated` event with the active close signal is written before the close command is sent
+
+#### Scenario: Later ABI step fails
+- **WHEN** the evaluation succeeds and the following ABI call fails
+- **THEN** the `open_trade_evaluated` event for that bar is still present
+
+#### Scenario: No open-trade evaluation happened
+- **WHEN** the bar is skipped because of a pending entry or close recovery, a closure is detected on resolve, the frozen entry bar is after the committed bar, the instance is routed to live-entry, or Engine `open-trade` fails
+- **THEN** no `open_trade_evaluated` event is written for that instance and bar
+

@@ -8,4 +8,4 @@
 
 ## 2. Verification on the Mac (on owner's word only)
 
-- [ ] 2.1 Deploy before the ABI change; nothing changes in `runtime.jsonl`. After ABI ships, one demo cycle exiting by stop or take-profit ends on the next bar with one `trade_cycle_closed` record.
+- [x] 2.1 Deploy before the ABI change; nothing changes in `runtime.jsonl`. After ABI ships, one demo cycle exiting by stop or take-profit ends on the next bar with one `trade_cycle_closed` record.

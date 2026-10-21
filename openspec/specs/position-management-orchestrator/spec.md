@@ -115,3 +115,19 @@ or pending-command bookkeeping.
 - **WHEN** `PositionManagementOrchestrator.execute` runs
 - **THEN** it acquires no keyed mutex, performs no repository load or save,
   and performs no retry of a failed port call
+
+### Requirement: Every ABI-confirmed protection is journaled
+For an `ApplyProtection` decision, the orchestrator SHALL write exactly one `protection_applied` event after ABI confirms the protection and before the confirmation is applied to state. `requested_protection` SHALL come from the sent `ApplyProtectionCommand`, `confirmed_protection` from ABI's confirmed protection, `position_quantity`, `stop_order` and `take_order` from ABI's `protection_orders`; `bar_open_time_ms` SHALL be the committed bar of the projection. No event SHALL be written for `NoOp`, `ClosePosition`, or when ABI does not confirm.
+
+#### Scenario: Protection moved
+- **WHEN** ABI confirms a new stop and take for the current cycle
+- **THEN** one `protection_applied` event carries the cycle id, this bar's time, the requested and confirmed levels and the position quantity and both protective orders' `order_id` and `trigger_price`
+
+#### Scenario: ABI fails
+- **WHEN** `apply_protection` raises
+- **THEN** no `protection_applied` event is written
+
+#### Scenario: Save fails after confirmation
+- **WHEN** ABI confirmed, the event was written and the state save then fails
+- **THEN** the event stays, and a repeated Apply on a later bar writes a second event
+

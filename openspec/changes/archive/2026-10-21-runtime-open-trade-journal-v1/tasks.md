@@ -20,5 +20,5 @@
 
 ## 2. Rollout (on owner's word only)
 
-- [ ] 2.1 PR, merge, deploy only on the owner's word; Runtime and the matching ABI change are deployed together.
+- [x] 2.1 PR, merge, deploy only on the owner's word; Runtime and the matching ABI change are deployed together.
 - [ ] 2.2 On the Mac demo: an open position gives one `open_trade_evaluated` per bar in `runtime.jsonl`, and a protection change gives one `protection_applied` whose `stop_order.order_id` and `take_order.order_id` match the orders on Bybit.
