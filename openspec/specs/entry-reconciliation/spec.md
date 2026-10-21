@@ -47,48 +47,6 @@ equivalent if and only if all six domain fields are equal.
 - **AND** relies on the canonical values established by `DesiredEntry`
   construction
 
-### Requirement: Reconciliation produces the complete three-way decision table
-Runtime SHALL produce exactly one closed payload-bearing decision variant from
-`NoOp`, `Apply`, and `Cancel`. `Replace` no longer exists as a decision
-variant: any change to the acknowledged applied desired entry decides
-`Cancel`, identically to the applied desired entry becoming absent, because
-physical replace is served exclusively by cancellation (see
-`current-trade-cycle-state` and the paired ABI capability
-`entry-package-execution`).
-
-#### Scenario: No new or applied entry
-- **WHEN** the new desired entry is null
-- **AND** `current_trade_cycle` is null
-- **THEN** the decision is `NoOp`
-- **AND** carries no desired entry or trade-cycle identity
-
-#### Scenario: First desired entry
-- **WHEN** the new desired entry is non-null
-- **AND** `current_trade_cycle` is null
-- **THEN** the decision is `Apply`
-- **AND** carries that new desired entry
-- **AND** carries no trade-cycle identity
-
-#### Scenario: Equivalent desired entry is already applied
-- **WHEN** the new desired entry is equivalent to the acknowledged applied
-  desired entry
-- **THEN** the decision is `NoOp`
-
-#### Scenario: Applied desired entry changed
-- **WHEN** the new desired entry is non-null
-- **AND** it is not equivalent to the acknowledged applied desired entry
-- **THEN** the decision is `Cancel`
-- **AND** carries the acknowledged current `trade_cycle_id`
-- **AND** does not carry the new desired entry — it is discarded at the
-  decision level; a later bar's fresh reconciliation is the only path by
-  which any new desired entry is ever applied
-
-#### Scenario: Applied desired entry became absent
-- **WHEN** the new desired entry is null
-- **AND** an acknowledged applied package exists
-- **THEN** the decision is `Cancel`
-- **AND** carries the acknowledged current `trade_cycle_id`
-
 ### Requirement: Command models contain only reconciliation command data
 Runtime SHALL define the transport-free `EntryReconciliationCommand` with
 exactly `strategy_instance_id`, `trade_cycle_id`, `ticker`, and
@@ -376,3 +334,55 @@ a trade cycle's entry context is frozen.
 - **AND** `EntryReconciliationExecutionPort.execute` is never called
 - **AND** no ABI entry-package command is sent
 - **AND** the source `StrategyInstanceRuntimeState` remains unmodified
+
+### Requirement: Reconciliation produces the complete four-variant decision table
+Runtime SHALL produce exactly one closed payload-bearing decision variant from
+`NoOp`, `Apply`, `Replace`, and `Cancel`. `Replace` is a logical decision
+("the acknowledged package must be replaced by the new desired entry"); it
+implies no ABI amend or atomic replace capability. Its physical execution is
+owned by `entry-reconciliation-orchestrator`.
+
+#### Scenario: No new or applied entry
+- **WHEN** the new desired entry is null
+- **AND** `current_trade_cycle` is null
+- **THEN** the decision is `NoOp`
+- **AND** carries no desired entry or trade-cycle identity
+
+#### Scenario: First desired entry
+- **WHEN** the new desired entry is non-null
+- **AND** `current_trade_cycle` is null
+- **THEN** the decision is `Apply`
+- **AND** carries that new desired entry
+- **AND** carries no trade-cycle identity
+
+#### Scenario: Equivalent desired entry is already applied
+- **WHEN** the new desired entry is equivalent to the acknowledged applied
+  desired entry
+- **THEN** the decision is `NoOp`
+
+#### Scenario: Applied desired entry changed
+- **WHEN** the new desired entry is non-null
+- **AND** it is not equivalent to the acknowledged applied desired entry
+- **THEN** the decision is `Replace`
+- **AND** carries the acknowledged current `trade_cycle_id`
+- **AND** carries the new desired entry unchanged
+
+#### Scenario: Applied desired entry became absent
+- **WHEN** the new desired entry is null
+- **AND** an acknowledged applied package exists
+- **THEN** the decision is `Cancel`
+- **AND** carries the acknowledged current `trade_cycle_id`
+
+#### Scenario: Replace is a validated value
+- **WHEN** a `Replace` value is constructed
+- **THEN** `trade_cycle_id` is a non-empty string
+- **AND** `desired_entry` is a `DesiredEntry`
+- **AND** construction fails otherwise
+
+#### Scenario: Replace is never built into a single command
+- **WHEN** the command builder or the successful-confirmation applier
+  receives `Replace`
+- **THEN** it raises `EntryReconciliationInvariantError`
+- **AND** only the orchestrator's decomposition into `Cancel` and `Apply`
+  reaches those components
+

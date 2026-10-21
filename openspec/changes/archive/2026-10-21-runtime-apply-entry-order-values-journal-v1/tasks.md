@@ -7,5 +7,5 @@
 
 ## 2. Verification on the Mac (on owner's word only)
 
-- [ ] 2.1 Deploy this change before the ABI change. ABI on Bybit demo.
+- [x] 2.1 Deploy this change before the ABI change. ABI on Bybit demo.
 - [ ] 2.2 One apply on demo; `runtime.jsonl` has one `entry_package_applied` line with `strategy_instance_id`, `trade_cycle_id` and the four values matching the order in Bybit demo Orders.

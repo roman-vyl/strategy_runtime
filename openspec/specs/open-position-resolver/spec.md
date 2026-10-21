@@ -5,9 +5,7 @@
 Define the scalar semantic Runtime boundary that resolves authoritative current
 open-position facts for one strategy-instance state through an identity-only ABI
 lookup.
-
 ## Requirements
-
 ### Requirement: Runtime resolves one state after get-or-create
 Strategy Runtime SHALL provide a scalar `OpenPositionResolver` invoked by
 `StrategyRuntimeOrchestrator` after repository get-or-create.
@@ -121,3 +119,22 @@ protocol-invalid responses, and the resolver SHALL propagate those failures.
 #### Scenario: Programming error is not masked
 - **WHEN** the lookup port raises an unexpected programming exception
 - **THEN** the resolver does not relabel it as lookup unavailability
+
+### Requirement: Resolver carries a proven closure transiently
+The resolver SHALL pass ABI's closure unchanged on the resolved state, and SHALL NOT persist it. With no current trade cycle no lookup is made and there is no closure.
+
+#### Scenario: Closure from ABI
+- **WHEN** ABI returns `position_open: false` with a closure
+- **THEN** the resolved state exposes `position_open = False` and that closure
+
+### Requirement: Resolver carries the entry order identifiers transiently
+`PositionResolvedStrategyInstanceRuntimeState` SHALL carry `entry_order_link_id` and `entry_order_id` from the lookup response unchanged. With no current trade cycle, or a closed position, both SHALL be `None`. They SHALL NOT be persisted in Runtime state and SHALL NOT be used in any decision.
+
+#### Scenario: Open position
+- **WHEN** the lookup reports an open position with both identifiers
+- **THEN** the resolved state carries them unchanged
+
+#### Scenario: No current cycle
+- **WHEN** the state has no current trade cycle
+- **THEN** the resolved state carries both identifiers as `None` and no lookup is made
+

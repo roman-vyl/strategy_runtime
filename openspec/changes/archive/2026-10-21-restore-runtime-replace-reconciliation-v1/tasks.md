@@ -34,7 +34,7 @@
 
 ## 4. Specs and checks
 
-- [ ] 4.1 Update the `entry-reconciliation`, `entry-reconciliation-orchestrator` and `current-trade-cycle-state` specs per this change.
+- [x] 4.1 Update the `entry-reconciliation`, `entry-reconciliation-orchestrator` and `current-trade-cycle-state` specs per this change.
 - [x] 4.2 Run `openspec validate restore-runtime-replace-reconciliation-v1 --strict`, lint, typecheck and the unit tests. Do not run the all-families memo parity test.
 
 Notes:

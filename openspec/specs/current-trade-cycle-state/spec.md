@@ -156,12 +156,11 @@ existence.
 `StrategyInstanceRuntimeState.current_trade_cycle` SHALL change for entry
 reconciliation only after a successful confirmation matches the expected
 action, ownership identities, originating command, and source-state
-preconditions. `Replace` no longer exists as a decision or confirmation
-variant: a changed applied desired entry is served by `Cancel`, identically
-to the applied desired entry becoming absent — Runtime never atomically
-replaces the `AppliedEntryPackage` in place. A trade cycle whose desired
-entry changed reaches its next entry only through a later, independent
-`Apply` with a new `trade_cycle_id`.
+preconditions. Runtime never atomically replaces the `AppliedEntryPackage`
+in place. A changed applied desired entry is served by `Replace`, executed as
+a confirmed `Cancel` of the current cycle followed, in the same invocation,
+by an `Apply` with a new `trade_cycle_id`; each step changes state only after
+its own matching confirmation.
 
 #### Scenario: Create a cycle after successful apply
 - **WHEN** `Apply` receives a matching `EntryAppliedConfirmation`
@@ -183,8 +182,8 @@ entry changed reaches its next entry only through a later, independent
 - **THEN** Runtime sets `current_trade_cycle` to null
 - **AND** does not construct or retain a `CurrentTradeCycle` with a null applied
   package
-- **AND** this holds identically whether the `Cancel` decision arose from a
-  null new desired entry or from a changed one
+- **AND** this holds identically for a `Cancel` decision and for the cancel
+  step of a `Replace` decision
 
 #### Scenario: Every valid transition preserves the non-empty-cycle invariant
 - **WHEN** `Apply` or `Cancel` completes successfully
@@ -201,6 +200,13 @@ entry changed reaches its next entry only through a later, independent
 - **AND** the input `StrategyInstanceRuntimeState` remains unmodified and
   domain-value-equivalent to its pre-call snapshot
 - **AND** no empty, partial, pending, or provisional current cycle is stored
+
+#### Scenario: Replace moves to a new cycle only through two confirmations
+- **WHEN** `Replace(C, Y)` executes
+- **THEN** cycle C is cleared only after a matching `EntryAbsentConfirmation`
+- **AND** a cycle N with applied desired entry Y is created only after a
+  matching `EntryAppliedConfirmation`
+- **AND** N differs from C
 
 ### Requirement: Frozen executed entry context is the minimal first-fill freeze
 `FrozenExecutedEntryContext` SHALL contain exactly `desired_entry:
@@ -278,3 +284,4 @@ lifecycle (e.g. Runtime reacting to ABI reporting
   `PositionManagementExecutionInvariantError`
 - **AND** the input `StrategyInstanceRuntimeState` remains unmodified and
   domain-value-equivalent to its pre-call snapshot
+
