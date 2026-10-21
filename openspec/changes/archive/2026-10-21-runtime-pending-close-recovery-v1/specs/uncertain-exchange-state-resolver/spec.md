@@ -49,6 +49,10 @@ perform at most one bounded corrective `close_position` re-issue call, per
   `pending_entry_recovery` or `pending_close_recovery`
 - **THEN** their resolution attempts do not block each other
 
+#### Scenario: No attempt sends more than one corrective command
+- **WHEN** either eligible corrective row is observed
+- **THEN** the attempt sends at most one CANCEL and never sends CREATE or amend
+
 ### Requirement: Resolution applies no wall-clock gate of any kind
 The resolver SHALL NOT compare any timestamp to the current time, SHALL NOT
 compute an age or elapsed duration for `pending_entry_recovery` or
@@ -67,6 +71,17 @@ neither case does elapsed time play any role.
 - **THEN** the resolver acts exactly the same way it would for a marker set
   moments ago — no different code path, no skipped query or command, no
   escalation to a different outcome based on elapsed time
+
+#### Scenario: Age never permits stale CREATE resurrection
+- **WHEN** an uncertain APPLY is arbitrarily old
+- **THEN** Runtime never resends its original CREATE or reconstructs its old desired entry
+- **AND** only explicit current ABI evidence controls recovery
+
+#### Scenario: Aged-out ABI evidence produces no Runtime fallback
+- **WHEN** ABI declines to emit the fifth state and returns its safe error because the
+  binding is outside ABI's trustworthy evidence window
+- **THEN** Runtime leaves `pending_entry_recovery` and `current_trade_cycle` unchanged
+- **AND** sends no corrective CANCEL and performs no local age inference
 
 ### Requirement: The background worker follows the existing intake-worker lifecycle shape
 Strategy Runtime SHALL provide a background worker that drives resolution
@@ -119,6 +134,33 @@ thread is introduced for close recovery.
 - **AND** this completes before the ABI HTTP client used by the resolver is
   closed
 
+### Requirement: The resolver never initiates Engine evaluation or position management
+The resolver SHALL NOT call `StrategyUseCaseRouter`, Strategy Engine,
+`EntryReconciliationOrchestrator`, or `PositionManagementOrchestrator`, even
+when an entry-recovery resolution discovers a fill. For close recovery, the
+resolver's only permitted mutation is the single re-issued `close_position`
+call defined above — it SHALL NOT invoke `PositionManagementOrchestrator`,
+`decide_position_management`, or any protection-related operation as part of
+resolving `pending_close_recovery`.
+
+#### Scenario: A discovered fill does not trigger immediate management
+- **WHEN** an entry-recovery resolution attempt discovers `position_open`
+- **THEN** the resolver saves the resolved state and returns
+- **AND** does not call the use-case router, Strategy Engine, or
+  `PositionManagementOrchestrator` as part of this attempt
+- **AND** the next committed bar's ordinary open-position resolution and
+  routing discover the open position and proceed through the normal
+  position-management pipeline
+
+#### Scenario: Close recovery calls only the execution port, never the orchestrator
+- **WHEN** the resolver attempts to resolve a `pending_close_recovery` marker
+- **THEN** it calls `PositionManagementExecutionPort.close_position`
+  directly
+- **AND** does not call `PositionManagementOrchestrator.execute` or
+  `decide_position_management`
+
+## ADDED Requirements
+
 ### Requirement: An uncertain close resolves by re-issuing the close command through the canonical confirmation-application path
 When `pending_close_recovery` is non-null, the resolver SHALL resolve it by
 calling `PositionManagementExecutionPort.close_position` again with a
@@ -170,28 +212,3 @@ transition rule.
 - **THEN** the resolver does not save any state
 - **AND** `pending_close_recovery` and `current_trade_cycle` remain exactly
   as they were, eligible for a later attempt
-
-### Requirement: The resolver never initiates Engine evaluation or position management
-The resolver SHALL NOT call `StrategyUseCaseRouter`, Strategy Engine,
-`EntryReconciliationOrchestrator`, or `PositionManagementOrchestrator`, even
-when an entry-recovery resolution discovers a fill. For close recovery, the
-resolver's only permitted mutation is the single re-issued `close_position`
-call defined above — it SHALL NOT invoke `PositionManagementOrchestrator`,
-`decide_position_management`, or any protection-related operation as part of
-resolving `pending_close_recovery`.
-
-#### Scenario: A discovered fill does not trigger immediate management
-- **WHEN** an entry-recovery resolution attempt discovers `position_open`
-- **THEN** the resolver saves the resolved state and returns
-- **AND** does not call the use-case router, Strategy Engine, or
-  `PositionManagementOrchestrator` as part of this attempt
-- **AND** the next committed bar's ordinary open-position resolution and
-  routing discover the open position and proceed through the normal
-  position-management pipeline
-
-#### Scenario: Close recovery calls only the execution port, never the orchestrator
-- **WHEN** the resolver attempts to resolve a `pending_close_recovery` marker
-- **THEN** it calls `PositionManagementExecutionPort.close_position`
-  directly
-- **AND** does not call `PositionManagementOrchestrator.execute` or
-  `decide_position_management`

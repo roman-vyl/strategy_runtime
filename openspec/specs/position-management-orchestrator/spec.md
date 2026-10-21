@@ -89,7 +89,12 @@ decision — calls exactly the matching port method once and applies its
 confirmation through the `current-trade-cycle-state` capability's
 confirmation-application rules, raising
 `PositionManagementExecutionInvariantError` and returning no state on any
-mismatch.
+mismatch. For a `ClosePosition` decision specifically, the orchestrator
+SHALL durably save `source_state` with `pending_close_recovery` set to a
+`PendingCloseRecovery` for the target `trade_cycle_id` before calling
+`close_position(command)`, mirroring `EntryReconciliationOrchestrator`'s
+existing pre-write-before-dispatch ordering. If that pre-write itself fails,
+`close_position` is never called.
 
 #### Scenario: One matching port call per decision
 - **WHEN** the decision is `ApplyProtection`
@@ -106,15 +111,46 @@ mismatch.
   `PositionManagementExecutionInvariantError` for a mismatch)
 - **AND** it returns no `StrategyInstanceRuntimeState`
 
+#### Scenario: A ClosePosition decision durably saves the pending marker before dispatch
+- **WHEN** `decide_position_management` selects `ClosePosition` for a
+  `trade_cycle_id`
+- **THEN** the orchestrator saves `source_state` with `pending_close_recovery
+  = PendingCloseRecovery(trade_cycle_id)` before calling
+  `close_position(command)`
+- **AND** this save completes, durably, before the port method is invoked
+
+#### Scenario: A failed pre-write never dispatches the close command
+- **WHEN** the pre-write save for `pending_close_recovery` itself raises
+- **THEN** the orchestrator does not call `close_position`
+- **AND** the exception from the pre-write propagates unchanged
+
+#### Scenario: A timed-out or lost close response leaves the marker in place for the resolver
+- **WHEN** `close_position(command)` raises (for example on a client
+  timeout) after the pre-write already durably saved
+  `pending_close_recovery`
+- **THEN** the orchestrator's exception propagates exactly as before this
+  change
+- **AND** the durably saved `pending_close_recovery` remains in place for
+  `uncertain-exchange-state-resolver` to resolve later — no other component
+  clears it on this path
+
 ### Requirement: The orchestrator owns no mutex or repository
 `PositionManagementOrchestrator` SHALL NOT acquire the keyed
-strategy-instance mutex, load or save repository state, or perform retries
-or pending-command bookkeeping.
+strategy-instance mutex, and SHALL NOT perform retries or pending-command
+bookkeeping beyond the single `ClosePosition` pre-write defined above. Its
+only repository interaction is that one durable `save(...)` of
+`pending_close_recovery` before dispatching `close_position`; it performs no
+other load or save of repository state.
 
-#### Scenario: No coordination or persistence inside the orchestrator
-- **WHEN** `PositionManagementOrchestrator.execute` runs
-- **THEN** it acquires no keyed mutex, performs no repository load or save,
-  and performs no retry of a failed port call
+#### Scenario: No mutex, no repository interaction outside the close pre-write
+- **WHEN** `PositionManagementOrchestrator.execute` runs for `NoOp` or
+  `ApplyProtection`
+- **THEN** it acquires no keyed mutex and performs no repository load or
+  save
+- **WHEN** it runs for `ClosePosition`
+- **THEN** it acquires no keyed mutex, performs exactly the one
+  `pending_close_recovery` pre-write save, and performs no other repository
+  load or save, and no retry of a failed port call
 
 ### Requirement: Every ABI-confirmed protection is journaled
 For an `ApplyProtection` decision, the orchestrator SHALL write exactly one `protection_applied` event after ABI confirms the protection and before the confirmation is applied to state. `requested_protection` SHALL come from the sent `ApplyProtectionCommand`, `confirmed_protection` from ABI's confirmed protection, `position_quantity`, `stop_order` and `take_order` from ABI's `protection_orders`; `bar_open_time_ms` SHALL be the committed bar of the projection. No event SHALL be written for `NoOp`, `ClosePosition`, or when ABI does not confirm.
