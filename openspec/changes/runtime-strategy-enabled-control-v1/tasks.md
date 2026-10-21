@@ -5,7 +5,7 @@
 - [ ] 1.3 `StrategyEnabledControlService` per D3 to D5: mutex with a 30 s wait, state get-or-create, decision table, corrective CANCEL with the exact-absence rule, write order per D4.
 - [ ] 1.4 `PUT /v1/strategy-instances/{id}/enabled` in the HTTP app with the status codes and reasons of the spec; production composition wires the store, the service, the resolver and the ABI recovery adapter.
 - [ ] 1.5 Tests:
-  - decision table: no cycle, position open, recovery pending (entry and close), closure detected, entry order cancelled, cancel not confirmed, ABI error, instance busy; every non-200 leaves state and override unchanged;
+  - decision table: no cycle, position open, recovery pending (entry and close), closure detected, entry order cancelled, cancel not confirmed, ABI error, instance busy; every non-200 leaves state and the stored value unchanged;
   - enable and already-in-state make no ABI call; unknown id 404; bad bodies 422; not ready 503;
   - seeded once from the file at first sight; a later file edit changes nothing; list shows the file value for a not-yet-recorded id without writing; record for a removed spec ignored;
   - store: restart keeps the value, truncated final line, corrupt line fails startup, write failure gives 500 and no change;

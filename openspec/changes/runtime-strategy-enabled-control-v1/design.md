@@ -12,7 +12,7 @@ Runtime state (`StrategyInstanceRuntimeState`) is stored with strict, versioned 
   3. else `open_position_resolver.resolve(state)`:
      - `position_open` → `409 position_open`;
      - a detected closure → `409 cycle_not_settled` (the next bar settles it; Runtime does not duplicate the closure path);
-     - otherwise the entry is not a position: `cancel(...)`; exact `EntryPackageAbsent` for this instance and cycle → save state with `current_trade_cycle=None`, then write the value, `200` with `cancelled_entry_order: true`; any other answer → `409 cancel_not_confirmed`; an ABI client error → `502 abi_unavailable`. State and override are unchanged on every non-200.
+     - otherwise the entry is not a position: `cancel(...)`; exact `EntryPackageAbsent` for this instance and cycle → save state with `current_trade_cycle=None`, then write the value, `200` with `cancelled_entry_order: true`; any other answer → `409 cancel_not_confirmed`; an ABI client error → `502 abi_unavailable`. State and the stored value are unchanged on every non-200.
 - **D4 Order of writes.** Cycle cleared first, stored value second, so a disabled strategy never keeps an order. If the value write fails after the cycle was cleared the strategy stays enabled with no order and the route answers `500`; a retry is idempotent.
 - **D5 Enable is a pure write.** No ABI call. Enabling a strategy that is already stored as enabled is `200` without a write.
 - **D6 Out of scope.** No journal event for the change (Central Journal ingests only whitelisted events; follow-up if wanted). A strategy switched off by hand-editing the file while holding an order is not handled here.
