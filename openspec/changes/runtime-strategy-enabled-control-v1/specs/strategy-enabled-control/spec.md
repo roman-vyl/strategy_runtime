@@ -5,11 +5,11 @@ Runtime SHALL expose `PUT /v1/strategy-instances/{strategy_instance_id}/enabled`
 
 #### Scenario: Enable
 - **WHEN** a disabled instance receives `{"enabled": true}`
-- **THEN** Runtime stores the override and answers `200` with `enabled: true` and `cancelled_entry_order: false`
+- **THEN** Runtime stores the value and answers `200` with `enabled: true` and `cancelled_entry_order: false`
 - **AND** Runtime makes no ABI call
 
 #### Scenario: Already in the requested state
-- **WHEN** the effective value already equals the requested one
+- **WHEN** the stored value already equals the requested one
 - **THEN** Runtime answers `200` without writing and without an ABI call
 
 #### Scenario: Unknown instance
@@ -29,12 +29,12 @@ Runtime SHALL decide a disable under the instance's mutex, against ABI, and SHAL
 
 #### Scenario: Nothing open
 - **WHEN** the instance has no current trade cycle
-- **THEN** Runtime stores the override and answers `200` with `cancelled_entry_order: false`
+- **THEN** Runtime stores the value and answers `200` with `cancelled_entry_order: false`
 
 #### Scenario: Position open
 - **WHEN** the instance has a current trade cycle and ABI reports an open position
 - **THEN** Runtime answers `409` with reason `position_open`
-- **AND** the effective `enabled` stays true
+- **AND** the stored `enabled` stays true
 
 #### Scenario: Recovery pending
 - **WHEN** the instance has a pending entry-recovery or close-recovery marker
@@ -46,11 +46,11 @@ Runtime SHALL decide a disable under the instance's mutex, against ABI, and SHAL
 
 #### Scenario: Entry order is cancelled
 - **WHEN** the instance has a current trade cycle, no position is open, and the corrective CANCEL is answered with an exact `absent` for this instance and cycle
-- **THEN** Runtime saves the state with no current trade cycle, stores the override, and answers `200` with `cancelled_entry_order: true`
+- **THEN** Runtime saves the state with no current trade cycle, stores the value, and answers `200` with `cancelled_entry_order: true`
 
 #### Scenario: Cancel not confirmed
 - **WHEN** the CANCEL is answered with anything other than that exact `absent`
-- **THEN** Runtime answers `409` with reason `cancel_not_confirmed`, leaves state and override unchanged
+- **THEN** Runtime answers `409` with reason `cancel_not_confirmed`, leaves state and the stored value unchanged
 
 #### Scenario: ABI unavailable
 - **WHEN** the ABI client raises an error during the resolver call or the CANCEL
@@ -60,37 +60,40 @@ Runtime SHALL decide a disable under the instance's mutex, against ABI, and SHAL
 - **WHEN** a bar of the same instance is in flight and the mutex is not obtained within 30 seconds
 - **THEN** Runtime answers `503` with reason `instance_busy` and changes nothing
 
-### Requirement: The effective enabled value is the override or the spec file
-The effective `enabled` of an instance SHALL be its stored override if one exists, otherwise the `enabled` value of its spec file. Committed-bar selection and the strategy list SHALL use the effective value.
+### Requirement: Runtime stores one enabled value per strategy and reads the spec file's value once
+Runtime SHALL keep one stored `enabled` value per accepted strategy instance. When the bar path or the enable route first meets an instance with no stored value, Runtime SHALL write the spec file's `enabled` as its stored value and SHALL NOT read the file's `enabled` again for that instance. Committed-bar selection and the strategy list SHALL use the stored value.
 
-#### Scenario: Override wins
-- **WHEN** the spec file says `enabled: true` and the stored override is `false`
-- **THEN** committed bars of that stream do not select the instance
-- **AND** the strategy list shows `enabled: false`
+#### Scenario: First sight seeds from the file
+- **WHEN** a committed bar selects an accepted deployment with no stored value and the file says `enabled: false`
+- **THEN** Runtime stores `enabled: false` with source `file` and does not select the instance
 
-#### Scenario: No override
-- **WHEN** an instance has no stored override
-- **THEN** the effective value is the spec file's `enabled`
+#### Scenario: A later file edit changes nothing
+- **WHEN** a stored value exists and the spec file's `enabled` is edited
+- **THEN** selection and the list still use the stored value
 
-#### Scenario: Override for a removed spec
-- **WHEN** an override exists for an id that is no longer an accepted deployment
+#### Scenario: The list does not write
+- **WHEN** the list route meets an instance with no stored value
+- **THEN** it shows the file's value and writes nothing
+
+#### Scenario: Value for a removed spec
+- **WHEN** a stored value exists for an id that is no longer an accepted deployment
 - **THEN** it is ignored
 
-### Requirement: Overrides are durable and replayed at start
-Runtime SHALL append each override to `enabled_overrides.jsonl` in the journal directory and SHALL flush it to disk before answering `200`. At start Runtime SHALL replay the file, the last line per instance winning.
+### Requirement: The stored value is durable and replayed at start
+Runtime SHALL append each stored value (seeded or set by the route) to `enabled_store.jsonl` in the journal directory and SHALL flush it to disk before answering `200`. At start Runtime SHALL replay the file, the last line per instance winning.
 
 #### Scenario: Survives a restart
 - **WHEN** a strategy was disabled and Runtime restarts
-- **THEN** the strategy is still effective-disabled
+- **THEN** the strategy is still stored as disabled
 
 #### Scenario: Truncated final line
 - **WHEN** the final line of the file is syntactically truncated
 - **THEN** it is dropped and start continues
 
 #### Scenario: Corrupt line
-- **WHEN** any other line is not a valid override
+- **WHEN** any other line is not a valid record
 - **THEN** startup fails and Runtime does not become ready
 
 #### Scenario: Write failure
-- **WHEN** the override cannot be appended
-- **THEN** Runtime answers `500` and the effective value is unchanged
+- **WHEN** the value cannot be appended
+- **THEN** Runtime answers `500` and the stored value is unchanged
