@@ -72,6 +72,8 @@ own internal keys are never restricted or required, only the presence of the
 - **THEN** decoding does not reject the record on that basis — `raw_spec`
   is opaque deployment content, not a structure this store defines
 
+## ADDED Requirements
+
 ### Requirement: Decoding dispatches by schema_version, supporting exactly versions 1, 2, and 3
 `JsonlStrategyInstanceRuntimeStateRepository`'s codec SHALL accept exactly
 three values of the envelope's `schema_version` field: `1`, `2`, and `3`. A
@@ -153,3 +155,11 @@ schema/domain validation failure.
 - **AND** no migration, rewrite, or compaction of those lines occurs — they
   remain at their original `schema_version` until that instance's next
   `save()` writes a fresh `schema_version = 3` line
+
+## REMOVED Requirements
+
+### Requirement: Decoding dispatches by schema_version, supporting exactly versions 1 and 2
+
+**Reason**: Replaced by "Decoding dispatches by schema_version, supporting exactly versions 1, 2, and 3"; version 3 adds the pending close recovery marker.
+
+**Migration**: None. Version 1 and 2 lines still decode; new writes are version 3.

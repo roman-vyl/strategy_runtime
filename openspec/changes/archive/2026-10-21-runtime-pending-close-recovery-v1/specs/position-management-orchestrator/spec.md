@@ -71,3 +71,4 @@ other load or save of repository state.
 - **THEN** it acquires no keyed mutex, performs exactly the one
   `pending_close_recovery` pre-write save, and performs no other repository
   load or save, and no retry of a failed port call
+

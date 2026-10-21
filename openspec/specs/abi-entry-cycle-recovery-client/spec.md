@@ -36,51 +36,6 @@ format validation, consistent with `abi-open-position-lookup-client`.
   UTF-8 path segment
 - **AND** ABI receives the exact original decoded value for each segment
 
-### Requirement: The four recovery_state values decode strictly, with conditional fields enforced
-The adapter SHALL decode a `200` response's `recovery_state` as exactly one
-of `entry_order_live`, `position_open`, `terminal_without_fill`, or
-`terminal_after_fill`, and SHALL enforce the same cross-field invariant
-ABI's contract defines: `applied_entry_package` non-null if and only if
-`recovery_state` is `entry_order_live` or `position_open`;
-`first_fill_at_ms`/`average_entry_price` both non-null if and only if
-`recovery_state` is `position_open`. There is no fifth, time-based
-`recovery_state` value — ABI reports insufficient positive evidence through
-its existing `500 internal_error` availability-failure shape (see "A
-documented 500 internal_error response is an availability failure"), not
-through a distinct `200` state.
-
-#### Scenario: Decode entry_order_live
-- **WHEN** HTTP `200` reports `recovery_state: "entry_order_live"` with a
-  non-null `applied_entry_package` and both fill facts `null`
-- **THEN** the adapter returns a `RecoveryStateResponse` of kind
-  `entry_order_live` carrying the applied entry package
-
-#### Scenario: Decode position_open
-- **WHEN** HTTP `200` reports `recovery_state: "position_open"` with a
-  non-null `applied_entry_package` and both fill facts non-null
-- **THEN** the adapter returns a `RecoveryStateResponse` of kind
-  `position_open` carrying the applied entry package and fill facts
-
-#### Scenario: Decode terminal_without_fill or terminal_after_fill
-- **WHEN** HTTP `200` reports `terminal_without_fill` or
-  `terminal_after_fill`, with `applied_entry_package` null and both fill
-  facts null
-- **THEN** the adapter returns a `RecoveryStateResponse` of the matching kind
-  carrying no applied entry package or fill facts
-
-#### Scenario: Reject a response violating the cross-field invariant
-- **WHEN** `applied_entry_package` is non-null for a state other than
-  `entry_order_live`/`position_open`, is null for `entry_order_live`/
-  `position_open`, or the fill facts are inconsistent with whether
-  `recovery_state` is `position_open`
-- **THEN** the adapter raises a typed protocol error
-- **AND** does not return a `RecoveryStateResponse`
-
-#### Scenario: Reject an unrecognized recovery_state value
-- **WHEN** `recovery_state` is present but not one of the four documented
-  values
-- **THEN** the adapter raises a typed protocol error
-
 ### Requirement: A missing trade-cycle binding is a distinct, typed public error, never a fabricated recovery_state
 The adapter SHALL decode ABI's `422 unknown_trade_cycle_binding` response as
 a distinct typed public error, not as any `recovery_state` value. The adapter
@@ -120,24 +75,23 @@ need to.
   was a query failure or ABI's inability to positively establish an outcome
 
 ### Requirement: The adapter exposes one corrective-action call, distinct from the query
-The adapter SHALL expose a second operation for the resolver's one corrective
-action (resending CANCEL for a trade cycle ABI reports as `entry_order_live`
-while removal was intended), reusing the existing entry-package client's
-CANCEL request shape rather than defining a second write contract.
+The adapter SHALL retain one corrective CANCEL operation backed by the existing
+entry-package client. The uncertain-state resolver may call it after
+`entry_order_live` for an uncertain removal or after `entry_order_not_found` for an
+uncertain APPLY. Both cases SHALL use the same request shape with `desired_entry:null`
+and the pending cycle's exact identity; no second write contract is introduced.
 
 #### Scenario: Corrective cancel reuses the existing entry-package client
-- **WHEN** the resolver issues its one corrective action
-- **THEN** the adapter constructs the same `EntryPackageRequest` shape with
-  `desired_entry: null` that the ordinary `Cancel` execution path already
-  uses, and sends it through the existing `AbiEntryPackagePort`
-- **AND** this capability does not introduce a second HTTP transport for
-  entry-package writes
+- **WHEN** the resolver issues a corrective CANCEL for either eligible recovery row
+- **THEN** the adapter sends the ordinary existing `EntryPackageRequest` with
+  `desired_entry:null` through the existing `AbiEntryPackagePort`
+- **AND** preserves the exact strategy instance and pending trade-cycle identity
 
 #### Scenario: The corrective call is not part of the read-only query
-- **WHEN** the resolver calls `AbiEntryCycleRecoveryPort.query(...)`
-- **THEN** that call alone never causes the corrective cancel — the resolver
-  decides whether to issue it based on the query's result, as a separate,
-  explicit second call
+- **WHEN** the resolver calls the recovery `query(...)` operation
+- **THEN** that call alone never sends CANCEL
+- **AND** the resolver decides whether to call the separate corrective operation from the
+  returned state and uncertain APPLY/removal context
 
 ### Requirement: Recovery-state success bodies identify the proved entry order
 The adapter SHALL require exactly six keys in every `200` recovery-state success body: `recovery_state`, `applied_entry_package`, `first_fill_at_ms`, `average_entry_price`, `entry_order_link_id`, `entry_order_id`. For `position_open`, `entry_order_link_id` SHALL be a non-empty string and `entry_order_id` SHALL be a non-empty string or `null`, and `PositionOpenRecoveryState` SHALL carry both. For every other `recovery_state`, both SHALL be `null`. Any other key set or value SHALL raise `AbiEntryCycleRecoveryProtocolError`.
@@ -153,4 +107,57 @@ The adapter SHALL require exactly six keys in every `200` recovery-state success
 #### Scenario: Other states
 - **WHEN** an `entry_order_live`, `entry_order_not_found`, `terminal_without_fill` or `terminal_after_fill` body carries a non-null identifier, or lacks either key
 - **THEN** the adapter raises `AbiEntryCycleRecoveryProtocolError`
+
+### Requirement: The five recovery_state values decode strictly, with conditional fields enforced
+The adapter SHALL decode a `200` response's `recovery_state` as exactly one of
+`entry_order_live`, `entry_order_not_found`, `position_open`,
+`terminal_without_fill`, or `terminal_after_fill`. It SHALL enforce ABI's cross-field
+invariant: `applied_entry_package` is non-null if and only if the state is
+`entry_order_live` or `position_open`; `first_fill_at_ms` and
+`average_entry_price` are both non-null if and only if the state is `position_open`.
+
+`entry_order_not_found` SHALL decode only with `applied_entry_package`,
+`first_fill_at_ms`, and `average_entry_price` all null. Runtime SHALL represent it as an
+observation distinct from `terminal_without_fill`; the decoder SHALL NOT attach terminal
+meaning or synthesize an applied package. Runtime SHALL NOT require or derive a timestamp,
+retention age, retry count, or evidence details from this response: the paired ABI
+contract is solely responsible for emitting the state only after its structural,
+full-budget execution/order, and freshness rules pass.
+
+#### Scenario: Decode entry_order_live
+- **WHEN** HTTP `200` reports `entry_order_live` with a non-null applied package and both
+  fill facts null
+- **THEN** the adapter returns the matching typed response carrying the package
+
+#### Scenario: Decode position_open
+- **WHEN** HTTP `200` reports `position_open` with a non-null applied package and both
+  fill facts non-null
+- **THEN** the adapter returns the matching typed response carrying package and fill facts
+
+#### Scenario: Decode entry_order_not_found
+- **WHEN** HTTP `200` reports `entry_order_not_found` with applied package and both fill
+  facts null
+- **THEN** the adapter returns the distinct `entry_order_not_found` typed response
+- **AND** does not classify it as terminal or absent confirmation
+
+#### Scenario: Decoder does not infer fifth state from an ABI error
+- **WHEN** ABI returns `internal_error`, `unknown_trade_cycle_binding`, a transport error,
+  or any response other than the exact valid fifth-state DTO
+- **THEN** the adapter does not return `entry_order_not_found`
+- **AND** does not use local time or marker age to reinterpret the response
+
+#### Scenario: Decode terminal_without_fill or terminal_after_fill
+- **WHEN** HTTP `200` reports either terminal state with applied package and both fill
+  facts null
+- **THEN** the adapter returns the matching typed response with no package or fill facts
+
+#### Scenario: Reject a response violating the cross-field invariant
+- **WHEN** any state's applied-package or fill fields violate the conditional invariant,
+  including any non-null conditional field for `entry_order_not_found`
+- **THEN** the adapter raises a typed protocol error
+- **AND** returns no recovery response
+
+#### Scenario: Reject an unrecognized recovery_state value
+- **WHEN** `recovery_state` is not one of the five documented values
+- **THEN** the adapter raises a typed protocol error
 
