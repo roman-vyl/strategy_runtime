@@ -13,7 +13,8 @@
 
 ## 2. Mac smoke (before apply, owner's word for the Mac session)
 
-- [ ] 2.1 On a copy of the specs directory on the bind mount, as the Runtime user: create `.deleted/`, link a file in, unlink the original; Runtime's and Research's scans do not list the file or the directory; moving the file back lists it again. Record the result here.
+- [x] 2.1 On a copy of the specs directory on the bind mount, as the Runtime user: create `.deleted/`, link a file in, unlink the original; Runtime's and Research's scans do not list the file or the directory; moving the file back lists it again. Record the result here.
+  Result 2026-10-22 (Mac, copy of specs on the same bind mount, image strategy_runtime:a7ab16c, user 100:101): link into `.deleted/` then unlink worked; Runtime's rule and Research's `scan_catalog` (research_service:67d6f49) listed 7 of 8 files, without the moved file and without `.deleted`; after moving it back both listed 8. Live specs untouched, copy removed.
 
 ## 3. Rollout (on owner's word only)
 
