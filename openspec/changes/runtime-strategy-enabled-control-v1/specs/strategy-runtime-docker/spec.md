@@ -33,14 +33,14 @@ already applied to ABI's Compose configuration.
 - **THEN** Runtime reads deployment specs successfully
 - **AND** the only writes Runtime makes there are the atomic replacement of one existing deployment file by the enabled control, through a temporary file whose name starts with `.` in the same directory
 
-#### Scenario: Journal and state mounts are the only required writable paths
+#### Scenario: Specs, journal and state mounts are the only required writable paths
 - **WHEN** the container is run with `--read-only` (or Compose
   `read_only: true`) and exactly three mounts — the specs
   mount, a writable `RUNTIME_JOURNAL_PATH` mount, and a writable
   `RUNTIME_STATE_PATH` mount
 - **THEN** the container starts successfully and serves `/health/ready`
   as ready
-- **AND** no write outside the journal and state mounts is required for
+- **AND** no write outside the specs, journal and state mounts is required for
   correct operation
 
 #### Scenario: Journal persists across remove and recreate on the same mount
