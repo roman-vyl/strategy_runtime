@@ -1,6 +1,6 @@
 ## 1. strategy_runtime
 
-- [ ] 1.1 Atomic single-field writer per D4: instance file lookup from the catalog snapshot, parse like the catalog, replace only `enabled`, identity check, hidden temporary file in the same directory, `fsync`, mode kept, hash comparison before `os.replace`, directory `fsync`.
+- [ ] 1.1 Atomic single-field writer per D4: instance file lookup from the catalog snapshot, parse like the catalog, replace only `enabled`, identity check, hidden temporary file in the same directory, `fsync`, original mode (not `0600`) and trailing newline kept, hash comparison before `os.replace`, directory `fsync`.
 - [ ] 1.2 `StrategyEnabledControlService` per D2 and D3: mutex with a 30 s wait, state get-or-create, decision table, corrective CANCEL with the exact-absence rule, file written last.
 - [ ] 1.3 `PUT /v1/strategy-instances/{id}/enabled` in the HTTP app with the status codes and reasons of the spec; production composition wires the writer, the service, the resolver and the ABI recovery adapter. `docker-compose.yml` of strategy_runtime: specs mount writable.
 - [ ] 1.4 Tests:
@@ -12,8 +12,8 @@
 
 ## 2. Mac smoke (before apply is allowed, owner's word for the Mac session)
 
-- [ ] 2.1 On a copy of the specs directory mounted like production: `os.replace` of one file succeeds; Runtime's next catalog read shows the new `enabled`; Research reads the same value; file mode and ownership recorded; the temporary file is not listed as a deployment.
-- [ ] 2.2 Result recorded here and shown to the owner.
+- [x] 2.1 On a copy of the specs directory mounted like production: `os.replace` of one file succeeds; Runtime's next catalog read shows the new `enabled`; Research reads the same value; file mode and ownership recorded; the temporary file is not listed as a deployment.
+- [x] 2.2 Result 2026-10-22: python:3.12-slim, uid 10001, copy of the specs directory on the same bind mount: writing a hidden temp file, `fsync`, `os.replace` and directory `fsync` work; a read-only mount and a second read-write mount both saw each new value after every replace (new inode each time); the hidden temp name is not in the catalog scan; findings: the replaced file became `0600` unless the mode is copied, and `json.dump` drops the trailing newline.
 
 ## 3. Rollout (on owner's word only)
 
