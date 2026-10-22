@@ -93,7 +93,7 @@ def test_runtime_orchestrator_is_the_direct_strategy_cycle_dispatcher(
     assert committed_bar_kwargs["strategy_cycle_dispatcher"] is runtime_orchestrators[0]
 
 
-def test_ready_application_constructs_all_six_outbound_clients_exactly_once(
+def test_ready_application_constructs_all_seven_outbound_clients_exactly_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     live_entry_instances = _count_constructions(monkeypatch, "HttpxStrategyEngineLiveEntryAdapter")
@@ -106,6 +106,9 @@ def test_ready_application_constructs_all_six_outbound_clients_exactly_once(
     position_management_instances = _count_constructions(
         monkeypatch, "HttpxAbiPositionManagementAdapter"
     )
+    feature_plan_instances = _count_constructions(
+        monkeypatch, "HttpxStrategyEngineFeaturePlanAdapter"
+    )
 
     app = build_application(_valid_environ(tmp_path))
 
@@ -116,6 +119,7 @@ def test_ready_application_constructs_all_six_outbound_clients_exactly_once(
     assert len(entry_package_instances) == 1
     assert len(entry_cycle_recovery_instances) == 1
     assert len(position_management_instances) == 1
+    assert len(feature_plan_instances) == 1
     assert app.state.outbound_http_clients == (
         live_entry_instances[0],
         open_trade_instances[0],
@@ -123,6 +127,7 @@ def test_ready_application_constructs_all_six_outbound_clients_exactly_once(
         entry_package_instances[0],
         entry_cycle_recovery_instances[0],
         position_management_instances[0],
+        feature_plan_instances[0],
     )
 
 
@@ -197,7 +202,7 @@ def test_startup_rollback_closes_already_constructed_clients_and_fails_closed(
     assert entry_cycle_recovery_instances[0]._client.is_closed
 
 
-def test_shutdown_closes_all_six_clients_exactly_once(
+def test_shutdown_closes_all_seven_clients_exactly_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     close_call_counts: dict[int, int] = {}
@@ -209,6 +214,7 @@ def test_shutdown_closes_all_six_clients_exactly_once(
         "HttpxAbiEntryPackageAdapter",
         "HttpxAbiEntryCycleRecoveryAdapter",
         "HttpxAbiPositionManagementAdapter",
+        "HttpxStrategyEngineFeaturePlanAdapter",
     ):
         real = getattr(application_module, name)
 
@@ -231,7 +237,7 @@ def test_shutdown_closes_all_six_clients_exactly_once(
 
     app = build_application(_valid_environ(tmp_path))
     assert app.state.ready is True
-    assert len(close_call_counts) == 6
+    assert len(close_call_counts) == 7
 
     with TestClient(app):
         assert all(count == 0 for count in close_call_counts.values())
@@ -257,6 +263,7 @@ def test_lifecycle_owner_close_all_once_is_idempotent_when_called_directly(
         "HttpxAbiEntryPackageAdapter",
         "HttpxAbiEntryCycleRecoveryAdapter",
         "HttpxAbiPositionManagementAdapter",
+        "HttpxStrategyEngineFeaturePlanAdapter",
     ):
         real = getattr(application_module, name)
 
@@ -285,15 +292,15 @@ def test_lifecycle_owner_close_all_once_is_idempotent_when_called_directly(
     lifecycle.close_all_once()
     lifecycle.close_all_once()
 
-    assert len(close_call_counts) == 6
+    assert len(close_call_counts) == 7
     assert all(count == 1 for count in close_call_counts.values())
 
 
-def test_startup_rollback_covers_construction_after_all_six_clients_exist(
+def test_startup_rollback_covers_construction_after_all_seven_clients_exist(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The rollback boundary extends past the six HTTP clients: a failure
-    inside `create_http_app(ready=True, ...)` itself -- after all six
+    """The rollback boundary extends past the seven HTTP clients: a failure
+    inside `create_http_app(ready=True, ...)` itself -- after all seven
     clients and the semantic graph already exist -- still
     triggers rollback and returns `ready=False`, never a partially assembled
     `ready=True` application."""
@@ -306,6 +313,9 @@ def test_startup_rollback_covers_construction_after_all_six_clients_exist(
     )
     position_management_instances = _count_constructions(
         monkeypatch, "HttpxAbiPositionManagementAdapter"
+    )
+    feature_plan_instances = _count_constructions(
+        monkeypatch, "HttpxStrategyEngineFeaturePlanAdapter"
     )
 
     real_create_http_app = application_module.create_http_app
@@ -327,6 +337,7 @@ def test_startup_rollback_covers_construction_after_all_six_clients_exist(
         entry_package_instances,
         entry_cycle_recovery_instances,
         position_management_instances,
+        feature_plan_instances,
     ):
         assert len(instances) == 1
         assert instances[0]._client.is_closed
@@ -346,6 +357,7 @@ def test_missing_position_management_timeout_fails_before_any_client_exists(
             "HttpxAbiEntryPackageAdapter",
             "HttpxAbiEntryCycleRecoveryAdapter",
             "HttpxAbiPositionManagementAdapter",
+            "HttpxStrategyEngineFeaturePlanAdapter",
         )
     ]
 
@@ -459,3 +471,10 @@ def test_a_syntactically_truncated_last_line_does_not_fail_composition(tmp_path:
     assert app.state.ready is True
     recovered = app.state.state_repository.get("ema_pullback:pre-existing")
     assert recovered == seeded
+
+
+def test_ready_application_wires_the_chart_layers_route(tmp_path: Path) -> None:
+    app = build_application(_valid_environ(tmp_path))
+
+    assert app.state.ready is True
+    assert app.state.get_chart_layers is not None

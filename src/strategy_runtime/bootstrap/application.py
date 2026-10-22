@@ -25,6 +25,7 @@ from strategy_runtime.infrastructure.runtime_state import (
     JsonlStrategyInstanceRuntimeStateRepository,
 )
 from strategy_runtime.infrastructure.strategy_engine import (
+    HttpxStrategyEngineFeaturePlanAdapter,
     HttpxStrategyEngineLiveEntryAdapter,
     HttpxStrategyEngineOpenTradeAdapter,
 )
@@ -32,6 +33,7 @@ from strategy_runtime.runtime.abi_execution_event.models import AbiFirstFillExec
 from strategy_runtime.runtime.abi_execution_event.orchestrator import (
     AbiExecutionEventOrchestrator,
 )
+from strategy_runtime.runtime.chart_layers.service import StrategyChartLayersService
 from strategy_runtime.runtime.committed_bar_intake import (
     CommittedBarIntakeBoundary,
     CommittedBarIntakeWorker,
@@ -188,6 +190,12 @@ def build_application(
                 timeout_seconds=config.abi_position_management_timeout_seconds,
             )
         )
+        feature_plan_client = lifecycle.add(
+            HttpxStrategyEngineFeaturePlanAdapter(
+                base_url=config.strategy_engine_base_url,
+                timeout_seconds=config.strategy_engine_timeout_seconds,
+            )
+        )
 
         open_position_resolver = OpenPositionResolver(open_position_client)
         use_case_router = StrategyUseCaseRouter(
@@ -246,6 +254,10 @@ def build_application(
             ),
             keyed_mutex_registry=keyed_mutex_registry,
         )
+        chart_layers_service = StrategyChartLayersService(
+            load_snapshot=catalog.load_snapshot,
+            feature_plan=feature_plan_client,
+        )
         abi_execution_event_orchestrator = AbiExecutionEventOrchestrator(
             state_repository=state_repository,
             keyed_mutex_registry=keyed_mutex_registry,
@@ -291,6 +303,7 @@ def build_application(
             load_deployment_catalog=catalog.load_snapshot,
             set_strategy_enabled=enabled_control_service.set_enabled,
             delete_strategy=strategy_delete_service.delete,
+            get_chart_layers=chart_layers_service.get,
             logger=runtime_logger,
             lifespan=_lifespan,
         )

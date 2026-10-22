@@ -12,13 +12,17 @@ from starlette.types import Lifespan
 from strategy_runtime.adapters.http.models import (
     AcceptedResponse,
     CatalogUnavailableResponse,
+    ChartLayersRefusedResponse,
+    ChartLayersResponse,
     ClosedBarRequest,
     DeletedResponse,
     DeleteRefusedResponse,
     DuplicateDeploymentIdentityItem,
+    EmaStackEntryItem,
     EnabledChangedResponse,
     EnabledChangeRefusedResponse,
     EnabledRequest,
+    EpisodeEntryItem,
     FirstFillConflictResponse,
     FirstFillRecordedResponse,
     FirstFillRequest,
@@ -33,6 +37,8 @@ from strategy_runtime.adapters.http.models import (
     StrategyInstanceStateNotFoundResponse,
 )
 from strategy_runtime.runtime.abi_execution_event.models import AbiFirstFillExecutionEvent
+from strategy_runtime.runtime.chart_layers.errors import EngineRejected
+from strategy_runtime.runtime.chart_layers.models import ChartLayers
 from strategy_runtime.runtime.committed_bar_intake import (
     CommittedBarIntakeBoundary,
     IntakeNotAccepting,
@@ -53,6 +59,7 @@ FirstFillUseCase = Callable[[AbiFirstFillExecutionEvent], StrategyInstanceRuntim
 LoadDeploymentCatalog = Callable[[], DeploymentCatalogSnapshot]
 SetStrategyEnabled = Callable[[str, bool], EnabledChangeResult]
 DeleteStrategy = Callable[[str], DeleteResult]
+GetChartLayers = Callable[[str], ChartLayers]
 
 
 def create_http_app(
@@ -63,6 +70,7 @@ def create_http_app(
     load_deployment_catalog: LoadDeploymentCatalog | None = None,
     set_strategy_enabled: SetStrategyEnabled | None = None,
     delete_strategy: DeleteStrategy | None = None,
+    get_chart_layers: GetChartLayers | None = None,
     logger: logging.Logger | None = None,
     lifespan: Lifespan[FastAPI] | None = None,
 ) -> FastAPI:
@@ -73,6 +81,7 @@ def create_http_app(
     app.state.load_deployment_catalog = load_deployment_catalog
     app.state.set_strategy_enabled = set_strategy_enabled
     app.state.delete_strategy = delete_strategy
+    app.state.get_chart_layers = get_chart_layers
     app.state.logger = logger or logging.getLogger(__name__)
 
     @app.exception_handler(RequestValidationError)
@@ -306,6 +315,55 @@ def create_http_app(
             strategy_instance_id=result.strategy_instance_id,
             cancelled_entry_order=result.cancelled_entry_order,
             trash_file=result.trash_file,
+        )
+
+    @app.get(
+        "/v1/strategy-instances/{strategy_instance_id}/chart-layers",
+        response_model=ChartLayersResponse,
+        responses={
+            404: {"model": ChartLayersRefusedResponse},
+            422: {"model": ChartLayersRefusedResponse},
+            500: {"model": InternalErrorResponse},
+            502: {"model": ChartLayersRefusedResponse},
+            503: {"model": NotReadyResponse | ChartLayersRefusedResponse},
+        },
+    )
+    def get_strategy_chart_layers(
+        strategy_instance_id: str,
+    ) -> ChartLayersResponse | JSONResponse:
+        if not app.state.ready or app.state.get_chart_layers is None:
+            return JSONResponse(status_code=503, content=NotReadyResponse().model_dump())
+
+        try:
+            layers = app.state.get_chart_layers(strategy_instance_id)
+        except EnabledControlRefused as exc:
+            refused = ChartLayersRefusedResponse(reason=exc.reason)
+            if isinstance(exc, EngineRejected):
+                refused.engine_code = exc.engine_code
+                refused.engine_message = exc.engine_message
+            return JSONResponse(
+                status_code=exc.status_code,
+                content=refused.model_dump(exclude_none=True),
+            )
+        except Exception:
+            app.state.logger.exception("Failed to read strategy chart layers")
+            return JSONResponse(status_code=500, content=InternalErrorResponse().model_dump())
+
+        return ChartLayersResponse(
+            strategy_instance_id=layers.strategy_instance_id,
+            ema_stack=[
+                EmaStackEntryItem(
+                    role=entry.role,
+                    timeframe=entry.timeframe,
+                    period=entry.period,
+                    source=entry.source,
+                )
+                for entry in layers.ema_stack
+            ],
+            episodes=[
+                EpisodeEntryItem(episode_ref=entry.episode_ref, params=dict(entry.params))
+                for entry in layers.episodes
+            ],
         )
 
     return app
