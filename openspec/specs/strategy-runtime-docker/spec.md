@@ -128,9 +128,12 @@ build-time-irrelevant artifacts.
 - **AND** the files the `Dockerfile` actually `COPY`s (`pyproject.toml`,
   `README.md`, `src/`) remain present in the filtered context
 
-### Requirement: Read-only specs mount, writable journal and durable state mounts, no other writable path
-The container SHALL treat `RUNTIME_SPECS_PATH` as a read-only mount,
-`RUNTIME_JOURNAL_PATH` as one writable, persistent mount, and
+### Requirement: Writable specs mount only for managed enabled changes, writable journal and durable state mounts, no other writable path
+The container SHALL treat `RUNTIME_SPECS_PATH` as a writable mount used
+for exactly one purpose: the managed change of the `enabled` field of an
+existing deployment file (capability `strategy-enabled-control`); Runtime
+SHALL NOT create, delete, or otherwise edit deployment files, and SHALL
+NOT change any other field. `RUNTIME_JOURNAL_PATH` as one writable, persistent mount, and
 `RUNTIME_STATE_PATH` as a second writable, persistent mount for the
 durable strategy-instance state store. The container SHALL start and
 operate correctly with a read-only root filesystem plus exactly these
@@ -153,20 +156,19 @@ Compose SHALL require `BBB_DATA_ROOT` to be set, failing closed with no
 empty-path substitution when it is not — the same fail-closed convention
 already applied to ABI's Compose configuration.
 
-#### Scenario: Specs mount is read-only
-- **WHEN** the container is run with `RUNTIME_SPECS_PATH` mounted
-  read-only
+#### Scenario: Specs mount is written only by the enabled change
+- **WHEN** the container is run with `RUNTIME_SPECS_PATH` mounted writable
 - **THEN** Runtime reads deployment specs successfully
-- **AND** Runtime never attempts to write to that mount
+- **AND** the only writes Runtime makes there are the atomic replacement of one existing deployment file by the enabled control, through a temporary file whose name starts with `.` in the same directory
 
-#### Scenario: Journal and state mounts are the only required writable paths
+#### Scenario: Specs, journal and state mounts are the only required writable paths
 - **WHEN** the container is run with `--read-only` (or Compose
-  `read_only: true`) and exactly three mounts — the read-only specs
+  `read_only: true`) and exactly three mounts — a writable `RUNTIME_SPECS_PATH`
   mount, a writable `RUNTIME_JOURNAL_PATH` mount, and a writable
   `RUNTIME_STATE_PATH` mount
 - **THEN** the container starts successfully and serves `/health/ready`
   as ready
-- **AND** no write outside the journal and state mounts is required for
+- **AND** no write outside the specs, journal and state mounts is required for
   correct operation
 
 #### Scenario: Journal persists across remove and recreate on the same mount
@@ -200,7 +202,7 @@ already applied to ABI's Compose configuration.
 - **WHEN** `docker-compose.yml` is resolved (e.g. via `docker compose
   config`) with `BBB_DATA_ROOT` set
 - **THEN** the specs bind mount's `source` is
-  `${BBB_DATA_ROOT}/strategy-runtime/specs` and is `read_only: true`
+  `${BBB_DATA_ROOT}/strategy-runtime/specs` and is writable (not `read_only`)
 - **AND** the journal bind mount's `source` is
   `${BBB_DATA_ROOT}/strategy-runtime/journal` and is writable
 - **AND** the state bind mount's `source` is
@@ -237,4 +239,3 @@ already applied to ABI's Compose configuration.
   `RUNTIME_STATE_PATH`
 - **AND** the JSONL processing journal's existing best-effort semantics
   remain unchanged
-
