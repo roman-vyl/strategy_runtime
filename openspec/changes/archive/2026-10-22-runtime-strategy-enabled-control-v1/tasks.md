@@ -17,5 +17,7 @@
 
 ## 3. Rollout (on owner's word only)
 
-- [ ] 3.1 PR, merge, deploy only on the owner's word; bbb_stack mount change is a separate PR.
-- [ ] 3.2 On the Mac demo: disable an idle strategy; disable one with an entry order and see the order cancelled on Bybit; try to disable one with an open position and get `position_open`.
+- [x] 3.1 PR, merge, deploy only on the owner's word; bbb_stack mount change is a separate PR.
+  Done: strategy_runtime #30 merged; bbb_stack #60 merged separately; image `a7ab16c` deployed on the Mac on 2026-10-22 on the owner's word.
+- [x] 3.2 On the Mac demo: disable an idle strategy; disable one with an entry order and see the order cancelled on Bybit; try to disable one with an open position and get `position_open`.
+  2026-10-22: the owner switched idle strategies off and on from the Runtime Dashboard (10 `PUT .../enabled`, all `200`; spec files kept mode `0644`; all 8 strategies enabled afterwards) and accepted the work. The entry-order cancel and `position_open` cases did not come up in this check; accepted by the owner without them.

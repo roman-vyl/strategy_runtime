@@ -17,7 +17,7 @@ catalog's invalid-file and duplicate-identity diagnostics.
 - **THEN** Runtime returns `200 OK`
 - **AND** `strategy_instances` contains every accepted deployment in catalog order (by file name)
 - **AND** each item has exactly `strategy_instance_id`, `strategy_id`, `instrument`, `base_timeframe`, `enabled` and `source_path`
-- **AND** `enabled` equals the value in the spec file
+- **AND** `enabled` is the value in the deployment file
 
 #### Scenario: Response excludes specification and state
 - **WHEN** Runtime returns the list
