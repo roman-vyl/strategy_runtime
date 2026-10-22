@@ -35,7 +35,7 @@ already applied to ABI's Compose configuration.
 
 #### Scenario: Specs, journal and state mounts are the only required writable paths
 - **WHEN** the container is run with `--read-only` (or Compose
-  `read_only: true`) and exactly three mounts — the specs
+  `read_only: true`) and exactly three mounts — a writable `RUNTIME_SPECS_PATH`
   mount, a writable `RUNTIME_JOURNAL_PATH` mount, and a writable
   `RUNTIME_STATE_PATH` mount
 - **THEN** the container starts successfully and serves `/health/ready`
