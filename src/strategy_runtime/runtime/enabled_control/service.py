@@ -7,31 +7,23 @@ repeated.
 """
 
 from collections.abc import Callable
-from dataclasses import replace
 from typing import Protocol
 
 from strategy_runtime.runtime.abi.entry_cycle_recovery_ports import AbiEntryCycleRecoveryPort
-from strategy_runtime.runtime.abi.entry_package_errors import AbiEntryPackageClientError
-from strategy_runtime.runtime.abi.entry_package_models import EntryPackageAbsent
 from strategy_runtime.runtime.coordination import (
     StrategyInstanceBusy,
     StrategyInstanceKeyedMutexRegistry,
 )
+from strategy_runtime.runtime.enabled_control.cancel_step import EntryOrderCancelStep
 from strategy_runtime.runtime.enabled_control.errors import (
-    AbiUnavailable,
-    CancelNotConfirmed,
     CatalogUnavailable,
-    CycleNotSettled,
     FileChanged,
     IdentityChanged,
     InstanceBusy,
-    PositionOpen,
-    RecoveryPending,
     StrategyInstanceNotFound,
     WriteFailed,
 )
 from strategy_runtime.runtime.enabled_control.models import EnabledChangeResult
-from strategy_runtime.runtime.open_position.errors import OpenPositionResolutionError
 from strategy_runtime.runtime.open_position.ports import OpenPositionResolverPort
 from strategy_runtime.runtime.state.repository import StrategyInstanceRuntimeStateRepository
 from strategy_runtime.utility.deployment_catalog import (
@@ -64,9 +56,11 @@ class StrategyEnabledControlService:
     ) -> None:
         self._load_snapshot = load_snapshot
         self._enabled_writer = enabled_writer
-        self._state_repository = state_repository
-        self._open_position_resolver = open_position_resolver
-        self._abi_entry_cycle_recovery = abi_entry_cycle_recovery
+        self._cancel_step = EntryOrderCancelStep(
+            state_repository=state_repository,
+            open_position_resolver=open_position_resolver,
+            abi_entry_cycle_recovery=abi_entry_cycle_recovery,
+        )
         self._keyed_mutex_registry = keyed_mutex_registry
         self._mutex_wait_seconds = mutex_wait_seconds
 
@@ -99,42 +93,7 @@ class StrategyEnabledControlService:
         return deployment.enabled
 
     def _cancel_entry_order_if_any(self, strategy_instance_id: str) -> bool:
-        """Refuse when a position or recovery is open; cancel a resting entry order."""
-        state = self._state_repository.get(strategy_instance_id)
-        if state is None:
-            return False
-        if state.pending_entry_recovery is not None or state.pending_close_recovery is not None:
-            raise RecoveryPending
-        cycle = state.current_trade_cycle
-        if cycle is None:
-            return False
-
-        try:
-            resolved = self._open_position_resolver.resolve(state)
-        except OpenPositionResolutionError as exc:
-            raise AbiUnavailable from exc
-        if resolved.position_open:
-            raise PositionOpen
-        if resolved.closure is not None:
-            raise CycleNotSettled
-
-        try:
-            cancel_result = self._abi_entry_cycle_recovery.cancel(
-                strategy_instance_id,
-                cycle.trade_cycle_id,
-                state.registered_spec_snapshot.instrument,
-                state.risk_multiplier,
-            )
-        except AbiEntryPackageClientError as exc:
-            raise AbiUnavailable from exc
-        if not (
-            type(cancel_result) is EntryPackageAbsent
-            and cancel_result.strategy_instance_id == strategy_instance_id
-            and cancel_result.trade_cycle_id == cycle.trade_cycle_id
-        ):
-            raise CancelNotConfirmed
-        self._state_repository.save(replace(state, current_trade_cycle=None))
-        return True
+        return self._cancel_step.run(strategy_instance_id)
 
     def _write(self, strategy_instance_id: str, enabled: bool) -> None:
         try:

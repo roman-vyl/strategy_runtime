@@ -24,8 +24,15 @@ from .enabled_writer import (
     EnabledFileChangeError,
 )
 from .filesystem_adapter import FilesystemDeploymentCatalog
+from .trash_mover import (
+    TRASH_DIRECTORY_NAME,
+    DeploymentTrashMoveFailed,
+    DeploymentTrashMover,
+    DeploymentTrashNameTaken,
+)
 
 __all__ = [
+    "TRASH_DIRECTORY_NAME",
     "DeploymentCatalogSnapshot",
     "DeploymentCatalogUnavailableError",
     "DeploymentEnabledFileWriter",
@@ -34,6 +41,9 @@ __all__ = [
     "DeploymentIdentityWouldChange",
     "DeploymentNotInCatalog",
     "DeploymentSpecification",
+    "DeploymentTrashMoveFailed",
+    "DeploymentTrashMover",
+    "DeploymentTrashNameTaken",
     "DuplicateDeploymentIdentity",
     "EnabledFileChangeError",
     "FilesystemDeploymentCatalog",

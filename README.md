@@ -244,9 +244,10 @@ POST /v1/webhooks/closed-bar
 PUT  /v1/strategy-instances/{strategy_instance_id}/trade-cycles/{trade_cycle_id}/first-fill
 GET  /v1/strategy-instances
 PUT  /v1/strategy-instances/{strategy_instance_id}/enabled
+DELETE /v1/strategy-instances/{strategy_instance_id}
 ```
 
-Closed-bar webhook подтверждает помещение события в очередь. First-fill endpoint синхронно ждёт применения transition под mutex. Enabled endpoint (`{"enabled": true|false}`) меняет поле `enabled` в deployment-файле: файл остаётся единственным источником значения. Выключение под mutex экземпляра: открытая позиция или recovery — `409`, входная заявка отменяется через ABI с точным подтверждением `absent`, и только после этого файл атомарно заменяется (временный скрытый файл в том же каталоге, fsync, `os.replace`); меняется только `enabled`. Readiness отражает успешную startup composition, но не проверяет доступность Engine, ABI, market stream или состояние позиции.
+Closed-bar webhook подтверждает помещение события в очередь. First-fill endpoint синхронно ждёт применения transition под mutex. Enabled endpoint (`{"enabled": true|false}`) меняет поле `enabled` в deployment-файле: файл остаётся единственным источником значения. Выключение под mutex экземпляра: открытая позиция или recovery — `409`, входная заявка отменяется через ABI с точным подтверждением `absent`, и только после этого файл атомарно заменяется (временный скрытый файл в том же каталоге, fsync, `os.replace`); меняется только `enabled`. Delete endpoint (без тела) удаляет только выключенную стратегию: те же проверки позиции, recovery и закрытия под mutex, входная заявка отменяется через ABI с точным `absent`, состояние сохраняется без цикла, и только затем файл переносится в скрытый каталог `.deleted/` рядом (`<имя>.<UTC-время>.json`, жёсткая ссылка и затем unlink, без перезаписи). Корзина не видна каталогу и Research; вернуть стратегию можно, вернув файл. Запись состояния и Journal не меняются. Readiness отражает успешную startup composition, но не проверяет доступность Engine, ABI, market stream или состояние позиции.
 
 Outbound relationships:
 
@@ -335,8 +336,9 @@ The container is designed to run with `--read-only` (or Compose's
 `RUNTIME_JOURNAL_PATH` mount for the processing journal and the
 `RUNTIME_STATE_PATH` mount for the durable strategy-instance state store.
 `RUNTIME_SPECS_PATH` is writable only so that Runtime can change the `enabled`
-field of an existing deployment file (`PUT /v1/strategy-instances/{id}/enabled`);
-it never creates, deletes, or edits anything else there.
+field of an existing deployment file (`PUT /v1/strategy-instances/{id}/enabled`)
+or move a deployment file into its hidden `.deleted/` subdirectory
+(`DELETE /v1/strategy-instances/{id}`); it never erases or edits anything else there.
 
 Example build:
 
@@ -409,7 +411,7 @@ Container mount contract:
 
 - `RUNTIME_SPECS_PATH` should point at a mounted directory of deployment
   JSON files; Runtime writes there only to replace the `enabled` field of
-  an existing file. In Compose/production, the host source is `${BBB_DATA_ROOT}/strategy-runtime/specs`.
+  an existing file or to move a file into `.deleted/`. In Compose/production, the host source is `${BBB_DATA_ROOT}/strategy-runtime/specs`.
 - `RUNTIME_JOURNAL_PATH` should point at a writable mounted path so the
   JSONL processing journal survives container removal, recreate, and
   restart — as long as the same host path (or named volume) is reused.

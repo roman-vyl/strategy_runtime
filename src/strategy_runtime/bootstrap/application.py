@@ -37,6 +37,7 @@ from strategy_runtime.runtime.committed_bar_intake import (
     CommittedBarIntakeWorker,
 )
 from strategy_runtime.runtime.coordination import StrategyInstanceKeyedMutexRegistry
+from strategy_runtime.runtime.enabled_control.cancel_step import EntryOrderCancelStep
 from strategy_runtime.runtime.enabled_control.service import StrategyEnabledControlService
 from strategy_runtime.runtime.entry_reconciliation_bridge import (
     AbiEntryPackageExecutionBridge,
@@ -52,6 +53,7 @@ from strategy_runtime.runtime.position_management_orchestrator import (
 from strategy_runtime.runtime.routing.router import StrategyUseCaseRouter
 from strategy_runtime.runtime.state.identity import new_trade_cycle_id
 from strategy_runtime.runtime.state.models import StrategyInstanceRuntimeState
+from strategy_runtime.runtime.strategy_delete.service import StrategyDeleteService
 from strategy_runtime.runtime.uncertain_exchange_state_resolver import (
     UncertainExchangeStateResolver,
     UncertainExchangeStateResolverWorker,
@@ -62,6 +64,7 @@ from strategy_runtime.utility.committed_bar import (
 )
 from strategy_runtime.utility.deployment_catalog import (
     DeploymentEnabledFileWriter,
+    DeploymentTrashMover,
     FilesystemDeploymentCatalog,
 )
 from strategy_runtime.utility.deployment_selection import CommittedBarDeploymentSelector
@@ -233,6 +236,16 @@ def build_application(
             abi_entry_cycle_recovery=entry_cycle_recovery_client,
             keyed_mutex_registry=keyed_mutex_registry,
         )
+        strategy_delete_service = StrategyDeleteService(
+            load_snapshot=catalog.load_snapshot,
+            trash_mover=DeploymentTrashMover(catalog, config.specs_path),
+            cancel_step=EntryOrderCancelStep(
+                state_repository=state_repository,
+                open_position_resolver=open_position_resolver,
+                abi_entry_cycle_recovery=entry_cycle_recovery_client,
+            ),
+            keyed_mutex_registry=keyed_mutex_registry,
+        )
         abi_execution_event_orchestrator = AbiExecutionEventOrchestrator(
             state_repository=state_repository,
             keyed_mutex_registry=keyed_mutex_registry,
@@ -277,6 +290,7 @@ def build_application(
             process_first_fill=process_first_fill,
             load_deployment_catalog=catalog.load_snapshot,
             set_strategy_enabled=enabled_control_service.set_enabled,
+            delete_strategy=strategy_delete_service.delete,
             logger=runtime_logger,
             lifespan=_lifespan,
         )

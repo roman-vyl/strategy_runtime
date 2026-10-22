@@ -109,3 +109,15 @@ class EnabledChangedResponse(BaseModel):
 class EnabledChangeRefusedResponse(BaseModel):
     status: Literal["enabled_change_refused"] = "enabled_change_refused"
     reason: str
+
+
+class DeletedResponse(BaseModel):
+    strategy_instance_id: str
+    deleted: Literal[True] = True
+    cancelled_entry_order: bool
+    trash_file: str
+
+
+class DeleteRefusedResponse(BaseModel):
+    status: Literal["delete_refused"] = "delete_refused"
+    reason: str
