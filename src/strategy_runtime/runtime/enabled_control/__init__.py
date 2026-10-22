@@ -1,0 +1,1 @@
+"""Safe enabled control capability."""

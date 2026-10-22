@@ -26,6 +26,12 @@ class FirstFillRequest(BaseModel):
     first_fill_at_ms: Annotated[StrictInt, Field(gt=0)]
 
 
+class EnabledRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    enabled: bool
+
+
 class AcceptedResponse(BaseModel):
     status: Literal["accepted"] = "accepted"
 
@@ -92,3 +98,14 @@ class StrategyInstanceListResponse(BaseModel):
     strategy_instances: list[StrategyInstanceItem]
     invalid_files: list[InvalidDeploymentFileItem]
     duplicate_identities: list[DuplicateDeploymentIdentityItem]
+
+
+class EnabledChangedResponse(BaseModel):
+    strategy_instance_id: str
+    enabled: bool
+    cancelled_entry_order: bool
+
+
+class EnabledChangeRefusedResponse(BaseModel):
+    status: Literal["enabled_change_refused"] = "enabled_change_refused"
+    reason: str

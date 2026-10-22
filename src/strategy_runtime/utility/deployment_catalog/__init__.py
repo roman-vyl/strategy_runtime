@@ -15,13 +15,27 @@ from strategy_runtime.utility.deployment_catalog.models import (
     freeze_json,
 )
 
+from .enabled_writer import (
+    DeploymentEnabledFileWriter,
+    DeploymentFileChanged,
+    DeploymentFileWriteFailed,
+    DeploymentIdentityWouldChange,
+    DeploymentNotInCatalog,
+    EnabledFileChangeError,
+)
 from .filesystem_adapter import FilesystemDeploymentCatalog
 
 __all__ = [
     "DeploymentCatalogSnapshot",
     "DeploymentCatalogUnavailableError",
+    "DeploymentEnabledFileWriter",
+    "DeploymentFileChanged",
+    "DeploymentFileWriteFailed",
+    "DeploymentIdentityWouldChange",
+    "DeploymentNotInCatalog",
     "DeploymentSpecification",
     "DuplicateDeploymentIdentity",
+    "EnabledFileChangeError",
     "FilesystemDeploymentCatalog",
     "FrozenJsonValue",
     "InvalidDeploymentFile",

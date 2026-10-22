@@ -4,6 +4,7 @@ from threading import Barrier, Event, Lock
 import pytest
 
 from strategy_runtime.runtime.coordination import (
+    StrategyInstanceBusy,
     StrategyInstanceKeyedMutexRegistry,
 )
 
@@ -108,3 +109,15 @@ def test_exact_keys_are_not_trimmed_or_normalized() -> None:
         futures = [executor.submit(worker, key) for key in ("instance", " instance ")]
         for future in futures:
             future.result(timeout=3)
+
+
+def test_hold_with_timeout_raises_busy_when_the_section_is_taken_and_keeps_it_usable() -> None:
+    registry = StrategyInstanceKeyedMutexRegistry()
+    with registry.hold("a"):
+        with pytest.raises(StrategyInstanceBusy), registry.hold("a", timeout_seconds=0.01):
+            raise AssertionError("must not be entered")
+        with registry.hold("b", timeout_seconds=0.01):
+            pass
+
+    with registry.hold("a", timeout_seconds=0.01):
+        pass

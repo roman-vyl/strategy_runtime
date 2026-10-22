@@ -14,6 +14,9 @@ from strategy_runtime.adapters.http.models import (
     CatalogUnavailableResponse,
     ClosedBarRequest,
     DuplicateDeploymentIdentityItem,
+    EnabledChangedResponse,
+    EnabledChangeRefusedResponse,
+    EnabledRequest,
     FirstFillConflictResponse,
     FirstFillRecordedResponse,
     FirstFillRequest,
@@ -32,6 +35,8 @@ from strategy_runtime.runtime.committed_bar_intake import (
     CommittedBarIntakeBoundary,
     IntakeNotAccepting,
 )
+from strategy_runtime.runtime.enabled_control.errors import EnabledControlRefused
+from strategy_runtime.runtime.enabled_control.models import EnabledChangeResult
 from strategy_runtime.runtime.first_fill.errors import FirstFillInvariantError
 from strategy_runtime.runtime.state.errors import StrategyInstanceStateNotFound
 from strategy_runtime.runtime.state.models import StrategyInstanceRuntimeState
@@ -43,6 +48,7 @@ from strategy_runtime.utility.deployment_catalog import (
 
 FirstFillUseCase = Callable[[AbiFirstFillExecutionEvent], StrategyInstanceRuntimeState]
 LoadDeploymentCatalog = Callable[[], DeploymentCatalogSnapshot]
+SetStrategyEnabled = Callable[[str, bool], EnabledChangeResult]
 
 
 def create_http_app(
@@ -51,6 +57,7 @@ def create_http_app(
     committed_bar_intake: CommittedBarIntakeBoundary | None,
     process_first_fill: FirstFillUseCase | None,
     load_deployment_catalog: LoadDeploymentCatalog | None = None,
+    set_strategy_enabled: SetStrategyEnabled | None = None,
     logger: logging.Logger | None = None,
     lifespan: Lifespan[FastAPI] | None = None,
 ) -> FastAPI:
@@ -59,6 +66,7 @@ def create_http_app(
     app.state.committed_bar_intake = committed_bar_intake
     app.state.process_first_fill = process_first_fill
     app.state.load_deployment_catalog = load_deployment_catalog
+    app.state.set_strategy_enabled = set_strategy_enabled
     app.state.logger = logger or logging.getLogger(__name__)
 
     @app.exception_handler(RequestValidationError)
@@ -222,6 +230,41 @@ def create_http_app(
                 )
                 for item in snapshot.duplicate_identities
             ],
+        )
+
+    @app.put(
+        "/v1/strategy-instances/{strategy_instance_id}/enabled",
+        response_model=EnabledChangedResponse,
+        responses={
+            400: {"model": RejectedResponse},
+            404: {"model": EnabledChangeRefusedResponse},
+            409: {"model": EnabledChangeRefusedResponse},
+            500: {"model": EnabledChangeRefusedResponse | InternalErrorResponse},
+            502: {"model": EnabledChangeRefusedResponse},
+            503: {"model": NotReadyResponse | EnabledChangeRefusedResponse},
+        },
+    )
+    def set_strategy_instance_enabled(
+        strategy_instance_id: str, request: EnabledRequest
+    ) -> EnabledChangedResponse | JSONResponse:
+        if not app.state.ready or app.state.set_strategy_enabled is None:
+            return JSONResponse(status_code=503, content=NotReadyResponse().model_dump())
+
+        try:
+            result = app.state.set_strategy_enabled(strategy_instance_id, request.enabled)
+        except EnabledControlRefused as exc:
+            return JSONResponse(
+                status_code=exc.status_code,
+                content=EnabledChangeRefusedResponse(reason=exc.reason).model_dump(),
+            )
+        except Exception:
+            app.state.logger.exception("Failed to change strategy instance enabled")
+            return JSONResponse(status_code=500, content=InternalErrorResponse().model_dump())
+
+        return EnabledChangedResponse(
+            strategy_instance_id=result.strategy_instance_id,
+            enabled=result.enabled,
+            cancelled_entry_order=result.cancelled_entry_order,
         )
 
     return app

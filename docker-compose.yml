@@ -22,7 +22,6 @@ services:
       - type: bind
         source: ${BBB_DATA_ROOT:?BBB_DATA_ROOT must be set}/strategy-runtime/specs
         target: /runtime/specs
-        read_only: true
       - type: bind
         source: ${BBB_DATA_ROOT:?BBB_DATA_ROOT must be set}/strategy-runtime/journal
         target: /runtime/journal
