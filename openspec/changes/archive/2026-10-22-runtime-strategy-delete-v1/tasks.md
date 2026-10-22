@@ -18,5 +18,7 @@
 
 ## 3. Rollout (on owner's word only)
 
-- [ ] 3.1 PR, merge, deploy only on the owner's word. No compose change is needed.
+- [x] 3.1 PR, merge, deploy only on the owner's word. No compose change is needed.
+  Done 2026-10-22: PR #33 squash-merged (7e16bf9), image deployed on the Mac demo.
 - [ ] 3.2 On the Mac demo: delete a disabled idle strategy; delete a disabled one with an entry order and see the order cancelled on Bybit; try one with an open position and get `position_open`; try an enabled one and get `still_enabled`; put the file back from `.deleted/` and see it listed.
+  Observed 2026-10-22 16:49 UTC: a disabled idle strategy deleted from the front; its file moved to `.deleted/` with the timestamp name, the other 7 files unchanged, state record untouched. Not yet checked by hand: a disabled strategy with a resting entry order, an open position (`position_open`), an enabled one (`still_enabled` through the API).
