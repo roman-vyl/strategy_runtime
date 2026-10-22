@@ -5,7 +5,7 @@
 - [ ] 1.3 `StrategyDeleteService` per D3 and D4.
 - [ ] 1.4 `DELETE /v1/strategy-instances/{id}` in the HTTP app with the codes and reasons of the spec; production composition wires the service.
 - [ ] 1.5 Tests:
-  - decision table: unknown id, enabled, recovery pending (entry and close), position open, closure detected, entry order cancelled, cancel not confirmed, ABI error, instance busy, no cycle; every refusal leaves state and file byte-identical and the trash empty;
+  - decision table: unknown id, enabled, recovery pending (entry and close), position open, closure detected, entry order cancelled, cancel not confirmed, ABI error, instance busy, no cycle; every refusal before the CANCEL leaves state and file byte-identical and the trash empty; after a confirmed CANCEL a `file_changed`, `trash_name_taken` or `move_failed` leaves the file in place and unchanged and the state with no cycle, and the retry makes no ABI call; the normal path (disabled through the route, no cycle) makes no ABI call;
   - mover: file lands in `.deleted/` with the timestamp name and the original bytes, top-level scan no longer lists it and does not list the directory, failure after the link removes the trash copy, file changed since read refused, trash name taken refused;
   - a second `DELETE` of the same id gives 404; the state record is unchanged; the next bar and list no longer contain the instance;
   - existing enable, list and selection tests unchanged.

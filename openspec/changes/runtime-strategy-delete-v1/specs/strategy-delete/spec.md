@@ -29,7 +29,11 @@ Runtime SHALL refuse the delete with `409` and reason `still_enabled` when the f
 - **THEN** Runtime answers `409` with reason `still_enabled`, makes no ABI call and leaves state and file unchanged
 
 ### Requirement: Delete never leaves an order or a position unmanaged
-Runtime SHALL decide a delete under the instance's mutex, against ABI, with the same checks as the disable, and SHALL change nothing (state and file) on any non-`200` answer. The file SHALL move after every check and exchange action.
+A strategy switched off through the enabled route has no recovery marker and no trade cycle; for it Runtime SHALL make no ABI call when deleting. As a safety net against a hand-edited file or an inconsistent legacy state, Runtime SHALL still repeat the disable's checks under the instance's mutex, against ABI, before it moves the file. On a non-`200` answer Runtime SHALL leave the file in place and unchanged and SHALL leave the state unchanged, except that after a confirmed cancel of an entry order the state has no current trade cycle. The file SHALL move after every check and exchange action.
+
+#### Scenario: Normal path after a disable
+- **WHEN** a strategy was switched off through the enabled route and is then deleted
+- **THEN** its state has no recovery marker and no current trade cycle, Runtime makes no ABI call and moves the file
 
 #### Scenario: Position open
 - **WHEN** the instance has a current trade cycle and ABI reports an open position
@@ -55,12 +59,16 @@ Runtime SHALL decide a delete under the instance's mutex, against ABI, with the 
 - **WHEN** the ABI client raises an error during the resolver call or the CANCEL
 - **THEN** Runtime answers `502` with reason `abi_unavailable` and changes nothing
 
+#### Scenario: Move fails after a cancel
+- **WHEN** an inconsistent state had a current trade cycle, the cancel was confirmed and the file then cannot be moved (`file_changed`, `trash_name_taken` or `move_failed`)
+- **THEN** Runtime answers with that reason, the file stays in place unchanged, the state has no current trade cycle, and a repeated request makes no ABI call
+
 #### Scenario: Instance busy
 - **WHEN** a bar of the same instance is in flight and the mutex is not obtained within 30 seconds
 - **THEN** Runtime answers `503` with reason `instance_busy` and changes nothing
 
 ### Requirement: The trash move is safe and does not overwrite
-Runtime SHALL move the file by linking it into `.deleted/` and then removing the original, creating `.deleted/` when it is missing, and SHALL refuse the delete, leaving the original byte-identical in place and no copy in the trash, when the file's content changed between reading it and moving it, when a file of the target name already exists, or when the move fails.
+Runtime SHALL move the file by linking it into `.deleted/` and then removing the original, creating `.deleted/` when it is missing, and SHALL refuse the delete, leaving the original byte-identical in place and no copy in the trash (the state keeps whatever a confirmed cancel already changed), when the file's content changed between reading it and moving it, when a file of the target name already exists, or when the move fails.
 
 #### Scenario: File changed since it was read
 - **WHEN** the file content differs from what Runtime read before the move
