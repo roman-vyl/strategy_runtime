@@ -1,3 +1,8 @@
+## RENAMED Requirements
+
+- FROM: `### Requirement: Read-only specs mount, writable journal and durable state mounts, no other writable path`
+- TO: `### Requirement: Writable specs mount only for managed enabled changes, writable journal and durable state mounts, no other writable path`
+
 ## MODIFIED Requirements
 
 ### Requirement: Writable specs mount only for managed enabled changes, writable journal and durable state mounts, no other writable path

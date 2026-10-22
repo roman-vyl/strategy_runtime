@@ -17,5 +17,5 @@
 
 ## 3. Rollout (on owner's word only)
 
-- [ ] 3.1 PR, merge, deploy only on the owner's word; bbb_stack mount change is a separate PR.
+- [x] 3.1 PR, merge, deploy only on the owner's word; bbb_stack mount change is a separate PR.
 - [ ] 3.2 On the Mac demo: disable an idle strategy; disable one with an entry order and see the order cancelled on Bybit; try to disable one with an open position and get `position_open`.
