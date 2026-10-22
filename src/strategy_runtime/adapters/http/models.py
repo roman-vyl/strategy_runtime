@@ -121,3 +121,28 @@ class DeletedResponse(BaseModel):
 class DeleteRefusedResponse(BaseModel):
     status: Literal["delete_refused"] = "delete_refused"
     reason: str
+
+
+class EmaStackEntryItem(BaseModel):
+    role: str
+    timeframe: str
+    period: int
+    source: str
+
+
+class EpisodeEntryItem(BaseModel):
+    episode_ref: str
+    params: dict[str, int]
+
+
+class ChartLayersResponse(BaseModel):
+    strategy_instance_id: str
+    ema_stack: list[EmaStackEntryItem]
+    episodes: list[EpisodeEntryItem]
+
+
+class ChartLayersRefusedResponse(BaseModel):
+    status: Literal["chart_layers_refused"] = "chart_layers_refused"
+    reason: str
+    engine_code: str | None = None
+    engine_message: str | None = None

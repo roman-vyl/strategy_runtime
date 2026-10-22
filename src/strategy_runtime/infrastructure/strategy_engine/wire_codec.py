@@ -141,6 +141,31 @@ def decode_open_trade_response(
     raise StrategyEngineProjectionProtocolError(f"undocumented Engine HTTP status: {status_code}")
 
 
+def encode_feature_plan_request(
+    strategy_id: str, raw_spec: Mapping[str, FrozenJsonValue]
+) -> dict[str, object]:
+    """The Engine feature-plan request body: the strategy id and the specification, as stored."""
+    _require_request_string(strategy_id, "strategy_id")
+    _require_json_object_mapping(raw_spec, "raw_spec")
+    return {"strategy_id": strategy_id, "raw_spec": _unfreeze_json(raw_spec)}
+
+
+def decode_feature_plan_response(
+    *, status_code: int, content_type: str | None, content: bytes
+) -> Mapping[str, object]:
+    """Decode one feature-plan response (a JSON object) or fail closed with a typed failure."""
+    _require_json_content_type(content_type)
+    payload = _load_strict_json(content)
+
+    if status_code == 200:
+        if not isinstance(payload, dict):
+            raise StrategyEngineProjectionProtocolError("feature-plan response must be an object")
+        return payload
+    if status_code in _DOCUMENTED_ENGINE_ERROR_STATUSES:
+        _raise_engine_public_error(status_code, payload)
+    raise StrategyEngineProjectionProtocolError(f"undocumented Engine HTTP status: {status_code}")
+
+
 def _decode_live_entry_success(payload: object) -> LiveEntryProjectionResponse:
     try:
         body = _closed_object(payload, _LIVE_ENTRY_SUCCESS_FIELDS, "live-entry success response")

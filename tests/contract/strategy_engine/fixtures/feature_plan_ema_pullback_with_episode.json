@@ -1,0 +1,228 @@
+{
+ "adx_dmi_columns": {
+  "base:14": {
+   "adx": "adx_close_base_14",
+   "di_minus": "di_minus_close_base_14",
+   "di_plus": "di_plus_close_base_14"
+  }
+ },
+ "anchor_columns": {
+  "anchor": "ema_close_base_50",
+  "fast": "ema_close_base_20",
+  "slow": "ema_close_base_200"
+ },
+ "ema_columns": {
+  "1h:21": "ema_close_1h_21",
+  "1h:9": "ema_close_1h_9"
+ },
+ "episode_columns_by_ref": {
+  "trend": {
+   "anchor": "ema_close_base_50",
+   "fast": "ema_close_base_20",
+   "slow": "ema_close_base_200"
+  }
+ },
+ "episode_params_by_ref": {
+  "trend": {
+   "anchor_period": 50,
+   "break_bars": 24,
+   "fast_period": 20,
+   "history_bars": 15000,
+   "slow_period": 200,
+   "window_bars": 24
+  }
+ },
+ "exit_distance_columns": {
+  "sl": "atr_close_base_14_x1_5",
+  "stop_loss": "atr_close_base_14_x1_5"
+ },
+ "features": [
+  {
+   "dependencies": [],
+   "kind": "ema",
+   "output_id": "ema_close_base_20",
+   "parameters": {
+    "period": 20
+   },
+   "source": "close",
+   "timeframe": "base"
+  },
+  {
+   "dependencies": [],
+   "kind": "ema",
+   "output_id": "ema_close_base_50",
+   "parameters": {
+    "period": 50
+   },
+   "source": "close",
+   "timeframe": "base"
+  },
+  {
+   "dependencies": [],
+   "kind": "ema",
+   "output_id": "ema_close_base_200",
+   "parameters": {
+    "period": 200
+   },
+   "source": "close",
+   "timeframe": "base"
+  },
+  {
+   "dependencies": [],
+   "kind": "ema",
+   "output_id": "ema_close_4h_20",
+   "parameters": {
+    "period": 20
+   },
+   "source": "close",
+   "timeframe": "4h"
+  },
+  {
+   "dependencies": [],
+   "kind": "ema",
+   "output_id": "ema_close_4h_50",
+   "parameters": {
+    "period": 50
+   },
+   "source": "close",
+   "timeframe": "4h"
+  },
+  {
+   "dependencies": [],
+   "kind": "ema",
+   "output_id": "ema_close_4h_200",
+   "parameters": {
+    "period": 200
+   },
+   "source": "close",
+   "timeframe": "4h"
+  },
+  {
+   "dependencies": [],
+   "kind": "atr",
+   "output_id": "atr_close_1h_10",
+   "parameters": {
+    "period": 10
+   },
+   "source": "close",
+   "timeframe": "1h"
+  },
+  {
+   "dependencies": [],
+   "kind": "atr",
+   "output_id": "atr_close_base_14",
+   "parameters": {
+    "period": 14
+   },
+   "source": "close",
+   "timeframe": "base"
+  },
+  {
+   "dependencies": [
+    "atr_close_base_14"
+   ],
+   "kind": "atr_distance",
+   "output_id": "atr_close_base_14_x1_5",
+   "parameters": {
+    "multiplier": 1.5
+   },
+   "source": null,
+   "timeframe": "base"
+  },
+  {
+   "dependencies": [],
+   "kind": "adx",
+   "output_id": "adx_close_base_14",
+   "parameters": {
+    "period": 14
+   },
+   "source": "close",
+   "timeframe": "base"
+  },
+  {
+   "dependencies": [],
+   "kind": "di_plus",
+   "output_id": "di_plus_close_base_14",
+   "parameters": {
+    "period": 14
+   },
+   "source": "close",
+   "timeframe": "base"
+  },
+  {
+   "dependencies": [],
+   "kind": "di_minus",
+   "output_id": "di_minus_close_base_14",
+   "parameters": {
+    "period": 14
+   },
+   "source": "close",
+   "timeframe": "base"
+  },
+  {
+   "dependencies": [],
+   "kind": "rsi",
+   "output_id": "rsi_close_1h_14",
+   "parameters": {
+    "period": 14
+   },
+   "source": "close",
+   "timeframe": "1h"
+  },
+  {
+   "dependencies": [],
+   "kind": "atr",
+   "output_id": "atr_close_base_21",
+   "parameters": {
+    "period": 21
+   },
+   "source": "close",
+   "timeframe": "base"
+  },
+  {
+   "dependencies": [],
+   "kind": "ema",
+   "output_id": "ema_close_1h_9",
+   "parameters": {
+    "period": 9
+   },
+   "source": "close",
+   "timeframe": "1h"
+  },
+  {
+   "dependencies": [],
+   "kind": "ema",
+   "output_id": "ema_close_1h_21",
+   "parameters": {
+    "period": 21
+   },
+   "source": "close",
+   "timeframe": "1h"
+  }
+ ],
+ "htf_context_columns_by_ref": {
+  "htf": {
+   "anchor": "ema_close_4h_50",
+   "fast": "ema_close_4h_20",
+   "slow": "ema_close_4h_200"
+  }
+ },
+ "plan_hash": "2bcc7831b1fd169963757fb062bec6e414bc53afdc09b8c61f1bba020014759b",
+ "plan_version": "bbb_v1",
+ "rsi_columns": {
+  "1h:14": "rsi_close_1h_14"
+ },
+ "setup_columns_by_instance_id": {
+  "bounce": {
+   "anchor": "ema_close_base_50",
+   "fast": "ema_close_base_20",
+   "slow": "ema_close_base_200"
+  },
+  "width": {
+   "anchor": "ema_close_base_50",
+   "atr": "atr_close_1h_10",
+   "fast": "ema_close_base_20",
+   "slow": "ema_close_base_200"
+  }
+ }
+}

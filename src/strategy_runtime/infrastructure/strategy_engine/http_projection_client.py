@@ -1,13 +1,17 @@
-"""One-shot HTTP adapters for the Strategy Engine live-entry/open-trade endpoints."""
+"""One-shot HTTP adapters for the Strategy Engine live-entry, open-trade, feature-plan endpoints."""
 
 import math
+from collections.abc import Mapping
 from types import TracebackType
+from urllib.parse import quote
 
 import httpx
 
 from strategy_runtime.infrastructure.strategy_engine.wire_codec import (
+    decode_feature_plan_response,
     decode_live_entry_response,
     decode_open_trade_response,
+    encode_feature_plan_request,
     encode_live_entry_request,
     encode_open_trade_request,
 )
@@ -23,6 +27,7 @@ from strategy_runtime.runtime.engine.open_trade import (
     OpenTradeProjectionRequest,
     OpenTradeProjectionResponse,
 )
+from strategy_runtime.utility.deployment_catalog.models import FrozenJsonValue
 
 _LIVE_ENTRY_PATH = "/v1/strategy-evaluations/live-entry"
 _OPEN_TRADE_PATH = "/v1/strategy-evaluations/open-trade"
@@ -100,6 +105,48 @@ class HttpxStrategyEngineOpenTradeAdapter:
         traceback: TracebackType | None,
     ) -> None:
         self.close()
+
+
+class HttpxStrategyEngineFeaturePlanAdapter:
+    """Synchronous feature-plan adapter with one bounded, non-retried HTTP attempt."""
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        timeout_seconds: float,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
+        self._client = _build_client(base_url, timeout_seconds, transport)
+
+    def build_feature_plan(
+        self, strategy_id: str, raw_spec: Mapping[str, FrozenJsonValue]
+    ) -> Mapping[str, object]:
+        body = encode_feature_plan_request(strategy_id, raw_spec)
+        response = _send(self._client, _feature_plan_path(strategy_id), body)
+        return decode_feature_plan_response(
+            status_code=response.status_code,
+            content_type=response.headers.get("content-type"),
+            content=response.content,
+        )
+
+    def close(self) -> None:
+        self._client.close()
+
+    def __enter__(self) -> "HttpxStrategyEngineFeaturePlanAdapter":
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
+
+
+def _feature_plan_path(strategy_id: str) -> str:
+    return f"/v1/strategies/{quote(strategy_id, safe='')}/feature-plan"
 
 
 def _build_client(
