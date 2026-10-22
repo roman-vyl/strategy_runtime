@@ -13,6 +13,8 @@ from strategy_runtime.adapters.http.models import (
     AcceptedResponse,
     CatalogUnavailableResponse,
     ClosedBarRequest,
+    DeletedResponse,
+    DeleteRefusedResponse,
     DuplicateDeploymentIdentityItem,
     EnabledChangedResponse,
     EnabledChangeRefusedResponse,
@@ -40,6 +42,7 @@ from strategy_runtime.runtime.enabled_control.models import EnabledChangeResult
 from strategy_runtime.runtime.first_fill.errors import FirstFillInvariantError
 from strategy_runtime.runtime.state.errors import StrategyInstanceStateNotFound
 from strategy_runtime.runtime.state.models import StrategyInstanceRuntimeState
+from strategy_runtime.runtime.strategy_delete.models import DeleteResult
 from strategy_runtime.utility.committed_bar import CommittedBarEvent
 from strategy_runtime.utility.deployment_catalog import (
     DeploymentCatalogSnapshot,
@@ -49,6 +52,7 @@ from strategy_runtime.utility.deployment_catalog import (
 FirstFillUseCase = Callable[[AbiFirstFillExecutionEvent], StrategyInstanceRuntimeState]
 LoadDeploymentCatalog = Callable[[], DeploymentCatalogSnapshot]
 SetStrategyEnabled = Callable[[str, bool], EnabledChangeResult]
+DeleteStrategy = Callable[[str], DeleteResult]
 
 
 def create_http_app(
@@ -58,6 +62,7 @@ def create_http_app(
     process_first_fill: FirstFillUseCase | None,
     load_deployment_catalog: LoadDeploymentCatalog | None = None,
     set_strategy_enabled: SetStrategyEnabled | None = None,
+    delete_strategy: DeleteStrategy | None = None,
     logger: logging.Logger | None = None,
     lifespan: Lifespan[FastAPI] | None = None,
 ) -> FastAPI:
@@ -67,6 +72,7 @@ def create_http_app(
     app.state.process_first_fill = process_first_fill
     app.state.load_deployment_catalog = load_deployment_catalog
     app.state.set_strategy_enabled = set_strategy_enabled
+    app.state.delete_strategy = delete_strategy
     app.state.logger = logger or logging.getLogger(__name__)
 
     @app.exception_handler(RequestValidationError)
@@ -265,6 +271,41 @@ def create_http_app(
             strategy_instance_id=result.strategy_instance_id,
             enabled=result.enabled,
             cancelled_entry_order=result.cancelled_entry_order,
+        )
+
+    @app.delete(
+        "/v1/strategy-instances/{strategy_instance_id}",
+        response_model=DeletedResponse,
+        responses={
+            404: {"model": DeleteRefusedResponse},
+            409: {"model": DeleteRefusedResponse},
+            500: {"model": DeleteRefusedResponse | InternalErrorResponse},
+            502: {"model": DeleteRefusedResponse},
+            503: {"model": NotReadyResponse | DeleteRefusedResponse},
+        },
+    )
+    def delete_strategy_instance(strategy_instance_id: str) -> DeletedResponse | JSONResponse:
+        if not app.state.ready or app.state.delete_strategy is None:
+            return JSONResponse(status_code=503, content=NotReadyResponse().model_dump())
+
+        try:
+            result = app.state.delete_strategy(strategy_instance_id)
+        except EnabledControlRefused as exc:
+            return JSONResponse(
+                status_code=exc.status_code,
+                content=DeleteRefusedResponse(reason=exc.reason).model_dump(),
+            )
+        except Exception:
+            app.state.logger.exception("Failed to delete strategy instance")
+            return JSONResponse(status_code=500, content=InternalErrorResponse().model_dump())
+
+        app.state.logger.info(
+            "strategy instance %s deleted to %s", result.strategy_instance_id, result.trash_file
+        )
+        return DeletedResponse(
+            strategy_instance_id=result.strategy_instance_id,
+            cancelled_entry_order=result.cancelled_entry_order,
+            trash_file=result.trash_file,
         )
 
     return app
