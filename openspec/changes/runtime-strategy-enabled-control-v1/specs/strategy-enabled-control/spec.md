@@ -18,7 +18,7 @@ Runtime SHALL expose `PUT /v1/strategy-instances/{strategy_instance_id}/enabled`
 
 #### Scenario: Bad body
 - **WHEN** the body has other keys, a missing key or a non-boolean `enabled`
-- **THEN** Runtime answers `422` and changes nothing
+- **THEN** Runtime answers `400` and changes nothing
 
 #### Scenario: Not ready
 - **WHEN** Runtime is not ready

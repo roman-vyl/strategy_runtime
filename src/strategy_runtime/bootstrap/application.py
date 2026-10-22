@@ -37,6 +37,7 @@ from strategy_runtime.runtime.committed_bar_intake import (
     CommittedBarIntakeWorker,
 )
 from strategy_runtime.runtime.coordination import StrategyInstanceKeyedMutexRegistry
+from strategy_runtime.runtime.enabled_control.service import StrategyEnabledControlService
 from strategy_runtime.runtime.entry_reconciliation_bridge import (
     AbiEntryPackageExecutionBridge,
 )
@@ -60,6 +61,7 @@ from strategy_runtime.utility.committed_bar import (
     CommittedBarOrchestrator,
 )
 from strategy_runtime.utility.deployment_catalog import (
+    DeploymentEnabledFileWriter,
     FilesystemDeploymentCatalog,
 )
 from strategy_runtime.utility.deployment_selection import CommittedBarDeploymentSelector
@@ -223,6 +225,14 @@ def build_application(
             trade_cycle_opened_journal=journal,
             open_trade_journal=journal,
         )
+        enabled_control_service = StrategyEnabledControlService(
+            load_snapshot=catalog.load_snapshot,
+            enabled_writer=DeploymentEnabledFileWriter(catalog, config.specs_path),
+            state_repository=state_repository,
+            open_position_resolver=open_position_resolver,
+            abi_entry_cycle_recovery=entry_cycle_recovery_client,
+            keyed_mutex_registry=keyed_mutex_registry,
+        )
         abi_execution_event_orchestrator = AbiExecutionEventOrchestrator(
             state_repository=state_repository,
             keyed_mutex_registry=keyed_mutex_registry,
@@ -266,6 +276,7 @@ def build_application(
             committed_bar_intake=committed_bar_intake,
             process_first_fill=process_first_fill,
             load_deployment_catalog=catalog.load_snapshot,
+            set_strategy_enabled=enabled_control_service.set_enabled,
             logger=runtime_logger,
             lifespan=_lifespan,
         )

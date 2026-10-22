@@ -5,7 +5,7 @@ The catalog snapshot is read from the files on every committed bar and every lis
 ## Decisions
 
 - **D1 The deployment file is the only source of truth.** No store, no seed. Restart, bar selection, the list route and Research (`current.runtime.enabled`) all read the same file.
-- **D2 Disable under the mutex, ABI is the truth.** The service takes `StrategyInstanceKeyedMutexRegistry.hold(id)` (waits for a bar in flight, up to 30 s, else `503 instance_busy`). It loads state (creating it from the catalog like the bar path if absent) and decides:
+- **D2 Disable under the mutex, ABI is the truth.** The service takes `StrategyInstanceKeyedMutexRegistry.hold(id)` (waits for a bar in flight, up to 30 s, else `503 instance_busy`). It reads the state (no state record means nothing was ever opened) and decides:
   1. `pending_entry_recovery` or `pending_close_recovery` set → `409 recovery_pending`.
   2. no `current_trade_cycle` → write the file, `200`.
   3. else `open_position_resolver.resolve(state)`:
