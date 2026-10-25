@@ -7,6 +7,7 @@ from strategy_runtime.runtime.abi.entry_package_errors import AbiEntryPackagePro
 from strategy_runtime.runtime.abi.entry_package_models import (
     EntryPackageAbsent,
     EntryPackageApplied,
+    EntryPackageDeclined,
     EntryPackageInternalError,
     EntryPackageMalformedJson,
     EntryPackageRequest,
@@ -32,6 +33,9 @@ _APPLIED_FIELDS = (
     _APPLIED_REQUIRED_FIELDS | _APPLIED_ENTRY_ORDER_FIELDS | _APPLIED_ENTRY_ORDER_ID_FIELDS
 )
 _ABSENT_FIELDS = frozenset({"strategy_instance_id", "trade_cycle_id", "status"})
+_DECLINED_FIELDS = frozenset(
+    {"strategy_instance_id", "trade_cycle_id", "status", "decline_reason", "decline_message"}
+)
 _DESIRED_ENTRY_FIELDS = frozenset(
     {
         "side",
@@ -95,9 +99,10 @@ def _decode_success(payload: object, request: EntryPackageRequest) -> EntryPacka
     try:
         body = _closed_object(payload, None, "success response")
         status = body.get("status")
+        result: EntryPackageApplied | EntryPackageAbsent | EntryPackageDeclined
         if status == EntryPackageApplied.status:
             _require_applied_fields(body)
-            result: EntryPackageApplied | EntryPackageAbsent = EntryPackageApplied(
+            result = EntryPackageApplied(
                 strategy_instance_id=_non_empty_string(
                     body["strategy_instance_id"], "strategy_instance_id"
                 ),
@@ -118,6 +123,18 @@ def _decode_success(payload: object, request: EntryPackageRequest) -> EntryPacka
                     body["strategy_instance_id"], "strategy_instance_id"
                 ),
                 trade_cycle_id=_non_empty_string(body["trade_cycle_id"], "trade_cycle_id"),
+            )
+        elif status == EntryPackageDeclined.status:
+            if request.desired_entry is None:
+                raise ValueError("entry_package_declined answers only a present desired entry")
+            _require_exact_fields(body, _DECLINED_FIELDS, "declined response")
+            result = EntryPackageDeclined(
+                strategy_instance_id=_non_empty_string(
+                    body["strategy_instance_id"], "strategy_instance_id"
+                ),
+                trade_cycle_id=_non_empty_string(body["trade_cycle_id"], "trade_cycle_id"),
+                decline_reason=_string(body["decline_reason"], "decline_reason"),
+                decline_message=_string(body["decline_message"], "decline_message"),
             )
         else:
             raise ValueError("success status is not an approved literal")

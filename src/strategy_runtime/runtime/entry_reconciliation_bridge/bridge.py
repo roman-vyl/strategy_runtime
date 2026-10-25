@@ -8,6 +8,7 @@ from strategy_runtime.runtime.abi.entry_package_errors import (
 from strategy_runtime.runtime.abi.entry_package_models import (
     EntryPackageAbsent,
     EntryPackageApplied,
+    EntryPackageDeclined,
     EntryPackagePublicError,
     EntryPackageRequest,
     EntryPackageWireDesiredEntry,
@@ -16,8 +17,9 @@ from strategy_runtime.runtime.abi.entry_package_ports import AbiEntryPackagePort
 from strategy_runtime.runtime.entry_reconciliation.models import (
     EntryAbsentConfirmation,
     EntryAppliedConfirmation,
+    EntryDeclinedOutcome,
+    EntryExecutionOutcome,
     EntryReconciliationCommand,
-    SuccessfulEntryConfirmation,
 )
 from strategy_runtime.runtime.entry_reconciliation_bridge.errors import (
     EntryReconciliationExecutionError,
@@ -36,7 +38,7 @@ class AbiEntryPackageExecutionBridge:
         self,
         command: EntryReconciliationCommand,
         source_state: StrategyInstanceRuntimeState,
-    ) -> SuccessfulEntryConfirmation:
+    ) -> EntryExecutionOutcome:
         request = EntryPackageRequest(
             strategy_instance_id=command.strategy_instance_id,
             trade_cycle_id=command.trade_cycle_id,
@@ -75,6 +77,13 @@ class AbiEntryPackageExecutionBridge:
             return EntryAbsentConfirmation(
                 strategy_instance_id=result.strategy_instance_id,
                 trade_cycle_id=result.trade_cycle_id,
+            )
+        if type(result) is EntryPackageDeclined:
+            return EntryDeclinedOutcome(
+                strategy_instance_id=result.strategy_instance_id,
+                trade_cycle_id=result.trade_cycle_id,
+                decline_reason=result.decline_reason,
+                decline_message=result.decline_message,
             )
         if isinstance(result, EntryPackagePublicError):
             raise EntryReconciliationExecutionError(public_error=result)

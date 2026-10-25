@@ -1,5 +1,6 @@
 """Transport-free DTOs for the ABI desired-entry-package contract."""
 
+import re
 from dataclasses import dataclass
 from typing import ClassVar, Literal
 
@@ -102,6 +103,31 @@ class EntryPackageAbsent:
 
 
 @dataclass(frozen=True, slots=True)
+class EntryPackageDeclined:
+    """ABI acknowledgement that it refused the APPLY before contacting the exchange.
+
+    The reason is an opaque code: Runtime validates its shape and journals it,
+    but never branches on it.
+    """
+
+    strategy_instance_id: str
+    trade_cycle_id: str
+    decline_reason: str
+    decline_message: str
+
+    status: ClassVar[Literal["entry_package_declined"]] = "entry_package_declined"
+
+    def __post_init__(self) -> None:
+        _require_non_empty_string(self.strategy_instance_id, "strategy_instance_id")
+        _require_non_empty_string(self.trade_cycle_id, "trade_cycle_id")
+        if type(self.decline_reason) is not str or not _DECLINE_REASON.fullmatch(
+            self.decline_reason
+        ):
+            raise ValueError("decline_reason must be a snake_case code of at most 64 characters")
+        _require_non_empty_string(self.decline_message, "decline_message")
+
+
+@dataclass(frozen=True, slots=True)
 class EntryPackageValidationDetail:
     """One ABI-provided validation detail."""
 
@@ -174,7 +200,11 @@ EntryPackagePublicError = (
     | EntryPackageValidationFailed
     | EntryPackageInternalError
 )
-EntryPackageResult = EntryPackageApplied | EntryPackageAbsent | EntryPackagePublicError
+EntryPackageResult = (
+    EntryPackageApplied | EntryPackageAbsent | EntryPackageDeclined | EntryPackagePublicError
+)
+
+_DECLINE_REASON = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 
 def _require_non_empty_string(value: str, name: str) -> None:

@@ -177,6 +177,29 @@ class JsonlProcessingJournal:
             },
         )
 
+    def entry_package_declined(
+        self,
+        *,
+        strategy_instance_id: str,
+        trade_cycle_id: str,
+        bar_open_time_ms: int,
+        risk_multiplier: str,
+        decline_reason: str,
+        decline_message: str,
+    ) -> None:
+        self._record(
+            event_type=ProcessingJournalEventType.ENTRY_PACKAGE_DECLINED,
+            severity="warning",
+            strategy_instance_id=strategy_instance_id,
+            payload={
+                "trade_cycle_id": trade_cycle_id,
+                "bar_open_time_ms": bar_open_time_ms,
+                "risk_multiplier": risk_multiplier,
+                "decline_reason": decline_reason,
+                "decline_message": decline_message,
+            },
+        )
+
     def trade_cycle_closed(
         self,
         *,

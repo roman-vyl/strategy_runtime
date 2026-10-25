@@ -27,6 +27,7 @@ from strategy_runtime.runtime.abi.entry_package_errors import (
 from strategy_runtime.runtime.abi.entry_package_models import (
     EntryPackageAbsent,
     EntryPackageApplied,
+    EntryPackageDeclined,
     EntryPackageInternalError,
     EntryPackageMalformedJson,
     EntryPackagePublicError,
@@ -56,6 +57,7 @@ __all__ = [
     "EntryOrderNotFoundRecoveryState",
     "EntryPackageAbsent",
     "EntryPackageApplied",
+    "EntryPackageDeclined",
     "EntryPackageInternalError",
     "EntryPackageMalformedJson",
     "EntryPackagePublicError",

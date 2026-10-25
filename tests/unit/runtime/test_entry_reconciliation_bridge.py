@@ -11,6 +11,7 @@ from strategy_runtime.runtime.abi.entry_package_errors import (
 from strategy_runtime.runtime.abi.entry_package_models import (
     EntryPackageAbsent,
     EntryPackageApplied,
+    EntryPackageDeclined,
     EntryPackageInternalError,
     EntryPackageRequest,
     EntryPackageResult,
@@ -19,6 +20,7 @@ from strategy_runtime.runtime.abi.entry_package_models import (
 from strategy_runtime.runtime.entry_reconciliation.models import (
     EntryAbsentConfirmation,
     EntryAppliedConfirmation,
+    EntryDeclinedOutcome,
     EntryReconciliationCommand,
 )
 from strategy_runtime.runtime.entry_reconciliation_bridge.bridge import (
@@ -266,3 +268,26 @@ def applied_result(request: EntryPackageRequest) -> EntryPackageApplied:
         applied_desired_entry=request.desired_entry,
         calculated_quantity="0.00100",
     )
+
+
+def test_declined_result_maps_to_declined_outcome_without_raising() -> None:
+    command = make_command(desired_entry=make_desired_entry())
+    source_state = make_source_state()
+    fake = FakeAbiEntryPackagePort(
+        result_factory=lambda req: EntryPackageDeclined(
+            strategy_instance_id=req.strategy_instance_id,
+            trade_cycle_id=req.trade_cycle_id,
+            decline_reason="margin_mode_not_supported",
+            decline_message="marginMode ISOLATED_MARGIN",
+        )
+    )
+
+    result = AbiEntryPackageExecutionBridge(fake).execute(command, source_state)
+
+    assert result == EntryDeclinedOutcome(
+        strategy_instance_id=command.strategy_instance_id,
+        trade_cycle_id=command.trade_cycle_id,
+        decline_reason="margin_mode_not_supported",
+        decline_message="marginMode ISOLATED_MARGIN",
+    )
+    assert len(fake.requests) == 1

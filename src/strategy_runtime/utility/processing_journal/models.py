@@ -19,6 +19,7 @@ class ProcessingJournalEventType(StrEnum):
     COMMITTED_BAR_ORCHESTRATION_COMPLETED = "committed_bar_orchestration_completed"
     LIVE_ENTRY_EVALUATED = "live_entry_evaluated"
     ENTRY_PACKAGE_APPLIED = "entry_package_applied"
+    ENTRY_PACKAGE_DECLINED = "entry_package_declined"
     TRADE_CYCLE_CLOSED = "trade_cycle_closed"
     TRADE_CYCLE_OPENED = "trade_cycle_opened"
     OPEN_TRADE_EVALUATED = "open_trade_evaluated"

@@ -10,6 +10,7 @@ from strategy_runtime.runtime.entry_reconciliation import (
     Cancel,
     EntryAbsentConfirmation,
     EntryAppliedConfirmation,
+    EntryDeclinedOutcome,
     EntryReconciliationCommand,
     EntryReconciliationInvariantError,
     SuccessfulEntryConfirmation,
@@ -889,3 +890,202 @@ def test_journaled_values_do_not_change_the_resulting_state() -> None:
     )
 
     assert with_values == without
+
+
+class RecordingDeclinedJournal:
+    def __init__(self, repository: SaveRecordingRepository | None = None) -> None:
+        self.repository = repository
+        self.calls: list[dict[str, str | int]] = []
+        self.saves_seen: list[int] = []
+
+    def entry_package_declined(
+        self,
+        *,
+        strategy_instance_id: str,
+        trade_cycle_id: str,
+        bar_open_time_ms: int,
+        risk_multiplier: str,
+        decline_reason: str,
+        decline_message: str,
+    ) -> None:
+        if self.repository is not None:
+            self.saves_seen.append(len(self.repository.saved))
+        self.calls.append(
+            {
+                "strategy_instance_id": strategy_instance_id,
+                "trade_cycle_id": trade_cycle_id,
+                "bar_open_time_ms": bar_open_time_ms,
+                "risk_multiplier": risk_multiplier,
+                "decline_reason": decline_reason,
+                "decline_message": decline_message,
+            }
+        )
+
+
+def declined(cycle: str = "cycle-new", instance: str = "instance") -> EntryDeclinedOutcome:
+    return EntryDeclinedOutcome(
+        instance,
+        cycle,
+        "insufficient_balance_for_minimum_quantity",
+        "quantity 0.0004 below minOrderQty 0.001",
+    )
+
+
+def unseeded_recording_repository() -> tuple[SaveRecordingRepository, StrategyInstanceRuntimeState]:
+    repository = SaveRecordingRepository()
+    state = repository.get_or_create(
+        GetOrCreateStrategyInstanceRuntimeStateRequest(
+            strategy_instance_id="instance",
+            strategy_id="strategy",
+            instrument="BTCUSDT.P",
+            base_timeframe="5m",
+            raw_spec={},
+            source_path="a.json",
+        )
+    )
+    repository.saved.clear()
+    return repository, state
+
+
+def test_declined_apply_ends_without_cycle_and_durably_clears_the_marker() -> None:
+    repository, source_state = unseeded_recording_repository()
+    journal = RecordingDeclinedJournal(repository)
+    execution_port = ScriptedExecutionPort(declined())
+
+    result = EntryReconciliationOrchestrator(
+        RecordingIdFactory(),
+        execution_port,
+        repository,
+        entry_declined_journal=journal,
+    ).execute(projection(source_state, desired_entry()))
+
+    assert len(execution_port.calls) == 1
+    assert [(s.current_trade_cycle, s.pending_entry_recovery) for s in repository.saved] == [
+        (None, PendingEntryRecovery("cycle-new")),
+        (None, None),
+    ]
+    stored = repository.get("instance")
+    assert stored is not None
+    assert stored.pending_entry_recovery is None
+    assert stored.current_trade_cycle is None
+    assert result == stored
+    # Equal to the bar's source state, so the caller will not save it again.
+    assert result == source_state
+    assert journal.saves_seen == [2]
+    assert journal.calls == [
+        {
+            "strategy_instance_id": "instance",
+            "trade_cycle_id": "cycle-new",
+            "bar_open_time_ms": 1000,
+            "risk_multiplier": source_state.risk_multiplier,
+            "decline_reason": "insufficient_balance_for_minimum_quantity",
+            "decline_message": "quantity 0.0004 below minOrderQty 0.001",
+        }
+    ]
+
+
+def test_declined_apply_without_journal_still_clears_the_marker() -> None:
+    repository, source_state = unseeded_recording_repository()
+
+    result = EntryReconciliationOrchestrator(
+        RecordingIdFactory(), ScriptedExecutionPort(declined()), repository
+    ).execute(projection(source_state, desired_entry()))
+
+    assert result.pending_entry_recovery is None
+    stored = repository.get("instance")
+    assert stored is not None and stored.pending_entry_recovery is None
+
+
+def test_replace_with_declined_apply_leaves_no_cycle_and_no_marker() -> None:
+    original = desired_entry()
+    updated = desired_entry(price="101")
+    repository, source_state = seeded_recording_repository(original)
+    journal = RecordingDeclinedJournal()
+    execution_port = ScriptedExecutionPort(
+        EntryAbsentConfirmation("instance", "cycle-1"),
+        declined(),
+    )
+
+    result = EntryReconciliationOrchestrator(
+        RecordingIdFactory(), execution_port, repository, entry_declined_journal=journal
+    ).execute(projection(source_state, updated))
+
+    assert [(c.trade_cycle_id, c.desired_entry) for c, _ in execution_port.calls] == [
+        ("cycle-1", None),
+        ("cycle-new", updated),
+    ]
+    assert result.current_trade_cycle is None
+    assert result.pending_entry_recovery is None
+    assert repository.saved[-1] == result
+    assert [call["trade_cycle_id"] for call in journal.calls] == ["cycle-new"]
+
+
+def test_next_bar_after_a_decline_sends_a_new_apply() -> None:
+    repository, source_state = unseeded_recording_repository()
+    entry = desired_entry()
+    first = EntryReconciliationOrchestrator(
+        RecordingIdFactory("cycle-a"), ScriptedExecutionPort(declined("cycle-a")), repository
+    ).execute(projection(source_state, entry))
+
+    execution_port = ScriptedExecutionPort(replace_applied_confirmation(entry, "cycle-b"))
+    second = EntryReconciliationOrchestrator(
+        RecordingIdFactory("cycle-b"), execution_port, repository
+    ).execute(projection(first, entry))
+
+    assert [c.trade_cycle_id for c, _ in execution_port.calls] == ["cycle-b"]
+    assert second.current_trade_cycle == CurrentTradeCycle(
+        "cycle-b", AppliedEntryPackage(entry, "0.02")
+    )
+    assert second.pending_entry_recovery is None
+
+
+def test_declined_outcome_for_a_cancel_is_an_invariant_error() -> None:
+    repository, source_state = seeded_recording_repository(desired_entry())
+    journal = RecordingDeclinedJournal()
+
+    with pytest.raises(EntryReconciliationInvariantError):
+        EntryReconciliationOrchestrator(
+            RecordingIdFactory(),
+            ScriptedExecutionPort(declined("cycle-1")),
+            repository,
+            entry_declined_journal=journal,
+        ).execute(projection(source_state, None))
+
+    assert [s.pending_entry_recovery for s in repository.saved] == [PendingEntryRecovery("cycle-1")]
+    assert journal.calls == []
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [declined(cycle="cycle-other"), declined(instance="instance-other")],
+)
+def test_declined_outcome_with_mismatched_identity_is_an_invariant_error(
+    outcome: EntryDeclinedOutcome,
+) -> None:
+    repository, source_state = unseeded_recording_repository()
+    journal = RecordingDeclinedJournal()
+
+    with pytest.raises(EntryReconciliationInvariantError):
+        EntryReconciliationOrchestrator(
+            RecordingIdFactory(),
+            ScriptedExecutionPort(outcome),
+            repository,
+            entry_declined_journal=journal,
+        ).execute(projection(source_state, desired_entry()))
+
+    assert [s.pending_entry_recovery for s in repository.saved] == [
+        PendingEntryRecovery("cycle-new")
+    ]
+    assert journal.calls == []
+
+
+def test_applied_and_absent_write_no_declined_event() -> None:
+    journal = RecordingDeclinedJournal()
+    repository, source_state = seeded_repository()
+    EntryReconciliationOrchestrator(
+        RecordingIdFactory(),
+        FakeExecutionPort(applied_confirmation()),
+        repository,
+        entry_declined_journal=journal,
+    ).execute(projection(source_state, desired_entry(price="105")))
+    assert journal.calls == []

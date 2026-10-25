@@ -210,6 +210,7 @@ def build_application(
             entry_execution_bridge,
             state_repository,
             entry_applied_journal=journal,
+            entry_declined_journal=journal,
         )
         position_management_orchestrator = PositionManagementOrchestrator(
             execution_port=position_management_client,
