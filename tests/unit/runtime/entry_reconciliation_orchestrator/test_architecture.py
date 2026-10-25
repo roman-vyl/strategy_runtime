@@ -4,8 +4,8 @@ from pathlib import Path
 from typing import get_type_hints
 
 from strategy_runtime.runtime.entry_reconciliation import (
+    EntryExecutionOutcome,
     EntryReconciliationCommand,
-    SuccessfulEntryConfirmation,
 )
 from strategy_runtime.runtime.entry_reconciliation_orchestrator import (
     EntryReconciliationExecutionPort,
@@ -62,7 +62,7 @@ def test_execution_port_is_the_exact_transport_free_pair() -> None:
     hints = get_type_hints(EntryReconciliationExecutionPort.execute)
     assert hints["command"] is EntryReconciliationCommand
     assert hints["source_state"] is StrategyInstanceRuntimeState
-    assert hints["return"] == SuccessfulEntryConfirmation
+    assert hints["return"] == EntryExecutionOutcome
 
 
 def test_public_package_boundary_exports_only_operation_and_port() -> None:

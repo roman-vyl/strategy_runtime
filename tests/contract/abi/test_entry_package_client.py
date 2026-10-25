@@ -16,6 +16,7 @@ from strategy_runtime.runtime.abi.entry_package_errors import (
 from strategy_runtime.runtime.abi.entry_package_models import (
     EntryPackageAbsent,
     EntryPackageApplied,
+    EntryPackageDeclined,
     EntryPackageInternalError,
     EntryPackageMalformedJson,
     EntryPackageRequest,
@@ -611,3 +612,88 @@ def json_response(status_code: int, body: object) -> httpx.Response:
         json=body,
         headers={"content-type": "application/json; charset=utf-8"},
     )
+
+
+def declined_body(request: EntryPackageRequest, **overrides: object) -> dict[str, object]:
+    body: dict[str, object] = {
+        "strategy_instance_id": request.strategy_instance_id,
+        "trade_cycle_id": request.trade_cycle_id,
+        "status": "entry_package_declined",
+        "decline_reason": "insufficient_balance_for_minimum_quantity",
+        "decline_message": "quantity 0.0004 below minOrderQty 0.001",
+    }
+    body.update(overrides)
+    return body
+
+
+@pytest.mark.parametrize(
+    "reason",
+    ["insufficient_balance_for_minimum_quantity", "a", "reason_never_seen_2", "x" * 64],
+)
+def test_declined_success_decodes_verbatim(reason: str) -> None:
+    request = make_request()
+    fake = FakeAbi(lambda _: json_response(200, declined_body(request, decline_reason=reason)))
+
+    result = send(fake, request)
+
+    assert result == EntryPackageDeclined(
+        strategy_instance_id="instance",
+        trade_cycle_id="cycle",
+        decline_reason=reason,
+        decline_message="quantity 0.0004 below minOrderQty 0.001",
+    )
+    assert len(fake.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"decline_reason": ""},
+        {"decline_reason": "Insufficient"},
+        {"decline_reason": "1reason"},
+        {"decline_reason": "has-dash"},
+        {"decline_reason": "x" * 65},
+        {"decline_reason": 7},
+        {"decline_reason": None},
+        {"decline_message": ""},
+        {"decline_message": None},
+        {"extra": True},
+        {"strategy_instance_id": "different"},
+        {"trade_cycle_id": "different"},
+    ],
+)
+def test_malformed_or_mismatched_declined_success_fails_closed(
+    overrides: dict[str, object],
+) -> None:
+    request = make_request()
+    fake = FakeAbi(lambda _: json_response(200, declined_body(request, **overrides)))
+
+    with pytest.raises(AbiEntryPackageProtocolError):
+        send(fake, request)
+
+
+@pytest.mark.parametrize("missing", ["decline_reason", "decline_message"])
+def test_declined_success_without_a_field_fails_closed(missing: str) -> None:
+    request = make_request()
+    body = declined_body(request)
+    del body[missing]
+    fake = FakeAbi(lambda _: json_response(200, body))
+
+    with pytest.raises(AbiEntryPackageProtocolError):
+        send(fake, request)
+
+
+def test_declined_answer_to_a_cancel_request_fails_closed() -> None:
+    request = make_request(desired_entry=None)
+    fake = FakeAbi(lambda _: json_response(200, declined_body(request)))
+
+    with pytest.raises(AbiEntryPackageProtocolError):
+        send(fake, request)
+
+
+def test_declined_with_undocumented_2xx_does_not_acknowledge() -> None:
+    request = make_request()
+    fake = FakeAbi(lambda _: json_response(201, declined_body(request)))
+
+    with pytest.raises(AbiEntryPackageProtocolError):
+        send(fake, request)

@@ -3,8 +3,8 @@
 from typing import Protocol
 
 from strategy_runtime.runtime.entry_reconciliation.models import (
+    EntryExecutionOutcome,
     EntryReconciliationCommand,
-    SuccessfulEntryConfirmation,
 )
 from strategy_runtime.runtime.state.models import StrategyInstanceRuntimeState
 
@@ -16,7 +16,7 @@ class EntryReconciliationExecutionPort(Protocol):
         self,
         command: EntryReconciliationCommand,
         source_state: StrategyInstanceRuntimeState,
-    ) -> SuccessfulEntryConfirmation: ...
+    ) -> EntryExecutionOutcome: ...
 
 
 class EntryAppliedJournalPort(Protocol):
@@ -37,4 +37,22 @@ class EntryAppliedJournalPort(Protocol):
         quantity: str | None,
         order_link_id: str | None,
         order_id: str | None,
+    ) -> None: ...
+
+
+class EntryDeclinedJournalPort(Protocol):
+    """Record that ABI refused one APPLY before contacting the exchange.
+
+    Implementations are best effort and must not raise into orchestration.
+    """
+
+    def entry_package_declined(
+        self,
+        *,
+        strategy_instance_id: str,
+        trade_cycle_id: str,
+        bar_open_time_ms: int,
+        risk_multiplier: str,
+        decline_reason: str,
+        decline_message: str,
     ) -> None: ...

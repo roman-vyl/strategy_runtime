@@ -7,6 +7,7 @@ from strategy_runtime.runtime.entry_reconciliation import (
     Cancel,
     EntryAbsentConfirmation,
     EntryAppliedConfirmation,
+    EntryDeclinedOutcome,
     EntryReconciliationCommand,
     EntryReconciliationInvariantError,
     NoOp,
@@ -17,6 +18,7 @@ from strategy_runtime.runtime.entry_reconciliation import (
 )
 from strategy_runtime.runtime.entry_reconciliation_orchestrator.ports import (
     EntryAppliedJournalPort,
+    EntryDeclinedJournalPort,
     EntryReconciliationExecutionPort,
 )
 from strategy_runtime.runtime.routing.models import LiveEntryProjectedStrategyInstance
@@ -34,11 +36,13 @@ class EntryReconciliationOrchestrator:
         execution_port: EntryReconciliationExecutionPort,
         state_repository: StrategyInstanceRuntimeStateRepository,
         entry_applied_journal: EntryAppliedJournalPort | None = None,
+        entry_declined_journal: EntryDeclinedJournalPort | None = None,
     ) -> None:
         self._trade_cycle_id_factory = trade_cycle_id_factory
         self._execution_port = execution_port
         self._state_repository = state_repository
         self._entry_applied_journal = entry_applied_journal
+        self._entry_declined_journal = entry_declined_journal
 
     def execute(
         self,
@@ -100,6 +104,10 @@ class EntryReconciliationOrchestrator:
         )
 
         confirmation = self._execution_port.execute(command, state)
+        if isinstance(confirmation, EntryDeclinedOutcome):
+            return self._end_declined_apply(
+                projection, pending_state, decision, command, confirmation
+            )
         if type(confirmation) not in {EntryAppliedConfirmation, EntryAbsentConfirmation}:
             raise EntryReconciliationInvariantError(
                 "execution port must return a successful entry confirmation"
@@ -117,6 +125,40 @@ class EntryReconciliationOrchestrator:
             command,
             confirmation,
         )
+
+    def _end_declined_apply(
+        self,
+        projection: LiveEntryProjectedStrategyInstance,
+        pending_state: StrategyInstanceRuntimeState,
+        decision: Apply | Cancel,
+        command: EntryReconciliationCommand,
+        declined: EntryDeclinedOutcome,
+    ) -> StrategyInstanceRuntimeState:
+        # An expected refusal before the exchange: no cycle, no recovery. The
+        # cleared state is saved here because for a plain Apply it equals the
+        # bar's source state, and the caller skips saving an unchanged state.
+        if type(decision) is not Apply:
+            raise EntryReconciliationInvariantError("only APPLY may be declined")
+        if (
+            declined.strategy_instance_id != command.strategy_instance_id
+            or declined.trade_cycle_id != command.trade_cycle_id
+        ):
+            raise EntryReconciliationInvariantError(
+                "declined outcome does not match the sent command"
+            )
+        saved_state = self._state_repository.save(
+            replace(pending_state, pending_entry_recovery=None)
+        )
+        if self._entry_declined_journal is not None:
+            self._entry_declined_journal.entry_package_declined(
+                strategy_instance_id=declined.strategy_instance_id,
+                trade_cycle_id=declined.trade_cycle_id,
+                bar_open_time_ms=projection.source.processing_unit.committed_bar.open_time_ms,
+                risk_multiplier=pending_state.risk_multiplier,
+                decline_reason=declined.decline_reason,
+                decline_message=declined.decline_message,
+            )
+        return saved_state
 
     def _journal_entry_applied(
         self, confirmation: EntryAppliedConfirmation, bar_open_time_ms: int

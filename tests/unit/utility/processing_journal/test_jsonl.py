@@ -367,3 +367,51 @@ def test_open_trade_events_failures_are_absorbed(tmp_path: Path) -> None:
     )
 
     assert journal.failure_count == 2
+
+
+def test_entry_package_declined_serializes_its_payload(tmp_path: Path) -> None:
+    path = tmp_path / "runtime.jsonl"
+    journal = make_journal(path)
+
+    journal.entry_package_declined(
+        strategy_instance_id="dep-a",
+        trade_cycle_id="cycle-1",
+        bar_open_time_ms=1000,
+        risk_multiplier="1",
+        decline_reason="insufficient_balance_for_minimum_quantity",
+        decline_message="quantity 0.0004 below minOrderQty 0.001",
+    )
+
+    record = json.loads(path.read_text())
+    assert record["event_type"] == "entry_package_declined"
+    assert record["schema_version"] == 2
+    assert record["severity"] == "warning"
+    assert record["strategy_instance_id"] == "dep-a"
+    assert record["payload"] == {
+        "trade_cycle_id": "cycle-1",
+        "bar_open_time_ms": 1000,
+        "risk_multiplier": "1",
+        "decline_reason": "insufficient_balance_for_minimum_quantity",
+        "decline_message": "quantity 0.0004 below minOrderQty 0.001",
+    }
+
+
+def test_entry_package_declined_failure_is_absorbed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken_fsync(fd: int) -> None:
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(os, "fsync", broken_fsync)
+    journal = make_journal(tmp_path / "runtime.jsonl")
+
+    journal.entry_package_declined(
+        strategy_instance_id="dep-a",
+        trade_cycle_id="cycle-1",
+        bar_open_time_ms=1000,
+        risk_multiplier="1",
+        decline_reason="invalid_stop_distance",
+        decline_message="stop equals entry",
+    )
+
+    assert journal.failure_count == 1

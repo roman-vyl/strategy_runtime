@@ -114,6 +114,25 @@ class EntryAbsentConfirmation:
 SuccessfulEntryConfirmation = EntryAppliedConfirmation | EntryAbsentConfirmation
 
 
+@dataclass(frozen=True, slots=True)
+class EntryDeclinedOutcome:
+    """ABI refused an APPLY before contacting the exchange; no cycle exists."""
+
+    strategy_instance_id: str
+    trade_cycle_id: str
+    decline_reason: str
+    decline_message: str
+
+    def __post_init__(self) -> None:
+        _require_non_empty_string(self.strategy_instance_id, "strategy_instance_id")
+        _require_non_empty_string(self.trade_cycle_id, "trade_cycle_id")
+        _require_non_empty_string(self.decline_reason, "decline_reason")
+        _require_non_empty_string(self.decline_message, "decline_message")
+
+
+EntryExecutionOutcome = SuccessfulEntryConfirmation | EntryDeclinedOutcome
+
+
 def _require_non_empty_string(value: str, name: str) -> None:
     if type(value) is not str or len(value) == 0:
         raise ValueError(f"{name} must be a non-empty string")
