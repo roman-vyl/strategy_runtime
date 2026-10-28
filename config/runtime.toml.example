@@ -1,3 +1,5 @@
 # Strategy Runtime settings, read once at start from RUNTIME_CONFIG_PATH.
 # Missing file or missing key = defaults. Edit and restart the container to switch.
 live_entry_mode = "ema_anchor"   # or "touch_trigger"
+# Required with touch_trigger: the entry order lives N + 1 closed bars.
+# order_lifetime_bars = 3

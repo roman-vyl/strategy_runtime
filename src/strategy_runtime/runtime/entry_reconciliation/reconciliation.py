@@ -63,19 +63,43 @@ def decide_entry_reconciliation(
 def touch_trigger_entry_reconciliation(
     new_desired_entry: DesiredEntry | None,
     current_trade_cycle: CurrentTradeCycle | None,
+    *,
+    current_bar_open_time_ms: int,
+    timeframe_ms: int,
+    order_lifetime_bars: int,
 ) -> EntryReconciliationDecision:
-    """Apply the first desired entry, then hold it whatever the Engine projects."""
+    """Apply the first desired entry, hold it, and end it once its lifetime is over."""
     if new_desired_entry is not None and type(new_desired_entry) is not DesiredEntry:
         raise TypeError("new_desired_entry must be DesiredEntry or None")
     if current_trade_cycle is not None and type(current_trade_cycle) is not CurrentTradeCycle:
         raise TypeError("current_trade_cycle must be CurrentTradeCycle or None")
+    if type(current_bar_open_time_ms) is not int or current_bar_open_time_ms < 0:
+        raise ValueError("current_bar_open_time_ms must be a non-negative integer")
+    if type(timeframe_ms) is not int or timeframe_ms <= 0:
+        raise ValueError("timeframe_ms must be a positive integer")
+    if type(order_lifetime_bars) is not int or order_lifetime_bars < 0:
+        raise ValueError("order_lifetime_bars must be an integer >= 0")
     if current_trade_cycle is not None and current_trade_cycle.frozen_entry_context is not None:
         raise EntryReconciliationInvariantError(
             "entry reconciliation is fail-closed once the trade cycle's entry is frozen"
         )
 
-    if get_acknowledged_desired_entry(current_trade_cycle) is not None:
+    held_desired_entry = get_acknowledged_desired_entry(current_trade_cycle)
+    if held_desired_entry is None:
+        if new_desired_entry is None:
+            return NoOp()
+        return Apply(new_desired_entry)
+
+    assert current_trade_cycle is not None
+    # The lifetime is counted from the held plan only; later signals never extend it.
+    expiration_ms = (
+        held_desired_entry.source_plan_bar_open_time_ms + (order_lifetime_bars + 2) * timeframe_ms
+    )
+    if current_bar_open_time_ms + timeframe_ms < expiration_ms:
         return NoOp()
-    if new_desired_entry is None:
-        return NoOp()
-    return Apply(new_desired_entry)
+    if (
+        new_desired_entry is None
+        or new_desired_entry.source_plan_bar_open_time_ms != current_bar_open_time_ms
+    ):
+        return Cancel(current_trade_cycle.trade_cycle_id)
+    return Replace(current_trade_cycle.trade_cycle_id, new_desired_entry)

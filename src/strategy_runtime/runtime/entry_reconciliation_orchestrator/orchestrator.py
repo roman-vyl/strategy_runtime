@@ -10,6 +10,7 @@ from strategy_runtime.runtime.entry_reconciliation import (
     EntryAppliedConfirmation,
     EntryDeclinedOutcome,
     EntryReconciliationCommand,
+    EntryReconciliationDecision,
     EntryReconciliationInvariantError,
     NoOp,
     Replace,
@@ -27,6 +28,7 @@ from strategy_runtime.runtime.routing.models import LiveEntryProjectedStrategyIn
 from strategy_runtime.runtime.state.identity import TradeCycleIdFactory
 from strategy_runtime.runtime.state.models import PendingEntryRecovery, StrategyInstanceRuntimeState
 from strategy_runtime.runtime.state.repository import StrategyInstanceRuntimeStateRepository
+from strategy_runtime.runtime.timeframe import timeframe_duration_ms
 
 LiveEntryMode = Literal["ema_anchor", "touch_trigger"]
 _LIVE_ENTRY_MODES: tuple[LiveEntryMode, ...] = ("ema_anchor", "touch_trigger")
@@ -43,15 +45,21 @@ class EntryReconciliationOrchestrator:
         entry_applied_journal: EntryAppliedJournalPort | None = None,
         entry_declined_journal: EntryDeclinedJournalPort | None = None,
         live_entry_mode: LiveEntryMode = "ema_anchor",
+        order_lifetime_bars: int | None = None,
     ) -> None:
         if live_entry_mode not in _LIVE_ENTRY_MODES:
             raise ValueError(f"live_entry_mode must be one of {', '.join(_LIVE_ENTRY_MODES)}")
+        if live_entry_mode == "touch_trigger" and (
+            type(order_lifetime_bars) is not int or order_lifetime_bars < 0
+        ):
+            raise ValueError("touch_trigger requires order_lifetime_bars as an integer >= 0")
         self._trade_cycle_id_factory = trade_cycle_id_factory
         self._execution_port = execution_port
         self._state_repository = state_repository
         self._entry_applied_journal = entry_applied_journal
         self._entry_declined_journal = entry_declined_journal
         self._live_entry_mode = live_entry_mode
+        self._order_lifetime_bars = order_lifetime_bars
 
     def execute(
         self,
@@ -59,16 +67,7 @@ class EntryReconciliationOrchestrator:
     ) -> StrategyInstanceRuntimeState:
         """Return unchanged source state or one confirmed replacement aggregate."""
         source_state = projection.source.resolved_state.runtime_state
-        # The mode selects only the pure decision; everything after it is shared.
-        decide = (
-            touch_trigger_entry_reconciliation
-            if self._live_entry_mode == "touch_trigger"
-            else decide_entry_reconciliation
-        )
-        decision = decide(
-            projection.desired_entry,
-            source_state.current_trade_cycle,
-        )
+        decision = self._decide(projection, source_state)
         if type(decision) is NoOp:
             return source_state
         if type(decision) is Replace:
@@ -92,6 +91,27 @@ class EntryReconciliationOrchestrator:
             return self._execute_one(projection, source_state, decision, None)
         raise EntryReconciliationInvariantError(
             "unknown command-bearing entry reconciliation decision"
+        )
+
+    def _decide(
+        self,
+        projection: LiveEntryProjectedStrategyInstance,
+        source_state: StrategyInstanceRuntimeState,
+    ) -> EntryReconciliationDecision:
+        # The mode selects only the pure decision; everything after it is shared.
+        if self._live_entry_mode != "touch_trigger":
+            return decide_entry_reconciliation(
+                projection.desired_entry,
+                source_state.current_trade_cycle,
+            )
+        unit = projection.source.processing_unit
+        assert self._order_lifetime_bars is not None
+        return touch_trigger_entry_reconciliation(
+            projection.desired_entry,
+            source_state.current_trade_cycle,
+            current_bar_open_time_ms=unit.committed_bar.open_time_ms,
+            timeframe_ms=timeframe_duration_ms(unit.deployment.base_timeframe),
+            order_lifetime_bars=self._order_lifetime_bars,
         )
 
     def _execute_one(

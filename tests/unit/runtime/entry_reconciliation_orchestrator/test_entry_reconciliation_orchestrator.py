@@ -93,6 +93,8 @@ def seeded_repository(
 def projection(
     source_state: StrategyInstanceRuntimeState,
     new_desired_entry: DesiredEntry | None,
+    *,
+    bar_open_time_ms: int = 1000,
 ) -> LiveEntryProjectedStrategyInstance:
     deployment = DeploymentSpecification(
         strategy_instance_id="instance",
@@ -107,7 +109,7 @@ def projection(
         processing_unit=StrategyBarProcessingUnit(
             strategy_instance_id="instance",
             deployment=deployment,
-            committed_bar=CommittedBarEvent("BTCUSDT.P", "5m", 1000),
+            committed_bar=CommittedBarEvent("BTCUSDT.P", "5m", bar_open_time_ms),
         ),
         resolved_state=PositionResolvedStrategyInstanceRuntimeState(
             runtime_state=source_state,
@@ -1118,6 +1120,7 @@ def test_touch_trigger_holds_the_acknowledged_entry_without_any_side_effect(
             execution_port,
             repository,
             live_entry_mode="touch_trigger",
+            order_lifetime_bars=3,
         ).execute(projection(source_state, projected))
 
     assert result == snapshot
@@ -1142,6 +1145,7 @@ def test_touch_trigger_first_entry_is_applied_through_the_shared_path() -> None:
         execution_port,
         repository,
         live_entry_mode="touch_trigger",
+        order_lifetime_bars=3,
     ).execute(projection(source_state, new_entry))
 
     assert id_factory.calls == 1
@@ -1201,4 +1205,91 @@ def test_invalid_live_entry_mode_is_rejected_at_construction() -> None:
             FakeExecutionPort(object()),
             repository,
             live_entry_mode=cast("Any", "close"),
+        )
+
+
+# desired_entry() is planned on the bar opening at 900 ms; with 5m bars and N=3
+# the bar opening at 900 + 4 * 5m closes on the expiry boundary.
+EXPIRY_BAR = 900 + 4 * 300_000
+
+
+def test_touch_trigger_expiry_cancels_through_the_shared_path() -> None:
+    repository, source_state = seeded_recording_repository(desired_entry())
+    id_factory = RecordingIdFactory()
+    execution_port = FakeExecutionPort(EntryAbsentConfirmation("instance", "cycle-1"))
+
+    result = EntryReconciliationOrchestrator(
+        id_factory,
+        execution_port,
+        repository,
+        live_entry_mode="touch_trigger",
+        order_lifetime_bars=3,
+    ).execute(projection(source_state, None, bar_open_time_ms=EXPIRY_BAR))
+
+    assert id_factory.calls == 0
+    assert [(c.trade_cycle_id, c.desired_entry) for c, _ in execution_port.calls] == [
+        ("cycle-1", None)
+    ]
+    assert [s.pending_entry_recovery for s in repository.saved] == [PendingEntryRecovery("cycle-1")]
+    assert result.current_trade_cycle is None
+    assert result.pending_entry_recovery is None
+
+
+def test_touch_trigger_expiry_replaces_through_the_shared_path() -> None:
+    repository, source_state = seeded_recording_repository(desired_entry())
+    fresh = DesiredEntry("long", EXPIRY_BAR, "100", "99", "103", "runner")
+    id_factory = RecordingIdFactory()
+    execution_port = ScriptedExecutionPort(
+        EntryAbsentConfirmation("instance", "cycle-1"),
+        replace_applied_confirmation(fresh),
+    )
+
+    result = EntryReconciliationOrchestrator(
+        id_factory,
+        execution_port,
+        repository,
+        live_entry_mode="touch_trigger",
+        order_lifetime_bars=3,
+    ).execute(projection(source_state, fresh, bar_open_time_ms=EXPIRY_BAR))
+
+    assert id_factory.calls == 1
+    assert [(c.trade_cycle_id, c.desired_entry) for c, _ in execution_port.calls] == [
+        ("cycle-1", None),
+        ("cycle-new", fresh),
+    ]
+    assert [s.pending_entry_recovery for s in repository.saved] == [
+        PendingEntryRecovery("cycle-1"),
+        PendingEntryRecovery("cycle-new"),
+    ]
+    assert result.current_trade_cycle == CurrentTradeCycle(
+        "cycle-new", AppliedEntryPackage(fresh, "0.02")
+    )
+
+
+def test_touch_trigger_one_bar_before_expiry_holds() -> None:
+    repository, source_state = seeded_recording_repository(desired_entry())
+    execution_port = FakeExecutionPort(object())
+
+    result = EntryReconciliationOrchestrator(
+        RecordingIdFactory(),
+        execution_port,
+        repository,
+        live_entry_mode="touch_trigger",
+        order_lifetime_bars=3,
+    ).execute(projection(source_state, None, bar_open_time_ms=EXPIRY_BAR - 300_000))
+
+    assert execution_port.calls == []
+    assert result == source_state
+
+
+@pytest.mark.parametrize("lifetime", [None, -1, cast("Any", True), cast("Any", 3.0)])
+def test_touch_trigger_requires_a_valid_lifetime_at_construction(lifetime: Any) -> None:
+    repository, _ = seeded_repository()
+    with pytest.raises(ValueError, match="order_lifetime_bars"):
+        EntryReconciliationOrchestrator(
+            RecordingIdFactory(),
+            FakeExecutionPort(object()),
+            repository,
+            live_entry_mode="touch_trigger",
+            order_lifetime_bars=lifetime,
         )

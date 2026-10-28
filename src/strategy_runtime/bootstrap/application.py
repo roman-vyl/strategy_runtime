@@ -212,6 +212,7 @@ def build_application(
             entry_applied_journal=journal,
             entry_declined_journal=journal,
             live_entry_mode=config.live_entry_mode,
+            order_lifetime_bars=config.order_lifetime_bars,
         )
         position_management_orchestrator = PositionManagementOrchestrator(
             execution_port=position_management_client,
