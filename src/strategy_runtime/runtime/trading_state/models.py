@@ -1,11 +1,11 @@
 """Trade state of one strategy instance as Runtime itself stores it."""
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Final, Literal
 
-FLAT = "flat"
-ENTRY_PENDING = "entry_pending"
-IN_POSITION = "in_position"
+FLAT: Final = "flat"
+ENTRY_PENDING: Final = "entry_pending"
+IN_POSITION: Final = "in_position"
 
 TradeState = Literal["flat", "entry_pending", "in_position"]
 RecoveryPending = Literal["entry", "close"]
