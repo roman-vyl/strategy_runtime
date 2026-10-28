@@ -178,27 +178,100 @@ def test_changed_desired_entry_carries_the_new_entry_unchanged() -> None:
     assert decision.desired_entry is changed
 
 
-@pytest.mark.parametrize(
-    ("new_entry", "current_cycle", "expected"),
-    [
-        (None, None, NoOp()),
-        (desired_entry(), None, Apply(desired_entry())),
-        (None, cycle(desired_entry()), NoOp()),
-        (desired_entry(), cycle(desired_entry()), NoOp()),
-        (desired_entry(planned_entry_price="101"), cycle(desired_entry()), NoOp()),
-        (
-            desired_entry(side="short", source_plan_bar_open_time_ms=1_200),
-            cycle(desired_entry()),
-            NoOp(),
-        ),
-    ],
-)
-def test_touch_trigger_applies_once_then_holds_the_acknowledged_entry(
+TF = 300_000  # 5m
+SIGNAL = 12 * 60 * 60_000  # 12:00 signal bar open
+
+
+def held(*, trade_cycle_id: str = "cycle-1") -> CurrentTradeCycle:
+    return cycle(desired_entry(source_plan_bar_open_time_ms=SIGNAL), trade_cycle_id=trade_cycle_id)
+
+
+def touch(
     new_entry: DesiredEntry | None,
     current_cycle: CurrentTradeCycle | None,
-    expected: object,
+    *,
+    bar: int = SIGNAL,
+    lifetime: int = 3,
+    timeframe_ms: int = TF,
+) -> object:
+    return touch_trigger_entry_reconciliation(
+        new_entry,
+        current_cycle,
+        current_bar_open_time_ms=bar,
+        timeframe_ms=timeframe_ms,
+        order_lifetime_bars=lifetime,
+    )
+
+
+@pytest.mark.parametrize(
+    ("new_entry", "expected"),
+    [(None, NoOp()), (desired_entry(), Apply(desired_entry()))],
+)
+def test_touch_trigger_without_a_cycle_applies_like_today(
+    new_entry: DesiredEntry | None, expected: object
 ) -> None:
-    assert touch_trigger_entry_reconciliation(new_entry, current_cycle) == expected
+    assert touch(new_entry, None) == expected
+
+
+@pytest.mark.parametrize("bar_offset", [1, 2, 3])
+@pytest.mark.parametrize(
+    "new_entry",
+    [
+        None,
+        desired_entry(source_plan_bar_open_time_ms=SIGNAL),
+        desired_entry(planned_entry_price="101", source_plan_bar_open_time_ms=SIGNAL + TF),
+        desired_entry(side="short", source_plan_bar_open_time_ms=SIGNAL + 2 * TF),
+    ],
+)
+def test_touch_trigger_holds_the_entry_before_expiry(
+    bar_offset: int, new_entry: DesiredEntry | None
+) -> None:
+    # N=3, signal 12:00: bars opening 12:05, 12:10, 12:15 close before the 12:25 boundary.
+    assert touch(new_entry, held(), bar=SIGNAL + bar_offset * TF) == NoOp()
+
+
+def test_touch_trigger_cancels_at_expiry_without_a_signal() -> None:
+    # Bar 12:20-12:25 closes at the boundary.
+    assert touch(None, held(), bar=SIGNAL + 4 * TF) == Cancel("cycle-1")
+
+
+def test_touch_trigger_replaces_at_expiry_with_a_fresh_signal() -> None:
+    bar = SIGNAL + 4 * TF
+    fresh = desired_entry(planned_entry_price="101", source_plan_bar_open_time_ms=bar)
+    assert touch(fresh, held(), bar=bar) == Replace("cycle-1", fresh)
+
+
+def test_touch_trigger_replaces_even_an_equal_plan_at_expiry() -> None:
+    bar = SIGNAL + 4 * TF
+    same_prices = desired_entry(source_plan_bar_open_time_ms=bar)
+    assert touch(same_prices, held(), bar=bar) == Replace("cycle-1", same_prices)
+
+
+def test_touch_trigger_cancels_at_expiry_with_a_stale_signal() -> None:
+    bar = SIGNAL + 4 * TF
+    stale = desired_entry(source_plan_bar_open_time_ms=bar - TF)
+    assert touch(stale, held(), bar=bar) == Cancel("cycle-1")
+
+
+def test_touch_trigger_zero_lifetime_is_one_bar() -> None:
+    assert touch(None, held(), bar=SIGNAL + TF, lifetime=0) == Cancel("cycle-1")
+    assert touch(None, held(), bar=SIGNAL, lifetime=0) == NoOp()
+
+
+def test_touch_trigger_first_bar_after_skipped_bars_expires() -> None:
+    bar = SIGNAL + 9 * TF
+    assert touch(None, held(), bar=bar) == Cancel("cycle-1")
+    fresh = desired_entry(source_plan_bar_open_time_ms=bar)
+    assert touch(fresh, held(), bar=bar) == Replace("cycle-1", fresh)
+
+
+def test_touch_trigger_lifetime_is_counted_from_the_held_plan_only() -> None:
+    # Counted from a 12:15 signal the lifetime would end at 12:40; the held
+    # 12:00 plan expires at 12:25.
+    later = desired_entry(source_plan_bar_open_time_ms=SIGNAL + 3 * TF)
+    assert touch(later, held(), bar=SIGNAL + 3 * TF) == NoOp()
+    bar = SIGNAL + 4 * TF
+    assert touch(None, held(), bar=bar) == Cancel("cycle-1")
 
 
 @pytest.mark.parametrize(
@@ -213,11 +286,29 @@ def test_touch_trigger_fails_closed_once_the_entry_context_is_frozen(
     new_entry: DesiredEntry | None,
 ) -> None:
     with pytest.raises(EntryReconciliationInvariantError, match="frozen"):
-        touch_trigger_entry_reconciliation(new_entry, frozen_cycle(desired_entry()))
+        touch(new_entry, frozen_cycle(desired_entry()), bar=SIGNAL + 10 * TF)
 
 
 def test_touch_trigger_rejects_invalid_input_types() -> None:
     with pytest.raises(TypeError, match="new_desired_entry must be DesiredEntry or None"):
-        touch_trigger_entry_reconciliation(cast("DesiredEntry", object()), None)
+        touch(cast("DesiredEntry", object()), None)
     with pytest.raises(TypeError, match="current_trade_cycle must be CurrentTradeCycle or None"):
-        touch_trigger_entry_reconciliation(desired_entry(), cast("CurrentTradeCycle", object()))
+        touch(desired_entry(), cast("CurrentTradeCycle", object()))
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"bar": -1}, "current_bar_open_time_ms"),
+        ({"bar": cast("int", 1.0)}, "current_bar_open_time_ms"),
+        ({"timeframe_ms": 0}, "timeframe_ms"),
+        ({"lifetime": -1}, "order_lifetime_bars"),
+        ({"lifetime": cast("int", True)}, "order_lifetime_bars"),
+        ({"lifetime": cast("int", 3.0)}, "order_lifetime_bars"),
+    ],
+)
+def test_touch_trigger_rejects_invalid_lifetime_inputs(
+    kwargs: dict[str, int], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        touch(None, held(), **kwargs)  # type: ignore[arg-type]

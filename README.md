@@ -305,8 +305,12 @@ Config file (optional):
   Key `live_entry_mode`: `ema_anchor` (default) or `touch_trigger`. Unset path, missing file or missing key mean
   `ema_anchor`; an unknown key or value or a broken file stops Runtime at start. To switch, edit the file and restart the
   container. The mode is used only by entry reconciliation: `ema_anchor` reconciles the order with every Engine
-  projection (Cancel on null, Replace on a changed plan); `touch_trigger` applies the first plan and then holds it,
-  ignoring later projections. The held order has no expiry yet: do not enable `touch_trigger` on a trading stack.
+  projection (Cancel on null, Replace on a changed plan); `touch_trigger` applies the first plan, holds it, and ends it
+  when its lifetime is over.
+  Key `order_lifetime_bars` (integer `N >= 0`): required in `touch_trigger`, optional and unused in `ema_anchor`; a
+  missing or invalid value in `touch_trigger` stops Runtime at start. The order is live `N + 1` bars: it expires on the
+  bar whose close reaches `signal bar open + (N + 2) × timeframe`; then Runtime cancels it (Engine returned nothing) or
+  replaces it with the plan the Engine returned for that bar.
 
 Все base URLs и timeouts обязательны для ready application. Host, port, specs path, journal path и state path имеют локальные defaults; queue capacity обязательна.
 

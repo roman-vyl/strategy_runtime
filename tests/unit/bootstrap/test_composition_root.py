@@ -484,7 +484,7 @@ def test_ready_application_wires_the_chart_layers_route(tmp_path: Path) -> None:
     ("config_text", "expected_mode"),
     [
         (None, "ema_anchor"),
-        ('live_entry_mode = "touch_trigger"\n', "touch_trigger"),
+        ('live_entry_mode = "touch_trigger"\norder_lifetime_bars = 3\n', "touch_trigger"),
     ],
 )
 def test_live_entry_mode_reaches_only_entry_reconciliation(
@@ -511,4 +511,10 @@ def test_live_entry_mode_reaches_only_entry_reconciliation(
     build_application(environ)
 
     assert reconciliation_kwargs["live_entry_mode"] == expected_mode
-    assert all("live_entry_mode" not in kwargs for kwargs in other_kwargs)
+    assert reconciliation_kwargs["order_lifetime_bars"] == (
+        3 if expected_mode == "touch_trigger" else None
+    )
+    assert all(
+        "live_entry_mode" not in kwargs and "order_lifetime_bars" not in kwargs
+        for kwargs in other_kwargs
+    )

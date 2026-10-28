@@ -28,9 +28,11 @@ class RuntimeConfig:
     abi_entry_package_timeout_seconds: float = 0.0
     abi_position_management_timeout_seconds: float = 0.0
     committed_bar_queue_capacity: int = 0
-    # Read once at start from the optional RUNTIME_CONFIG_PATH file; no Runtime
-    # behaviour depends on it yet (runtime-live-entry-mode-config-v1).
+    # Read once at start from the optional RUNTIME_CONFIG_PATH file; used only by
+    # entry reconciliation. The lifetime is required in touch_trigger and unused
+    # in ema_anchor.
     live_entry_mode: LiveEntryMode = "ema_anchor"
+    order_lifetime_bars: int | None = None
 
     def __post_init__(self) -> None:
         if not self.host.strip():
@@ -48,3 +50,11 @@ class RuntimeConfig:
             raise ValueError("RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY must be a positive integer")
         if self.live_entry_mode not in LIVE_ENTRY_MODES:
             raise ValueError(f"live_entry_mode must be one of {', '.join(LIVE_ENTRY_MODES)}")
+        lifetime = self.order_lifetime_bars
+        if lifetime is None:
+            if self.live_entry_mode == "touch_trigger":
+                raise ValueError(
+                    "order_lifetime_bars is required when live_entry_mode is touch_trigger"
+                )
+        elif type(lifetime) is not int or lifetime < 0:
+            raise ValueError("order_lifetime_bars must be an integer >= 0")

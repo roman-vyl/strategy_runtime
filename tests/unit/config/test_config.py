@@ -239,7 +239,8 @@ def test_live_entry_mode_defaults_when_key_is_missing(tmp_path: Path) -> None:
 @pytest.mark.parametrize("mode", ["ema_anchor", "touch_trigger"])
 def test_live_entry_mode_from_config_file(tmp_path: Path, mode: str) -> None:
     path = tmp_path / "runtime.toml"
-    path.write_text(f'live_entry_mode = "{mode}"\n', encoding="utf-8")
+    lifetime = "order_lifetime_bars = 1\n" if mode == "touch_trigger" else ""
+    path.write_text(f'live_entry_mode = "{mode}"\n{lifetime}', encoding="utf-8")
     env = {**_REQUIRED_OUTBOUND_ENV, "RUNTIME_CONFIG_PATH": str(path)}
     assert load_runtime_config(env).live_entry_mode == mode
 
@@ -264,3 +265,54 @@ def test_invalid_config_file_refuses_to_load(tmp_path: Path, content: str, messa
 def test_runtime_config_rejects_unknown_live_entry_mode() -> None:
     with pytest.raises(ValueError, match="live_entry_mode must be one of"):
         RuntimeConfig(committed_bar_queue_capacity=1, live_entry_mode="close")  # type: ignore[arg-type]
+
+
+def _load_with_file(tmp_path: Path, content: str) -> RuntimeConfig:
+    path = tmp_path / "runtime.toml"
+    path.write_text(content, encoding="utf-8")
+    return load_runtime_config({**_REQUIRED_OUTBOUND_ENV, "RUNTIME_CONFIG_PATH": str(path)})
+
+
+@pytest.mark.parametrize("lifetime", [0, 3])
+def test_touch_trigger_reads_order_lifetime_bars(tmp_path: Path, lifetime: int) -> None:
+    config = _load_with_file(
+        tmp_path, f'live_entry_mode = "touch_trigger"\norder_lifetime_bars = {lifetime}\n'
+    )
+    assert config.order_lifetime_bars == lifetime
+
+
+@pytest.mark.parametrize(
+    ("line", "message"),
+    [
+        ("", "order_lifetime_bars is required"),
+        ("order_lifetime_bars = -1\n", "order_lifetime_bars must be an integer >= 0"),
+        ("order_lifetime_bars = 3.0\n", "order_lifetime_bars must be an integer >= 0"),
+        ("order_lifetime_bars = true\n", "order_lifetime_bars must be an integer >= 0"),
+        ('order_lifetime_bars = "3"\n', "order_lifetime_bars must be an integer >= 0"),
+    ],
+)
+def test_touch_trigger_refuses_start_without_a_valid_lifetime(
+    tmp_path: Path, line: str, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _load_with_file(tmp_path, f'live_entry_mode = "touch_trigger"\n{line}')
+
+
+def test_ema_anchor_lifetime_is_optional(tmp_path: Path) -> None:
+    assert _load_with_file(tmp_path, 'live_entry_mode = "ema_anchor"\n').order_lifetime_bars is None
+    with_key = _load_with_file(
+        tmp_path, 'live_entry_mode = "ema_anchor"\norder_lifetime_bars = 2\n'
+    )
+    assert with_key.order_lifetime_bars == 2
+    with pytest.raises(ValueError, match="order_lifetime_bars must be an integer >= 0"):
+        _load_with_file(tmp_path, 'live_entry_mode = "ema_anchor"\norder_lifetime_bars = -1\n')
+
+
+@pytest.mark.parametrize("lifetime", [None, -1, True])
+def test_runtime_config_rejects_touch_trigger_without_a_valid_lifetime(lifetime: object) -> None:
+    with pytest.raises(ValueError, match="order_lifetime_bars"):
+        RuntimeConfig(
+            committed_bar_queue_capacity=1,
+            live_entry_mode="touch_trigger",
+            order_lifetime_bars=lifetime,  # type: ignore[arg-type]
+        )

@@ -8,7 +8,7 @@ from typing import Any, cast
 
 from strategy_runtime.config.model import LIVE_ENTRY_MODES, LiveEntryMode, RuntimeConfig
 
-_CONFIG_FILE_KEYS = frozenset({"live_entry_mode"})
+_CONFIG_FILE_KEYS = frozenset({"live_entry_mode", "order_lifetime_bars"})
 
 
 def load_runtime_config(environ: Mapping[str, str] | None = None) -> RuntimeConfig:
@@ -59,6 +59,7 @@ def load_runtime_config(environ: Mapping[str, str] | None = None) -> RuntimeConf
         abi_position_management_timeout_seconds=abi_position_management_timeout_seconds,
         committed_bar_queue_capacity=committed_bar_queue_capacity,
         live_entry_mode=_live_entry_mode(config_file),
+        order_lifetime_bars=_order_lifetime_bars(config_file),
     )
 
 
@@ -85,6 +86,16 @@ def _live_entry_mode(config: Mapping[str, Any]) -> LiveEntryMode:
     if value not in LIVE_ENTRY_MODES:
         raise ValueError(f"live_entry_mode must be one of {', '.join(LIVE_ENTRY_MODES)}")
     return cast(LiveEntryMode, value)
+
+
+def _order_lifetime_bars(config: Mapping[str, Any]) -> int | None:
+    value = config.get("order_lifetime_bars")
+    if value is None:
+        return None
+    # TOML gives int, float, bool or str; only a non-negative int is a bar count.
+    if type(value) is not int or value < 0:
+        raise ValueError("order_lifetime_bars must be an integer >= 0")
+    return value
 
 
 def _require_text(values: Mapping[str, str], name: str) -> str:

@@ -40,6 +40,7 @@ def test_application_package_has_only_approved_direct_dependencies() -> None:
         "strategy_runtime.runtime.state.identity",
         "strategy_runtime.runtime.state.models",
         "strategy_runtime.runtime.state.repository",
+        "strategy_runtime.runtime.timeframe",
     )
 
     assert all(
