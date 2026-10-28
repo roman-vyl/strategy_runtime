@@ -16,6 +16,7 @@ from strategy_runtime.runtime.entry_reconciliation.reconciliation import (
     decide_entry_reconciliation,
     desired_entries_equivalent,
     get_acknowledged_desired_entry,
+    touch_trigger_entry_reconciliation,
 )
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
 from strategy_runtime.runtime.state.models import (
@@ -175,3 +176,48 @@ def test_changed_desired_entry_carries_the_new_entry_unchanged() -> None:
 
     assert type(decision) is Replace
     assert decision.desired_entry is changed
+
+
+@pytest.mark.parametrize(
+    ("new_entry", "current_cycle", "expected"),
+    [
+        (None, None, NoOp()),
+        (desired_entry(), None, Apply(desired_entry())),
+        (None, cycle(desired_entry()), NoOp()),
+        (desired_entry(), cycle(desired_entry()), NoOp()),
+        (desired_entry(planned_entry_price="101"), cycle(desired_entry()), NoOp()),
+        (
+            desired_entry(side="short", source_plan_bar_open_time_ms=1_200),
+            cycle(desired_entry()),
+            NoOp(),
+        ),
+    ],
+)
+def test_touch_trigger_applies_once_then_holds_the_acknowledged_entry(
+    new_entry: DesiredEntry | None,
+    current_cycle: CurrentTradeCycle | None,
+    expected: object,
+) -> None:
+    assert touch_trigger_entry_reconciliation(new_entry, current_cycle) == expected
+
+
+@pytest.mark.parametrize(
+    "new_entry",
+    [
+        desired_entry(),
+        desired_entry(planned_entry_price="101"),
+        None,
+    ],
+)
+def test_touch_trigger_fails_closed_once_the_entry_context_is_frozen(
+    new_entry: DesiredEntry | None,
+) -> None:
+    with pytest.raises(EntryReconciliationInvariantError, match="frozen"):
+        touch_trigger_entry_reconciliation(new_entry, frozen_cycle(desired_entry()))
+
+
+def test_touch_trigger_rejects_invalid_input_types() -> None:
+    with pytest.raises(TypeError, match="new_desired_entry must be DesiredEntry or None"):
+        touch_trigger_entry_reconciliation(cast("DesiredEntry", object()), None)
+    with pytest.raises(TypeError, match="current_trade_cycle must be CurrentTradeCycle or None"):
+        touch_trigger_entry_reconciliation(desired_entry(), cast("CurrentTradeCycle", object()))

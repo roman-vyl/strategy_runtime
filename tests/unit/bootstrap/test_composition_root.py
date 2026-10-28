@@ -478,3 +478,37 @@ def test_ready_application_wires_the_chart_layers_route(tmp_path: Path) -> None:
 
     assert app.state.ready is True
     assert app.state.get_chart_layers is not None
+
+
+@pytest.mark.parametrize(
+    ("config_text", "expected_mode"),
+    [
+        (None, "ema_anchor"),
+        ('live_entry_mode = "touch_trigger"\n', "touch_trigger"),
+    ],
+)
+def test_live_entry_mode_reaches_only_entry_reconciliation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_text: str | None,
+    expected_mode: str,
+) -> None:
+    environ = _valid_environ(tmp_path)
+    if config_text is not None:
+        config_path = tmp_path / "runtime.toml"
+        config_path.write_text(config_text, encoding="utf-8")
+        environ["RUNTIME_CONFIG_PATH"] = str(config_path)
+    reconciliation_kwargs = _record_kwargs(monkeypatch, "EntryReconciliationOrchestrator")
+    other_kwargs = [
+        _record_kwargs(monkeypatch, name)
+        for name in (
+            "StrategyRuntimeOrchestrator",
+            "StrategyUseCaseRouter",
+            "PositionManagementOrchestrator",
+        )
+    ]
+
+    build_application(environ)
+
+    assert reconciliation_kwargs["live_entry_mode"] == expected_mode
+    assert all("live_entry_mode" not in kwargs for kwargs in other_kwargs)

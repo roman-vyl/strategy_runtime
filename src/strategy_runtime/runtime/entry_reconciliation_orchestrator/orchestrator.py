@@ -1,6 +1,7 @@
 """Application sequencing for desired-entry reconciliation."""
 
 from dataclasses import replace
+from typing import Literal
 
 from strategy_runtime.runtime.entry_reconciliation import (
     Apply,
@@ -15,6 +16,7 @@ from strategy_runtime.runtime.entry_reconciliation import (
     apply_success_confirmation,
     build_entry_reconciliation_command,
     decide_entry_reconciliation,
+    touch_trigger_entry_reconciliation,
 )
 from strategy_runtime.runtime.entry_reconciliation_orchestrator.ports import (
     EntryAppliedJournalPort,
@@ -25,6 +27,9 @@ from strategy_runtime.runtime.routing.models import LiveEntryProjectedStrategyIn
 from strategy_runtime.runtime.state.identity import TradeCycleIdFactory
 from strategy_runtime.runtime.state.models import PendingEntryRecovery, StrategyInstanceRuntimeState
 from strategy_runtime.runtime.state.repository import StrategyInstanceRuntimeStateRepository
+
+LiveEntryMode = Literal["ema_anchor", "touch_trigger"]
+_LIVE_ENTRY_MODES: tuple[LiveEntryMode, ...] = ("ema_anchor", "touch_trigger")
 
 
 class EntryReconciliationOrchestrator:
@@ -37,12 +42,16 @@ class EntryReconciliationOrchestrator:
         state_repository: StrategyInstanceRuntimeStateRepository,
         entry_applied_journal: EntryAppliedJournalPort | None = None,
         entry_declined_journal: EntryDeclinedJournalPort | None = None,
+        live_entry_mode: LiveEntryMode = "ema_anchor",
     ) -> None:
+        if live_entry_mode not in _LIVE_ENTRY_MODES:
+            raise ValueError(f"live_entry_mode must be one of {', '.join(_LIVE_ENTRY_MODES)}")
         self._trade_cycle_id_factory = trade_cycle_id_factory
         self._execution_port = execution_port
         self._state_repository = state_repository
         self._entry_applied_journal = entry_applied_journal
         self._entry_declined_journal = entry_declined_journal
+        self._live_entry_mode = live_entry_mode
 
     def execute(
         self,
@@ -50,7 +59,13 @@ class EntryReconciliationOrchestrator:
     ) -> StrategyInstanceRuntimeState:
         """Return unchanged source state or one confirmed replacement aggregate."""
         source_state = projection.source.resolved_state.runtime_state
-        decision = decide_entry_reconciliation(
+        # The mode selects only the pure decision; everything after it is shared.
+        decide = (
+            touch_trigger_entry_reconciliation
+            if self._live_entry_mode == "touch_trigger"
+            else decide_entry_reconciliation
+        )
+        decision = decide(
             projection.desired_entry,
             source_state.current_trade_cycle,
         )

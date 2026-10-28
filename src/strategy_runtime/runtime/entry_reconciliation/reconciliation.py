@@ -58,3 +58,24 @@ def decide_entry_reconciliation(
     if desired_entries_equivalent(new_desired_entry, acknowledged_desired_entry):
         return NoOp()
     return Replace(current_trade_cycle.trade_cycle_id, new_desired_entry)
+
+
+def touch_trigger_entry_reconciliation(
+    new_desired_entry: DesiredEntry | None,
+    current_trade_cycle: CurrentTradeCycle | None,
+) -> EntryReconciliationDecision:
+    """Apply the first desired entry, then hold it whatever the Engine projects."""
+    if new_desired_entry is not None and type(new_desired_entry) is not DesiredEntry:
+        raise TypeError("new_desired_entry must be DesiredEntry or None")
+    if current_trade_cycle is not None and type(current_trade_cycle) is not CurrentTradeCycle:
+        raise TypeError("current_trade_cycle must be CurrentTradeCycle or None")
+    if current_trade_cycle is not None and current_trade_cycle.frozen_entry_context is not None:
+        raise EntryReconciliationInvariantError(
+            "entry reconciliation is fail-closed once the trade cycle's entry is frozen"
+        )
+
+    if get_acknowledged_desired_entry(current_trade_cycle) is not None:
+        return NoOp()
+    if new_desired_entry is None:
+        return NoOp()
+    return Apply(new_desired_entry)
