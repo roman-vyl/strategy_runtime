@@ -23,6 +23,7 @@ from strategy_runtime.runtime.entry_reconciliation.reconciliation import (
     decide_entry_reconciliation,
     desired_entries_equivalent,
     get_acknowledged_desired_entry,
+    touch_trigger_entry_reconciliation,
 )
 from strategy_runtime.runtime.entry_reconciliation.state_applier import (
     apply_success_confirmation,
@@ -46,4 +47,5 @@ __all__ = (
     "decide_entry_reconciliation",
     "desired_entries_equivalent",
     "get_acknowledged_desired_entry",
+    "touch_trigger_entry_reconciliation",
 )

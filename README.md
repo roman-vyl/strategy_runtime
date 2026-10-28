@@ -304,7 +304,9 @@ Config file (optional):
 - `RUNTIME_CONFIG_PATH` — TOML file, read once at start ([`config/runtime.toml.example`](config/runtime.toml.example)).
   Key `live_entry_mode`: `ema_anchor` (default) or `touch_trigger`. Unset path, missing file or missing key mean
   `ema_anchor`; an unknown key or value or a broken file stops Runtime at start. To switch, edit the file and restart the
-  container. The mode is kept in the Runtime configuration; no Runtime behaviour depends on it yet.
+  container. The mode is used only by entry reconciliation: `ema_anchor` reconciles the order with every Engine
+  projection (Cancel on null, Replace on a changed plan); `touch_trigger` applies the first plan and then holds it,
+  ignoring later projections. The held order has no expiry yet: do not enable `touch_trigger` on a trading stack.
 
 Все base URLs и timeouts обязательны для ready application. Host, port, specs path, journal path и state path имеют локальные defaults; queue capacity обязательна.
 

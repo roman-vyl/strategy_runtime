@@ -1,6 +1,6 @@
 from dataclasses import fields, replace
 from inspect import signature
-from typing import cast
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
@@ -1089,3 +1089,116 @@ def test_applied_and_absent_write_no_declined_event() -> None:
         entry_declined_journal=journal,
     ).execute(projection(source_state, desired_entry(price="105")))
     assert journal.calls == []
+
+
+@pytest.mark.parametrize(
+    "projected",
+    [
+        None,
+        desired_entry(),
+        desired_entry(price="101"),
+        desired_entry(side="short"),
+    ],
+)
+def test_touch_trigger_holds_the_acknowledged_entry_without_any_side_effect(
+    projected: DesiredEntry | None,
+) -> None:
+    acknowledged = desired_entry()
+    repository, source_state = seeded_recording_repository(acknowledged)
+    snapshot = replace(source_state)
+    id_factory = RecordingIdFactory()
+    execution_port = FakeExecutionPort(object())
+
+    with patch(
+        f"{ORCHESTRATOR_MODULE}.build_entry_reconciliation_command",
+        side_effect=AssertionError("a held entry must not build a command"),
+    ) as builder:
+        result = EntryReconciliationOrchestrator(
+            id_factory,
+            execution_port,
+            repository,
+            live_entry_mode="touch_trigger",
+        ).execute(projection(source_state, projected))
+
+    assert result == snapshot
+    assert result.current_trade_cycle == CurrentTradeCycle(
+        "cycle-1", AppliedEntryPackage(acknowledged, "0.01")
+    )
+    assert result.pending_entry_recovery is None
+    assert id_factory.calls == 0
+    assert execution_port.calls == []
+    assert repository.saved == []
+    builder.assert_not_called()
+
+
+def test_touch_trigger_first_entry_is_applied_through_the_shared_path() -> None:
+    repository, source_state = seeded_repository()
+    new_entry = desired_entry()
+    id_factory = RecordingIdFactory("cycle-new")
+    execution_port = FakeExecutionPort(replace_applied_confirmation(new_entry))
+
+    result = EntryReconciliationOrchestrator(
+        id_factory,
+        execution_port,
+        repository,
+        live_entry_mode="touch_trigger",
+    ).execute(projection(source_state, new_entry))
+
+    assert id_factory.calls == 1
+    assert [(c.trade_cycle_id, c.desired_entry) for c, _ in execution_port.calls] == [
+        ("cycle-new", new_entry)
+    ]
+    assert result.current_trade_cycle == CurrentTradeCycle(
+        "cycle-new", AppliedEntryPackage(new_entry, "0.02")
+    )
+    assert result.pending_entry_recovery is None
+
+
+@pytest.mark.parametrize("mode", [None, "ema_anchor"])
+def test_ema_anchor_still_cancels_a_null_projection(mode: str | None) -> None:
+    kwargs: dict[str, Any] = {} if mode is None else {"live_entry_mode": mode}
+    repository, source_state = seeded_recording_repository(desired_entry())
+    execution_port = FakeExecutionPort(EntryAbsentConfirmation("instance", "cycle-1"))
+
+    result = EntryReconciliationOrchestrator(
+        RecordingIdFactory(), execution_port, repository, **kwargs
+    ).execute(projection(source_state, None))
+
+    assert [(c.trade_cycle_id, c.desired_entry) for c, _ in execution_port.calls] == [
+        ("cycle-1", None)
+    ]
+    assert result.current_trade_cycle is None
+
+
+@pytest.mark.parametrize("mode", [None, "ema_anchor"])
+def test_ema_anchor_still_replaces_a_changed_projection(mode: str | None) -> None:
+    kwargs: dict[str, Any] = {} if mode is None else {"live_entry_mode": mode}
+    updated = desired_entry(price="101")
+    repository, source_state = seeded_recording_repository(desired_entry())
+    execution_port = ScriptedExecutionPort(
+        EntryAbsentConfirmation("instance", "cycle-1"),
+        replace_applied_confirmation(updated),
+    )
+
+    result = EntryReconciliationOrchestrator(
+        RecordingIdFactory(), execution_port, repository, **kwargs
+    ).execute(projection(source_state, updated))
+
+    assert [(c.trade_cycle_id, c.desired_entry) for c, _ in execution_port.calls] == [
+        ("cycle-1", None),
+        ("cycle-new", updated),
+    ]
+    assert result.current_trade_cycle == CurrentTradeCycle(
+        "cycle-new", AppliedEntryPackage(updated, "0.02")
+    )
+
+
+def test_invalid_live_entry_mode_is_rejected_at_construction() -> None:
+    repository, _ = seeded_repository()
+    with pytest.raises(ValueError, match="live_entry_mode must be one of"):
+        EntryReconciliationOrchestrator(
+            RecordingIdFactory(),
+            FakeExecutionPort(object()),
+            repository,
+            live_entry_mode=cast("Any", "close"),
+        )

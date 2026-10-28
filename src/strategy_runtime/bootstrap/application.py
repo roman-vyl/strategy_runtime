@@ -211,6 +211,7 @@ def build_application(
             state_repository,
             entry_applied_journal=journal,
             entry_declined_journal=journal,
+            live_entry_mode=config.live_entry_mode,
         )
         position_management_orchestrator = PositionManagementOrchestrator(
             execution_port=position_management_client,
