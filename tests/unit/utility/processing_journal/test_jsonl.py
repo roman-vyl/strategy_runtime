@@ -415,3 +415,48 @@ def test_entry_package_declined_failure_is_absorbed(
     )
 
     assert journal.failure_count == 1
+
+
+@pytest.mark.parametrize(("bar", "reason"), [(1000, "cancelled"), (None, "disabled")])
+def test_entry_cycle_ended_serializes_its_payload(
+    tmp_path: Path, bar: int | None, reason: str
+) -> None:
+    path = tmp_path / "runtime.jsonl"
+    journal = make_journal(path)
+
+    journal.entry_cycle_ended(
+        strategy_instance_id="dep-a",
+        trade_cycle_id="cycle-1",
+        bar_open_time_ms=bar,
+        reason=reason,
+    )
+
+    record = json.loads(path.read_text())
+    assert record["event_type"] == "entry_cycle_ended"
+    assert record["schema_version"] == 2
+    assert record["severity"] == "info"
+    assert record["strategy_instance_id"] == "dep-a"
+    assert record["payload"] == {
+        "trade_cycle_id": "cycle-1",
+        "bar_open_time_ms": bar,
+        "reason": reason,
+    }
+
+
+def test_entry_cycle_ended_failure_is_absorbed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken_fsync(fd: int) -> None:
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(os, "fsync", broken_fsync)
+    journal = make_journal(tmp_path / "runtime.jsonl")
+
+    journal.entry_cycle_ended(
+        strategy_instance_id="dep-a",
+        trade_cycle_id="cycle-1",
+        bar_open_time_ms=1000,
+        reason="cancelled",
+    )
+
+    assert journal.failure_count == 1

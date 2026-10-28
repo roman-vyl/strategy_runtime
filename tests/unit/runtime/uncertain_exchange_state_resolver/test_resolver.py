@@ -163,11 +163,20 @@ class _OpenedJournal:
         self.records.append(fields)
 
 
+class _EndedJournal:
+    def __init__(self) -> None:
+        self.records: list[dict[str, object]] = []
+
+    def entry_cycle_ended(self, **fields: object) -> None:
+        self.records.append(fields)
+
+
 def _make_resolver(
     repository: InMemoryStrategyInstanceRuntimeStateRepository,
     port: FakeAbiEntryCycleRecoveryPort,
     position_management_execution: FakePositionManagementExecutionPort | None = None,
     opened_journal: _OpenedJournal | None = None,
+    ended_journal: _EndedJournal | None = None,
 ) -> UncertainExchangeStateResolver:
     return UncertainExchangeStateResolver(
         state_repository=repository,
@@ -179,6 +188,7 @@ def _make_resolver(
             else FakePositionManagementExecutionPort()
         ),  # type: ignore[arg-type]
         trade_cycle_opened_journal=opened_journal,  # type: ignore[arg-type]
+        entry_cycle_ended_journal=ended_journal,  # type: ignore[arg-type]
     )
 
 
@@ -925,3 +935,102 @@ def test_attempt_holds_the_mutex_for_close_recovery_too() -> None:
 
     assert observed_locked == [True]
     assert _is_key_locked(registry, _SID) is False
+
+
+# ---------------------------------------------------------------------------
+# `entry_cycle_ended`: an entry attempt that ended without a fill is journaled
+# after the save, with a null bar; a cycle that did fill is not.
+# ---------------------------------------------------------------------------
+
+
+def _ended(cycle_id: str, reason: str) -> dict[str, object]:
+    return {
+        "strategy_instance_id": _SID,
+        "trade_cycle_id": cycle_id,
+        "bar_open_time_ms": None,
+        "reason": reason,
+    }
+
+
+def test_uncertain_apply_terminal_without_fill_journals_the_ended_attempt() -> None:
+    repository, _ = _repository_with_state(
+        current_trade_cycle=None, pending_entry_recovery=PendingEntryRecovery("cycle-new")
+    )
+    journal = _EndedJournal()
+    port = FakeAbiEntryCycleRecoveryPort(query_result=TerminalWithoutFillRecoveryState())
+
+    _make_resolver(repository, port, ended_journal=journal).attempt(_SID)
+
+    assert journal.records == [_ended("cycle-new", "terminal_without_fill")]
+
+
+def test_uncertain_removal_terminal_without_fill_journals_the_removed_cycle() -> None:
+    repository, _ = _repository_with_state(
+        current_trade_cycle=_existing_cycle(),
+        pending_entry_recovery=PendingEntryRecovery("cycle-1"),
+    )
+    journal = _EndedJournal()
+    port = FakeAbiEntryCycleRecoveryPort(query_result=TerminalWithoutFillRecoveryState())
+
+    _make_resolver(repository, port, ended_journal=journal).attempt(_SID)
+
+    assert journal.records == [_ended("cycle-1", "terminal_without_fill")]
+
+
+def test_terminal_after_fill_journals_no_ended_cycle() -> None:
+    for current, marker in ((None, "cycle-new"), (_existing_cycle(), "cycle-1")):
+        repository, _ = _repository_with_state(
+            current_trade_cycle=current, pending_entry_recovery=PendingEntryRecovery(marker)
+        )
+        journal = _EndedJournal()
+        port = FakeAbiEntryCycleRecoveryPort(query_result=TerminalAfterFillRecoveryState())
+
+        _make_resolver(repository, port, ended_journal=journal).attempt(_SID)
+
+        assert journal.records == []
+
+
+def test_exact_absence_after_the_corrective_cancel_journals_the_ended_attempt() -> None:
+    repository, _ = _repository_with_state(
+        current_trade_cycle=None, pending_entry_recovery=PendingEntryRecovery("cycle-new")
+    )
+    journal = _EndedJournal()
+    port = FakeAbiEntryCycleRecoveryPort(
+        query_result=EntryOrderNotFoundRecoveryState(),
+        cancel_result=EntryPackageAbsent(_SID, "cycle-new"),
+    )
+
+    _make_resolver(repository, port, ended_journal=journal).attempt(_SID)
+
+    assert journal.records == [_ended("cycle-new", "exact_absent")]
+
+
+def test_removal_with_a_live_order_and_exact_absence_journals_the_ended_cycle() -> None:
+    repository, _ = _repository_with_state(
+        current_trade_cycle=_existing_cycle(),
+        pending_entry_recovery=PendingEntryRecovery("cycle-1"),
+    )
+    journal = _EndedJournal()
+    port = FakeAbiEntryCycleRecoveryPort(
+        query_result=EntryOrderLiveRecoveryState(applied_entry_package=applied_entry_package()),
+        cancel_result=EntryPackageAbsent(_SID, "cycle-1"),
+    )
+
+    _make_resolver(repository, port, ended_journal=journal).attempt(_SID)
+
+    assert journal.records == [_ended("cycle-1", "exact_absent")]
+
+
+def test_no_ended_cycle_is_journaled_when_the_marker_stays() -> None:
+    repository, _ = _repository_with_state(
+        current_trade_cycle=None, pending_entry_recovery=PendingEntryRecovery("cycle-new")
+    )
+    journal = _EndedJournal()
+    port = FakeAbiEntryCycleRecoveryPort(
+        query_result=EntryOrderNotFoundRecoveryState(),
+        cancel_result=EntryPackageAbsent("other-instance", "cycle-new"),
+    )
+
+    _make_resolver(repository, port, ended_journal=journal).attempt(_SID)
+
+    assert journal.records == []

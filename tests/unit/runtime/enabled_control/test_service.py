@@ -1,5 +1,6 @@
 """`StrategyEnabledControlService`: the disable decision table and the write-last order."""
 
+import contextlib
 import json
 import threading
 from dataclasses import replace
@@ -137,6 +138,7 @@ class Env:
         pending_close: bool = False,
         resolver: FakeResolver | None = None,
         recovery: FakeRecovery | None = None,
+        journal: Any = None,
     ) -> None:
         self.directory = tmp_path
         self.path = tmp_path / "a.json"
@@ -189,6 +191,7 @@ class Env:
             abi_entry_cycle_recovery=self.recovery,
             keyed_mutex_registry=self.registry,
             mutex_wait_seconds=0.05,
+            entry_cycle_ended_journal=journal,
         )
 
     @property
@@ -198,6 +201,52 @@ class Env:
     @property
     def state(self) -> StrategyInstanceRuntimeState | None:
         return self.repository.get(SID)
+
+
+class FakeEndedJournal:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def entry_cycle_ended(self, **fields: object) -> None:
+        self.calls.append(fields)
+
+
+def test_disable_that_cancels_the_entry_order_journals_the_ended_cycle(tmp_path: Path) -> None:
+    journal = FakeEndedJournal()
+    env = Env(tmp_path, with_state=True, cycle=True, journal=journal)
+
+    env.service.set_enabled(SID, False)
+
+    assert journal.calls == [
+        {
+            "strategy_instance_id": SID,
+            "trade_cycle_id": CYCLE_ID,
+            "bar_open_time_ms": None,
+            "reason": "disabled",
+        }
+    ]
+    assert env.state is not None and env.state.current_trade_cycle is None
+
+
+@pytest.mark.parametrize(
+    "env_kwargs",
+    [
+        {"with_state": True},
+        {"with_state": True, "cycle": True, "resolver": FakeResolver(position_open=True)},
+        {"with_state": True, "cycle": True, "recovery": FakeRecovery(result=absent("other"))},
+        {"with_state": True, "cycle": True, "pending_entry": True},
+    ],
+)
+def test_disable_without_a_cancelled_entry_journals_nothing(
+    tmp_path: Path, env_kwargs: dict[str, Any]
+) -> None:
+    journal = FakeEndedJournal()
+    env = Env(tmp_path, journal=journal, **env_kwargs)
+
+    with contextlib.suppress(errors.EnabledControlRefused):
+        env.service.set_enabled(SID, False)
+
+    assert journal.calls == []
 
 
 def test_disable_with_nothing_open_writes_the_file(tmp_path: Path) -> None:

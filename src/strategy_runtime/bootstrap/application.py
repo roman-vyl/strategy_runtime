@@ -56,6 +56,7 @@ from strategy_runtime.runtime.routing.router import StrategyUseCaseRouter
 from strategy_runtime.runtime.state.identity import new_trade_cycle_id
 from strategy_runtime.runtime.state.models import StrategyInstanceRuntimeState
 from strategy_runtime.runtime.strategy_delete.service import StrategyDeleteService
+from strategy_runtime.runtime.trading_state import StrategyTradingStateService
 from strategy_runtime.runtime.uncertain_exchange_state_resolver import (
     UncertainExchangeStateResolver,
     UncertainExchangeStateResolverWorker,
@@ -226,6 +227,7 @@ def build_application(
             position_management_execution=position_management_client,
             trade_cycle_closed_journal=journal,
             trade_cycle_opened_journal=journal,
+            entry_cycle_ended_journal=journal,
         )
         strategy_runtime_orchestrator = StrategyRuntimeOrchestrator(
             state_repository=state_repository,
@@ -238,6 +240,7 @@ def build_application(
             trade_cycle_closed_journal=journal,
             trade_cycle_opened_journal=journal,
             open_trade_journal=journal,
+            entry_cycle_ended_journal=journal,
         )
         enabled_control_service = StrategyEnabledControlService(
             load_snapshot=catalog.load_snapshot,
@@ -246,6 +249,7 @@ def build_application(
             open_position_resolver=open_position_resolver,
             abi_entry_cycle_recovery=entry_cycle_recovery_client,
             keyed_mutex_registry=keyed_mutex_registry,
+            entry_cycle_ended_journal=journal,
         )
         strategy_delete_service = StrategyDeleteService(
             load_snapshot=catalog.load_snapshot,
@@ -307,6 +311,9 @@ def build_application(
             set_strategy_enabled=enabled_control_service.set_enabled,
             delete_strategy=strategy_delete_service.delete,
             get_chart_layers=chart_layers_service.get,
+            list_trading_states=StrategyTradingStateService(
+                load_snapshot=catalog.load_snapshot, state_repository=state_repository
+            ).list,
             logger=runtime_logger,
             lifespan=_lifespan,
         )

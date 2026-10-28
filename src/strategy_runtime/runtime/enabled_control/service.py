@@ -24,6 +24,7 @@ from strategy_runtime.runtime.enabled_control.errors import (
     WriteFailed,
 )
 from strategy_runtime.runtime.enabled_control.models import EnabledChangeResult
+from strategy_runtime.runtime.entry_cycle_ended import EntryCycleEndedJournalPort
 from strategy_runtime.runtime.open_position.ports import OpenPositionResolverPort
 from strategy_runtime.runtime.state.repository import StrategyInstanceRuntimeStateRepository
 from strategy_runtime.utility.deployment_catalog import (
@@ -53,6 +54,7 @@ class StrategyEnabledControlService:
         abi_entry_cycle_recovery: AbiEntryCycleRecoveryPort,
         keyed_mutex_registry: StrategyInstanceKeyedMutexRegistry,
         mutex_wait_seconds: float = DEFAULT_MUTEX_WAIT_SECONDS,
+        entry_cycle_ended_journal: EntryCycleEndedJournalPort | None = None,
     ) -> None:
         self._load_snapshot = load_snapshot
         self._enabled_writer = enabled_writer
@@ -60,6 +62,7 @@ class StrategyEnabledControlService:
             state_repository=state_repository,
             open_position_resolver=open_position_resolver,
             abi_entry_cycle_recovery=abi_entry_cycle_recovery,
+            entry_cycle_ended_journal=entry_cycle_ended_journal,
         )
         self._keyed_mutex_registry = keyed_mutex_registry
         self._mutex_wait_seconds = mutex_wait_seconds

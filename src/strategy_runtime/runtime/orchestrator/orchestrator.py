@@ -3,6 +3,11 @@
 from dataclasses import asdict, replace
 
 from strategy_runtime.runtime.coordination import StrategyInstanceKeyedMutexRegistry
+from strategy_runtime.runtime.entry_cycle_ended import (
+    CANCELLED,
+    EntryCycleEndedJournalPort,
+    journal_entry_cycle_ended,
+)
 from strategy_runtime.runtime.entry_reconciliation_orchestrator import (
     EntryReconciliationOrchestrator,
 )
@@ -64,6 +69,7 @@ class StrategyRuntimeOrchestrator:
         trade_cycle_closed_journal: TradeCycleClosedJournalPort | None = None,
         trade_cycle_opened_journal: TradeCycleOpenedJournalPort | None = None,
         open_trade_journal: OpenTradeEvaluationJournalPort | None = None,
+        entry_cycle_ended_journal: EntryCycleEndedJournalPort | None = None,
     ) -> None:
         self._state_repository = state_repository
         self._open_position_resolver = open_position_resolver
@@ -75,6 +81,7 @@ class StrategyRuntimeOrchestrator:
         self._trade_cycle_closed_journal = trade_cycle_closed_journal
         self._trade_cycle_opened_journal = trade_cycle_opened_journal
         self._open_trade_journal = open_trade_journal
+        self._entry_cycle_ended_journal = entry_cycle_ended_journal
 
     def process(
         self, unit: StrategyBarProcessingUnit[DeploymentSpecification]
@@ -138,7 +145,29 @@ class StrategyRuntimeOrchestrator:
                 journal_trade_cycle_closed(
                     self._trade_cycle_closed_journal, closure, unit.committed_bar.open_time_ms
                 )
+            self._journal_entry_cycle_ended(source_state, saved_state, unit)
             return saved_state
+
+    def _journal_entry_cycle_ended(
+        self,
+        source_state: StrategyInstanceRuntimeState,
+        saved_state: StrategyInstanceRuntimeState,
+        unit: StrategyBarProcessingUnit[DeploymentSpecification],
+    ) -> None:
+        """An entry cycle that never filled is gone from the saved state of this bar."""
+        source_cycle = source_state.current_trade_cycle
+        if source_cycle is None or source_cycle.frozen_entry_context is not None:
+            return
+        saved_cycle = saved_state.current_trade_cycle
+        if saved_cycle is not None and saved_cycle.trade_cycle_id == source_cycle.trade_cycle_id:
+            return
+        journal_entry_cycle_ended(
+            self._entry_cycle_ended_journal,
+            strategy_instance_id=unit.strategy_instance_id,
+            trade_cycle_id=source_cycle.trade_cycle_id,
+            bar_open_time_ms=unit.committed_bar.open_time_ms,
+            reason=CANCELLED,
+        )
 
     def dispatch(
         self, unit: StrategyBarProcessingUnit[DeploymentSpecification]

@@ -200,6 +200,25 @@ class JsonlProcessingJournal:
             },
         )
 
+    def entry_cycle_ended(
+        self,
+        *,
+        strategy_instance_id: str,
+        trade_cycle_id: str,
+        bar_open_time_ms: int | None,
+        reason: str,
+    ) -> None:
+        self._record(
+            event_type=ProcessingJournalEventType.ENTRY_CYCLE_ENDED,
+            severity="info",
+            strategy_instance_id=strategy_instance_id,
+            payload={
+                "trade_cycle_id": trade_cycle_id,
+                "bar_open_time_ms": bar_open_time_ms,
+                "reason": reason,
+            },
+        )
+
     def trade_cycle_closed(
         self,
         *,
