@@ -121,6 +121,7 @@ def assert_success_schemas(schemas: dict[str, Any], operation: dict[str, Any]) -
         "oneOf": [
             {"$ref": "#/components/schemas/EntryPackageAppliedResponse"},
             {"$ref": "#/components/schemas/EntryPackageAbsentResponse"},
+            {"$ref": "#/components/schemas/EntryPackageDeclinedResponse"},
         ]
     }
 
@@ -148,6 +149,18 @@ def assert_success_schemas(schemas: dict[str, Any], operation: dict[str, Any]) -
         "status",
     }
     assert absent["properties"]["status"] == {"const": "entry_package_absent"}
+
+    declined = schemas["EntryPackageDeclinedResponse"]
+    assert declined["additionalProperties"] is False
+    assert set(declined["required"]) == {
+        "strategy_instance_id",
+        "trade_cycle_id",
+        "status",
+        "decline_reason",
+        "decline_message",
+    }
+    assert declined["properties"]["status"] == {"const": "entry_package_declined"}
+    assert declined["properties"]["decline_message"]["type"] == "string"
 
 
 def assert_error_schemas(schemas: dict[str, Any], operation: dict[str, Any]) -> None:
