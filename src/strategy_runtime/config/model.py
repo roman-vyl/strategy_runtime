@@ -2,6 +2,10 @@
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
+
+LiveEntryMode = Literal["ema_anchor", "touch_trigger"]
+LIVE_ENTRY_MODES: tuple[LiveEntryMode, ...] = ("ema_anchor", "touch_trigger")
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +28,9 @@ class RuntimeConfig:
     abi_entry_package_timeout_seconds: float = 0.0
     abi_position_management_timeout_seconds: float = 0.0
     committed_bar_queue_capacity: int = 0
+    # Read once at start from the optional RUNTIME_CONFIG_PATH file; no Runtime
+    # behaviour depends on it yet (runtime-live-entry-mode-config-v1).
+    live_entry_mode: LiveEntryMode = "ema_anchor"
 
     def __post_init__(self) -> None:
         if not self.host.strip():
@@ -39,3 +46,5 @@ class RuntimeConfig:
         capacity = self.committed_bar_queue_capacity
         if type(capacity) is not int or capacity <= 0:
             raise ValueError("RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY must be a positive integer")
+        if self.live_entry_mode not in LIVE_ENTRY_MODES:
+            raise ValueError(f"live_entry_mode must be one of {', '.join(LIVE_ENTRY_MODES)}")
