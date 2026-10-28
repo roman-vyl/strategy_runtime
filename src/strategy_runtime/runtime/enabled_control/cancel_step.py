@@ -16,6 +16,11 @@ from strategy_runtime.runtime.enabled_control.errors import (
     PositionOpen,
     RecoveryPending,
 )
+from strategy_runtime.runtime.entry_cycle_ended import (
+    DISABLED,
+    EntryCycleEndedJournalPort,
+    journal_entry_cycle_ended,
+)
 from strategy_runtime.runtime.open_position.errors import OpenPositionResolutionError
 from strategy_runtime.runtime.open_position.ports import OpenPositionResolverPort
 from strategy_runtime.runtime.state.repository import StrategyInstanceRuntimeStateRepository
@@ -28,10 +33,12 @@ class EntryOrderCancelStep:
         state_repository: StrategyInstanceRuntimeStateRepository,
         open_position_resolver: OpenPositionResolverPort,
         abi_entry_cycle_recovery: AbiEntryCycleRecoveryPort,
+        entry_cycle_ended_journal: EntryCycleEndedJournalPort | None = None,
     ) -> None:
         self._state_repository = state_repository
         self._open_position_resolver = open_position_resolver
         self._abi_entry_cycle_recovery = abi_entry_cycle_recovery
+        self._entry_cycle_ended_journal = entry_cycle_ended_journal
 
     def run(self, strategy_instance_id: str) -> bool:
         """Return True when a resting entry order was cancelled and the cycle cleared."""
@@ -69,4 +76,11 @@ class EntryOrderCancelStep:
         ):
             raise CancelNotConfirmed
         self._state_repository.save(replace(state, current_trade_cycle=None))
+        journal_entry_cycle_ended(
+            self._entry_cycle_ended_journal,
+            strategy_instance_id=strategy_instance_id,
+            trade_cycle_id=cycle.trade_cycle_id,
+            bar_open_time_ms=None,
+            reason=DISABLED,
+        )
         return True
