@@ -1,0 +1,3 @@
+# Strategy Runtime settings, read once at start from RUNTIME_CONFIG_PATH.
+# Missing file or missing key = defaults. Edit and restart the container to switch.
+live_entry_mode = "ema_anchor"   # or "touch_trigger"

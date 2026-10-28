@@ -1,10 +1,14 @@
 """Environment-backed Runtime configuration loader."""
 
 import os
+import tomllib
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any, cast
 
-from strategy_runtime.config.model import RuntimeConfig
+from strategy_runtime.config.model import LIVE_ENTRY_MODES, LiveEntryMode, RuntimeConfig
+
+_CONFIG_FILE_KEYS = frozenset({"live_entry_mode"})
 
 
 def load_runtime_config(environ: Mapping[str, str] | None = None) -> RuntimeConfig:
@@ -39,6 +43,7 @@ def load_runtime_config(environ: Mapping[str, str] | None = None) -> RuntimeConf
         values, "RUNTIME_ABI_POSITION_MANAGEMENT_TIMEOUT_SECONDS"
     )
     committed_bar_queue_capacity = _require_int(values, "RUNTIME_COMMITTED_BAR_QUEUE_CAPACITY")
+    config_file = _read_config_file(values.get("RUNTIME_CONFIG_PATH", ""))
 
     return RuntimeConfig(
         host=values.get("RUNTIME_HOST", "127.0.0.1"),
@@ -53,7 +58,33 @@ def load_runtime_config(environ: Mapping[str, str] | None = None) -> RuntimeConf
         abi_entry_package_timeout_seconds=abi_entry_package_timeout_seconds,
         abi_position_management_timeout_seconds=abi_position_management_timeout_seconds,
         committed_bar_queue_capacity=committed_bar_queue_capacity,
+        live_entry_mode=_live_entry_mode(config_file),
     )
+
+
+def _read_config_file(path_text: str) -> dict[str, Any]:
+    """Read the optional TOML config file once; unset path or missing file means defaults."""
+    if not path_text.strip():
+        return {}
+    path = Path(path_text)
+    if not path.is_file():
+        return {}
+    try:
+        with path.open("rb") as handle:
+            data = tomllib.load(handle)
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"RUNTIME_CONFIG_PATH file {path} is not valid TOML: {exc}") from exc
+    unknown = sorted(set(data) - _CONFIG_FILE_KEYS)
+    if unknown:
+        raise ValueError(f"RUNTIME_CONFIG_PATH file {path} has unknown keys: {', '.join(unknown)}")
+    return data
+
+
+def _live_entry_mode(config: Mapping[str, Any]) -> LiveEntryMode:
+    value = config.get("live_entry_mode", "ema_anchor")
+    if value not in LIVE_ENTRY_MODES:
+        raise ValueError(f"live_entry_mode must be one of {', '.join(LIVE_ENTRY_MODES)}")
+    return cast(LiveEntryMode, value)
 
 
 def _require_text(values: Mapping[str, str], name: str) -> str:

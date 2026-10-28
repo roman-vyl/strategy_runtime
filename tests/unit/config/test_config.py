@@ -218,3 +218,49 @@ def test_canonical_runtime_env_example_is_a_valid_ready_configuration() -> None:
     config = load_runtime_config(env)
 
     assert config.committed_bar_queue_capacity == 256
+
+
+def test_live_entry_mode_defaults_without_config_path() -> None:
+    assert load_runtime_config(dict(_REQUIRED_OUTBOUND_ENV)).live_entry_mode == "ema_anchor"
+
+
+def test_live_entry_mode_defaults_when_config_file_is_missing(tmp_path: Path) -> None:
+    env = {**_REQUIRED_OUTBOUND_ENV, "RUNTIME_CONFIG_PATH": str(tmp_path / "runtime.toml")}
+    assert load_runtime_config(env).live_entry_mode == "ema_anchor"
+
+
+def test_live_entry_mode_defaults_when_key_is_missing(tmp_path: Path) -> None:
+    path = tmp_path / "runtime.toml"
+    path.write_text("", encoding="utf-8")
+    env = {**_REQUIRED_OUTBOUND_ENV, "RUNTIME_CONFIG_PATH": str(path)}
+    assert load_runtime_config(env).live_entry_mode == "ema_anchor"
+
+
+@pytest.mark.parametrize("mode", ["ema_anchor", "touch_trigger"])
+def test_live_entry_mode_from_config_file(tmp_path: Path, mode: str) -> None:
+    path = tmp_path / "runtime.toml"
+    path.write_text(f'live_entry_mode = "{mode}"\n', encoding="utf-8")
+    env = {**_REQUIRED_OUTBOUND_ENV, "RUNTIME_CONFIG_PATH": str(path)}
+    assert load_runtime_config(env).live_entry_mode == mode
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        ('live_entry_mode = "close"\n', "live_entry_mode must be one of"),
+        ("live_entry_mode = 1\n", "live_entry_mode must be one of"),
+        ('live_entry_mode = "ema_anchor"\nentry_lifetime_bars = 3\n', "unknown keys"),
+        ("live_entry_mode = \n", "not valid TOML"),
+    ],
+)
+def test_invalid_config_file_refuses_to_load(tmp_path: Path, content: str, message: str) -> None:
+    path = tmp_path / "runtime.toml"
+    path.write_text(content, encoding="utf-8")
+    env = {**_REQUIRED_OUTBOUND_ENV, "RUNTIME_CONFIG_PATH": str(path)}
+    with pytest.raises(ValueError, match=message):
+        load_runtime_config(env)
+
+
+def test_runtime_config_rejects_unknown_live_entry_mode() -> None:
+    with pytest.raises(ValueError, match="live_entry_mode must be one of"):
+        RuntimeConfig(committed_bar_queue_capacity=1, live_entry_mode="close")  # type: ignore[arg-type]
