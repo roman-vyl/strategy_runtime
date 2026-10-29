@@ -318,3 +318,37 @@ def test_a_pending_recovery_marker_returns_before_the_step() -> None:
     harness.repository.save(replace(state, pending_close_recovery=PendingCloseRecovery(_CYCLE)))
 
     assert harness.bar(_T0 + 4 * _M5) == []
+
+
+class _FailingSaveRepository(InMemoryStrategyInstanceRuntimeStateRepository):
+    """Fails exactly the save that sets the mark."""
+
+    def save(self, state: StrategyInstanceRuntimeState) -> StrategyInstanceRuntimeState:
+        cycle = state.current_trade_cycle
+        if cycle is not None and cycle.entry_remainder_cancelled:
+            raise OSError("disk full")
+        return super().save(state)
+
+
+def test_a_failed_save_of_the_mark_keeps_managing_and_retries() -> None:
+    harness = _harness(frozen=True)
+    failing = _FailingSaveRepository()
+    state = harness.repository.get(_SID)
+    assert state is not None
+    failing.get_or_create(
+        GetOrCreateStrategyInstanceRuntimeStateRequest(
+            strategy_instance_id=_SID,
+            strategy_id="ema_pullback",
+            instrument="BTCUSDT.P",
+            base_timeframe="5m",
+            raw_spec={"ema": 200},
+            source_path="/specs/a.json",
+        )
+    )
+    failing.save(state)
+    harness.repository = failing
+    bar = _T0 + 4 * _M5
+
+    assert harness.bar(bar) == [("abi", (_SID, _CYCLE)), _failed(bar, "OSError"), ("manage", False)]
+    assert harness.cycle().entry_remainder_cancelled is False
+    assert harness.bar(bar + _M5)[0] == ("abi", (_SID, _CYCLE))

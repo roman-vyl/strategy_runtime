@@ -37,8 +37,13 @@ def cancel_expired_entry_remainder(
         confirmation = cancel_port.cancel_entry_remainder(
             state.strategy_instance_id, cycle.trade_cycle_id
         )
+        saved_state = state_repository.save(
+            replace(state, current_trade_cycle=replace(cycle, entry_remainder_cancelled=True))
+        )
     except Exception as exc:
-        # Position management continues on this bar; the next bar asks again.
+        # A failed call or a failed save of the mark: position management continues on
+        # this bar with the unchanged state, and the next bar asks again (ABI then answers
+        # entry_order_already_terminal).
         if journal is not None:
             journal.entry_remainder_cancel_failed(
                 strategy_instance_id=state.strategy_instance_id,
@@ -48,9 +53,6 @@ def cancel_expired_entry_remainder(
             )
         return state
 
-    saved_state = state_repository.save(
-        replace(state, current_trade_cycle=replace(cycle, entry_remainder_cancelled=True))
-    )
     if journal is not None:
         journal.entry_remainder_cancelled(
             strategy_instance_id=state.strategy_instance_id,
