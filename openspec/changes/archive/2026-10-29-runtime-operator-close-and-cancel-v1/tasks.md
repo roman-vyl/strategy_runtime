@@ -7,4 +7,4 @@
 
 ## 2. Rollout (on owner's word only)
 
-- [x] 2.1 PR, merge, deploy Runtime; smoke on Bybit demo: cancel an entry order, close a position, check the closure proof in the Journal.
+- [ ] 2.1 PR, merge, deploy Runtime; smoke on Bybit demo: cancel an entry order, close a position, check the closure proof in the Journal.
