@@ -35,11 +35,11 @@ from strategy_runtime.runtime.entry_cycle_ended import (
     EntryCycleEndedJournalPort,
     journal_entry_cycle_ended,
 )
+from strategy_runtime.runtime.first_fill.freezer import FirstFillFreezer
 from strategy_runtime.runtime.first_fill.journal import (
     TradeCycleOpenedJournalPort,
     journal_trade_cycle_opened,
 )
-from strategy_runtime.runtime.first_fill.state_applier import apply_first_fill
 from strategy_runtime.runtime.position_management_decision.models import ClosePosition
 from strategy_runtime.runtime.position_management_execution.errors import (
     PositionManagementExecutionError,
@@ -82,7 +82,7 @@ class UncertainExchangeStateResolver:
         trade_cycle_closed_journal: TradeCycleClosedJournalPort | None = None,
         trade_cycle_opened_journal: TradeCycleOpenedJournalPort | None = None,
         entry_cycle_ended_journal: EntryCycleEndedJournalPort | None = None,
-        entry_order_lifetime_bars: int | None = None,
+        first_fill_freezer: FirstFillFreezer | None = None,
     ) -> None:
         self._state_repository = state_repository
         self._keyed_mutex_registry = keyed_mutex_registry
@@ -91,7 +91,7 @@ class UncertainExchangeStateResolver:
         self._trade_cycle_closed_journal = trade_cycle_closed_journal
         self._trade_cycle_opened_journal = trade_cycle_opened_journal
         self._entry_cycle_ended_journal = entry_cycle_ended_journal
-        self._entry_order_lifetime_bars = entry_order_lifetime_bars
+        self._first_fill_freezer = first_fill_freezer or FirstFillFreezer()
 
     def attempt(self, strategy_instance_id: str) -> None:
         """Resolve, or leave untouched, the one instance's pending recovery marker."""
@@ -167,11 +167,8 @@ class UncertainExchangeStateResolver:
                 pending_entry_recovery=None,
             )
             if isinstance(response, PositionOpenRecoveryState):
-                reconstructed = apply_first_fill(
-                    reconstructed,
-                    trade_cycle_id,
-                    response.first_fill_at_ms,
-                    order_lifetime_bars=self._entry_order_lifetime_bars,
+                reconstructed = self._first_fill_freezer.freeze(
+                    reconstructed, trade_cycle_id, response.first_fill_at_ms
                 )
             self._state_repository.save(reconstructed)
             if isinstance(response, PositionOpenRecoveryState):

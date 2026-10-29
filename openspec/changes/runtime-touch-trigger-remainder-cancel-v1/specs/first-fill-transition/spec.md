@@ -13,10 +13,13 @@ SHALL equal `DesiredEntry.source_plan_bar_open_time_ms + (order_lifetime_bars + 
 timeframe_ms` of the registered base timeframe — the same value, from the same shared
 function, that `touch_trigger` entry reconciliation uses as the order's expiry; it is
 counted from the original signal, never from the fill. When `order_lifetime_bars` is
-`None` (`ema_anchor`), `entry_order_expires_at_bar` SHALL be `null`. Every caller that
-freezes a first fill (bar processing, the ABI first-fill event, the operator commands and the
-uncertain-state resolver) SHALL pass the configured `order_lifetime_bars` in `touch_trigger`
-and `None` in `ema_anchor`, so the boundary does not depend on which path saw the fill first.
+`None` (`ema_anchor`), `entry_order_expires_at_bar` SHALL be `null`. The lifetime policy SHALL
+live in one place: a single `FirstFillFreezer`, built once from `RuntimeConfig`
+(`live_entry_mode`, `order_lifetime_bars`), is the only caller of `apply_first_fill`. Every path
+that observes a first fill (bar processing, the ABI first-fill event, the operator commands and
+the uncertain-state resolver) SHALL freeze through that shared freezer and SHALL NOT know or pass
+`order_lifetime_bars`. The boundary is computed atomically with the freeze, so it does not depend
+on which path saw the fill first, nor on a later restart or config change.
 
 #### Scenario: Freeze the context on the first fill
 - **WHEN** `state.current_trade_cycle.trade_cycle_id` equals

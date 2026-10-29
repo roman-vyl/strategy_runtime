@@ -2,7 +2,7 @@
 
 - [x] 1.1 Shared pure `entry_order_expiration_ms(source_plan_bar_open_time_ms, timeframe_ms, order_lifetime_bars)` and `is_entry_order_expired(...)`; `touch_trigger_entry_reconciliation` uses them (behaviour unchanged)
 - [x] 1.2 `FrozenExecutedEntryContext.entry_order_expires_at_bar: int | None`; `CurrentTradeCycle.entry_remainder_cancelled: bool = False`
-- [x] 1.3 `apply_first_fill(..., order_lifetime_bars=None)`; orchestrator passes it from `RuntimeConfig` in touch_trigger only (also the ABI first-fill event, operator commands and uncertain-state resolver, which freeze fills too)
+- [x] 1.3 `apply_first_fill(..., order_lifetime_bars=None)`; one shared `FirstFillFreezer` (built from `RuntimeConfig`) owns the policy; all four first-fill paths (bar processing, ABI first-fill event, operator commands, uncertain-state resolver) freeze through it without knowing `order_lifetime_bars`
 - [x] 1.4 Codec `schema_version = 4` with both keys; v1–v3 decode `null` / `false`
 - [x] 1.5 ABI client `cancel_entry_remainder` + strict response codec on the position-management HTTP client
 - [x] 1.6 Orchestrator step (D3/D4) + journal events (D6); production composition wiring

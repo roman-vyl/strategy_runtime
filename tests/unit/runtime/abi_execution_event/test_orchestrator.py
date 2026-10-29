@@ -403,17 +403,17 @@ def test_constructor_accepts_exactly_its_keyword_collaborators() -> None:
     signature = inspect.signature(AbiExecutionEventOrchestrator.__init__)
     param_names = list(signature.parameters)
 
-    # entry_order_lifetime_bars: touch_trigger lifetime frozen into the first fill
+    # first_fill_freezer: the one freezer every first-fill path shares
     # (runtime-touch-trigger-remainder-cancel-v1).
     assert param_names == [
         "self",
         "state_repository",
         "keyed_mutex_registry",
-        "entry_order_lifetime_bars",
+        "first_fill_freezer",
     ]
-    for name in ("state_repository", "keyed_mutex_registry", "entry_order_lifetime_bars"):
+    for name in ("state_repository", "keyed_mutex_registry", "first_fill_freezer"):
         assert signature.parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
-    assert signature.parameters["entry_order_lifetime_bars"].default is None
+    assert signature.parameters["first_fill_freezer"].default is None
 
 
 def test_constructor_rejects_an_unknown_collaborator() -> None:

@@ -5,6 +5,7 @@ reached, the mark saved on a confirmed answer, and position management never sto
 from dataclasses import dataclass, field, replace
 
 from strategy_runtime.runtime.coordination import StrategyInstanceKeyedMutexRegistry
+from strategy_runtime.runtime.first_fill.freezer import FirstFillFreezer
 from strategy_runtime.runtime.open_position.models import (
     PositionResolvedStrategyInstanceRuntimeState,
 )
@@ -124,7 +125,13 @@ class _Harness:
             keyed_mutex_registry=StrategyInstanceKeyedMutexRegistry(),
             entry_reconciliation_orchestrator=None,  # type: ignore[arg-type]
             position_management_orchestrator=_PositionManagement(self.recorder),  # type: ignore[arg-type]
-            entry_order_lifetime_bars=self.lifetime,
+            first_fill_freezer=(
+                FirstFillFreezer()
+                if self.lifetime is None
+                else FirstFillFreezer(
+                    live_entry_mode="touch_trigger", order_lifetime_bars=self.lifetime
+                )
+            ),
             entry_remainder_cancel_port=self.abi,
             entry_remainder_cancel_journal=_Journal(self.recorder),
         )
