@@ -163,3 +163,16 @@ class StrategyInstanceStateListResponse(BaseModel):
 
 class StateUnavailableResponse(BaseModel):
     status: Literal["state_unavailable"] = "state_unavailable"
+
+
+class ClosePositionResponse(BaseModel):
+    strategy_instance_id: str
+    trade_cycle_id: str
+    enabled: Literal[False] = False
+    closure_reason: str | None
+
+
+class CancelEntryOrdersResponse(BaseModel):
+    strategy_instance_id: str
+    enabled: Literal[False] = False
+    cancelled_entry_order: bool
