@@ -6,7 +6,6 @@ Define how Runtime aligns the first ABI fill to the registered candle grid
 and freezes the currently applied DesiredEntry exactly once into current
 trade-cycle state, including idempotent retry and fail-closed conflict
 handling.
-
 ## Requirements
 ### Requirement: Entry-bar alignment floors a fill timestamp to its containing candle
 `align_first_fill_to_entry_bar(first_fill_at_ms, base_timeframe)` SHALL
@@ -59,13 +58,25 @@ from any ABI event field or other caller-supplied value.
 - **AND** no other source of timeframe information is consulted
 
 ### Requirement: apply_first_fill freezes the entry context exactly once per trade cycle
-`apply_first_fill(state, trade_cycle_id, first_fill_at_ms)` SHALL require an
+`apply_first_fill(state, trade_cycle_id, first_fill_at_ms, *, order_lifetime_bars=None)` SHALL require an
 existing `CurrentTradeCycle` on `state` whose `trade_cycle_id` matches the
 supplied `trade_cycle_id`, and on the first successful call for that cycle
 SHALL return a new immutable `StrategyInstanceRuntimeState` whose current
 trade cycle carries a `FrozenExecutedEntryContext` built from the currently
-applied `DesiredEntry`, the supplied `first_fill_at_ms`, and the aligned
-`entry_bar_open_time_ms`.
+applied `DesiredEntry`, the supplied `first_fill_at_ms`, the aligned
+`entry_bar_open_time_ms`, and `entry_order_expires_at_bar`. When
+`order_lifetime_bars` is an integer (`touch_trigger`), `entry_order_expires_at_bar`
+SHALL equal `DesiredEntry.source_plan_bar_open_time_ms + (order_lifetime_bars + 2) ×
+timeframe_ms` of the registered base timeframe — the same value, from the same shared
+function, that `touch_trigger` entry reconciliation uses as the order's expiry; it is
+counted from the original signal, never from the fill. When `order_lifetime_bars` is
+`None` (`ema_anchor`), `entry_order_expires_at_bar` SHALL be `null`. The lifetime policy SHALL
+live in one place: a single `FirstFillFreezer`, built once from `RuntimeConfig`
+(`live_entry_mode`, `order_lifetime_bars`), is the only caller of `apply_first_fill`. Every path
+that observes a first fill (bar processing, the ABI first-fill event, the operator commands and
+the uncertain-state resolver) SHALL freeze through that shared freezer and SHALL NOT know or pass
+`order_lifetime_bars`. The boundary is computed atomically with the freeze, so it does not depend
+on which path saw the fill first, nor on a later restart or config change.
 
 #### Scenario: Freeze the context on the first fill
 - **WHEN** `state.current_trade_cycle.trade_cycle_id` equals
@@ -112,6 +123,16 @@ applied `DesiredEntry`, the supplied `first_fill_at_ms`, and the aligned
   non-positive `first_fill_at_ms` or an unsupported `base_timeframe`
 - **THEN** `apply_first_fill` lets that `ValueError` propagate unwrapped
 - **AND** does not translate it into `FirstFillInvariantError`
+
+#### Scenario: touch_trigger freezes the expiry from the signal bar
+- **WHEN** the base timeframe is `5m`, `order_lifetime_bars` is `3`, the applied
+  `DesiredEntry.source_plan_bar_open_time_ms` is 12:00, and the first fill is at 12:07
+- **THEN** `entry_order_expires_at_bar` is 12:25 (12:00 + 5 × 5m)
+- **AND** a first fill at 12:22 gives the same value
+
+#### Scenario: ema_anchor freezes no expiry
+- **WHEN** `apply_first_fill` is called with `order_lifetime_bars` `None`
+- **THEN** `entry_order_expires_at_bar` is `null`
 
 ### Requirement: A repeated identical first fill is a no-op; a conflicting one fails closed
 Once `current_trade_cycle.frozen_entry_context` is set for a trade cycle,

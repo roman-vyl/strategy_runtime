@@ -1,3 +1,8 @@
+## RENAMED Requirements
+
+- FROM: `### Requirement: Decoding dispatches by schema_version, supporting exactly versions 1, 2, and 3`
+- TO: `### Requirement: Decoding dispatches by schema_version, supporting exactly versions 1, 2, 3, and 4`
+
 ## MODIFIED Requirements
 
 ### Requirement: Decoding dispatches by schema_version, supporting exactly versions 1, 2, 3, and 4

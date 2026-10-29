@@ -367,3 +367,65 @@ Production composition SHALL pass the JSONL processing journal as the `OpenTrade
 - **WHEN** the production application is composed
 - **THEN** both ports are the same JSONL processing journal used for the other Runtime events
 
+### Requirement: Runtime live-entry mode from the config file
+Strategy Runtime SHALL read `live_entry_mode` once at start from the TOML file named by `RUNTIME_CONFIG_PATH`, with
+allowed values `ema_anchor` and `touch_trigger`, and `ema_anchor` when the path is unset, the file is absent or the key is
+absent. It SHALL refuse to start on an unknown value, an unknown key or an unparsable file. The resolved mode SHALL be part
+of the Runtime configuration, and no Runtime behaviour SHALL depend on it.
+
+#### Scenario: No config file
+- **WHEN** `RUNTIME_CONFIG_PATH` is unset or names a missing file
+- **THEN** the Runtime configuration SHALL carry `live_entry_mode = ema_anchor`
+
+#### Scenario: Touch trigger in the file
+- **WHEN** the file contains `live_entry_mode = "touch_trigger"`
+- **THEN** the Runtime configuration SHALL carry `live_entry_mode = touch_trigger`
+
+#### Scenario: Invalid file
+- **WHEN** the file contains `live_entry_mode = "close"`, an unknown key, or does not parse
+- **THEN** Runtime SHALL fail at start with an error, before composition
+
+#### Scenario: Behaviour unchanged
+- **WHEN** the same closed bars are processed with the mode `ema_anchor` and with `touch_trigger`
+- **THEN** every reconciliation decision, outbound request and journal line SHALL be identical
+
+### Requirement: Live-entry mode reaches only entry reconciliation
+Runtime composition SHALL pass `RuntimeConfig.live_entry_mode` to
+`EntryReconciliationOrchestrator` and to no other component. No other
+component's behaviour SHALL depend on the mode.
+
+#### Scenario: Composed with touch_trigger
+- **WHEN** the Runtime config carries `live_entry_mode = touch_trigger`
+- **THEN** the composed `EntryReconciliationOrchestrator` uses
+  `touch_trigger_entry_reconciliation`
+- **AND** the router still calls the Engine live-entry projection on every
+  processed closed bar
+
+#### Scenario: Composed without a config file
+- **WHEN** no Runtime config file exists
+- **THEN** the composed `EntryReconciliationOrchestrator` uses
+  `decide_entry_reconciliation`
+
+### Requirement: Order lifetime from the Runtime config file
+Runtime SHALL read `order_lifetime_bars` once at start from the same config
+file as `live_entry_mode`. With `live_entry_mode = touch_trigger` the key SHALL
+be required and SHALL be an integer `>= 0`; a missing, negative, fractional,
+boolean or non-numeric value SHALL stop Runtime at start. With `ema_anchor` the
+key SHALL be optional, validated when present, and unused. Composition SHALL
+pass the value to `EntryReconciliationOrchestrator` and to no other component.
+
+#### Scenario: touch_trigger with a lifetime
+- **WHEN** the file contains `live_entry_mode = "touch_trigger"` and
+  `order_lifetime_bars = 3`
+- **THEN** the composed `EntryReconciliationOrchestrator` receives lifetime 3
+
+#### Scenario: touch_trigger without a valid lifetime
+- **WHEN** the file contains `live_entry_mode = "touch_trigger"` and the key is
+  missing, or is `-1`, `3.0`, `true` or `"3"`
+- **THEN** Runtime fails at start with an error, before composition
+
+#### Scenario: ema_anchor
+- **WHEN** the mode is `ema_anchor`
+- **THEN** a missing key is accepted and a present valid key is accepted and
+  unused
+

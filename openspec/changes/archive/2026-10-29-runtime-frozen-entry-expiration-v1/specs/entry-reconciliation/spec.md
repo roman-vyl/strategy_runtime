@@ -38,6 +38,23 @@ timeframe, and a negative, boolean or non-integer lifetime.
 - **THEN** the decision is `NoOp` for a null, equal or different new desired
   entry
 
+#### Scenario: Null projection does not cancel a held entry
+- **WHEN** an acknowledged applied entry exists and is not expired
+- **AND** the new desired entry is null
+- **THEN** the decision is `NoOp`
+- **AND** it is not `Cancel`
+
+#### Scenario: Changed projection does not replace a held entry
+- **WHEN** an acknowledged applied entry exists and is not expired
+- **AND** the new desired entry is non-null and not equivalent to it
+- **THEN** the decision is `NoOp`
+- **AND** it is not `Replace`
+
+#### Scenario: Equal projection
+- **WHEN** an acknowledged applied entry exists and is not expired
+- **AND** the new desired entry is equivalent to it
+- **THEN** the decision is `NoOp`
+
 #### Scenario: Expired with no signal
 - **WHEN** the same held entry exists
 - **AND** the processed bar opens at 12:20 (closes at the 12:25 boundary)
