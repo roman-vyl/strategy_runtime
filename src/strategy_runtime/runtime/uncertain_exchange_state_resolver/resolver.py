@@ -29,6 +29,12 @@ from strategy_runtime.runtime.abi.entry_package_models import (
     EntryPackageWireDesiredEntry,
 )
 from strategy_runtime.runtime.coordination import StrategyInstanceKeyedMutexRegistry
+from strategy_runtime.runtime.entry_cycle_ended import (
+    EXACT_ABSENT,
+    TERMINAL_WITHOUT_FILL,
+    EntryCycleEndedJournalPort,
+    journal_entry_cycle_ended,
+)
 from strategy_runtime.runtime.first_fill.journal import (
     TradeCycleOpenedJournalPort,
     journal_trade_cycle_opened,
@@ -75,6 +81,7 @@ class UncertainExchangeStateResolver:
         position_management_execution: PositionManagementExecutionPort,
         trade_cycle_closed_journal: TradeCycleClosedJournalPort | None = None,
         trade_cycle_opened_journal: TradeCycleOpenedJournalPort | None = None,
+        entry_cycle_ended_journal: EntryCycleEndedJournalPort | None = None,
     ) -> None:
         self._state_repository = state_repository
         self._keyed_mutex_registry = keyed_mutex_registry
@@ -82,6 +89,7 @@ class UncertainExchangeStateResolver:
         self._position_management_execution = position_management_execution
         self._trade_cycle_closed_journal = trade_cycle_closed_journal
         self._trade_cycle_opened_journal = trade_cycle_opened_journal
+        self._entry_cycle_ended_journal = entry_cycle_ended_journal
 
     def attempt(self, strategy_instance_id: str) -> None:
         """Resolve, or leave untouched, the one instance's pending recovery marker."""
@@ -179,6 +187,7 @@ class UncertainExchangeStateResolver:
             self._state_repository.save(
                 replace(state, current_trade_cycle=None, pending_entry_recovery=None)
             )
+            self._journal_terminal_without_fill(state, trade_cycle_id, response)
             return
 
         if isinstance(response, EntryOrderNotFoundRecoveryState):
@@ -194,6 +203,7 @@ class UncertainExchangeStateResolver:
             self._state_repository.save(
                 replace(state, current_trade_cycle=None, pending_entry_recovery=None)
             )
+            self._journal_terminal_without_fill(state, current_cycle.trade_cycle_id, response)
             return
 
         if isinstance(response, PositionOpenRecoveryState):
@@ -227,6 +237,30 @@ class UncertainExchangeStateResolver:
             self._state_repository.save(
                 replace(state, current_trade_cycle=None, pending_entry_recovery=None)
             )
+            journal_entry_cycle_ended(
+                self._entry_cycle_ended_journal,
+                strategy_instance_id=state.strategy_instance_id,
+                trade_cycle_id=trade_cycle_id,
+                bar_open_time_ms=None,
+                reason=EXACT_ABSENT,
+            )
+
+    def _journal_terminal_without_fill(
+        self,
+        state: StrategyInstanceRuntimeState,
+        trade_cycle_id: str,
+        response: RecoveryStateResponse,
+    ) -> None:
+        # A cycle that did fill is not an unfilled entry: its closure is journaled elsewhere.
+        if not isinstance(response, TerminalWithoutFillRecoveryState):
+            return
+        journal_entry_cycle_ended(
+            self._entry_cycle_ended_journal,
+            strategy_instance_id=state.strategy_instance_id,
+            trade_cycle_id=trade_cycle_id,
+            bar_open_time_ms=None,
+            reason=TERMINAL_WITHOUT_FILL,
+        )
 
 
 def _build_cycle(

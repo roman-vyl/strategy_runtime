@@ -11,10 +11,12 @@ from starlette.types import Lifespan
 
 from strategy_runtime.adapters.http.models import (
     AcceptedResponse,
+    CancelEntryOrdersResponse,
     CatalogUnavailableResponse,
     ChartLayersRefusedResponse,
     ChartLayersResponse,
     ClosedBarRequest,
+    ClosePositionResponse,
     DeletedResponse,
     DeleteRefusedResponse,
     DuplicateDeploymentIdentityItem,
@@ -32,8 +34,11 @@ from strategy_runtime.adapters.http.models import (
     NotReadyResponse,
     ReadyResponse,
     RejectedResponse,
+    StateUnavailableResponse,
     StrategyInstanceItem,
     StrategyInstanceListResponse,
+    StrategyInstanceStateItem,
+    StrategyInstanceStateListResponse,
     StrategyInstanceStateNotFoundResponse,
 )
 from strategy_runtime.runtime.abi_execution_event.models import AbiFirstFillExecutionEvent
@@ -46,9 +51,18 @@ from strategy_runtime.runtime.committed_bar_intake import (
 from strategy_runtime.runtime.enabled_control.errors import EnabledControlRefused
 from strategy_runtime.runtime.enabled_control.models import EnabledChangeResult
 from strategy_runtime.runtime.first_fill.errors import FirstFillInvariantError
+from strategy_runtime.runtime.operator_commands import (
+    CancelEntryOrdersResult,
+    ClosePositionResult,
+)
 from strategy_runtime.runtime.state.errors import StrategyInstanceStateNotFound
 from strategy_runtime.runtime.state.models import StrategyInstanceRuntimeState
 from strategy_runtime.runtime.strategy_delete.models import DeleteResult
+from strategy_runtime.runtime.trading_state import (
+    CatalogUnavailable,
+    StateUnavailable,
+    StrategyInstanceTradingState,
+)
 from strategy_runtime.utility.committed_bar import CommittedBarEvent
 from strategy_runtime.utility.deployment_catalog import (
     DeploymentCatalogSnapshot,
@@ -60,6 +74,9 @@ LoadDeploymentCatalog = Callable[[], DeploymentCatalogSnapshot]
 SetStrategyEnabled = Callable[[str, bool], EnabledChangeResult]
 DeleteStrategy = Callable[[str], DeleteResult]
 GetChartLayers = Callable[[str], ChartLayers]
+ClosePosition = Callable[[str], ClosePositionResult]
+CancelEntryOrders = Callable[[str], CancelEntryOrdersResult]
+ListTradingStates = Callable[[], tuple[StrategyInstanceTradingState, ...]]
 
 
 def create_http_app(
@@ -71,6 +88,9 @@ def create_http_app(
     set_strategy_enabled: SetStrategyEnabled | None = None,
     delete_strategy: DeleteStrategy | None = None,
     get_chart_layers: GetChartLayers | None = None,
+    list_trading_states: ListTradingStates | None = None,
+    close_position: ClosePosition | None = None,
+    cancel_entry_orders: CancelEntryOrders | None = None,
     logger: logging.Logger | None = None,
     lifespan: Lifespan[FastAPI] | None = None,
 ) -> FastAPI:
@@ -82,6 +102,9 @@ def create_http_app(
     app.state.set_strategy_enabled = set_strategy_enabled
     app.state.delete_strategy = delete_strategy
     app.state.get_chart_layers = get_chart_layers
+    app.state.list_trading_states = list_trading_states
+    app.state.close_position = close_position
+    app.state.cancel_entry_orders = cancel_entry_orders
     app.state.logger = logger or logging.getLogger(__name__)
 
     @app.exception_handler(RequestValidationError)
@@ -247,6 +270,44 @@ def create_http_app(
             ],
         )
 
+    @app.get(
+        "/v1/strategy-instance-states",
+        response_model=StrategyInstanceStateListResponse,
+        responses={
+            503: {
+                "model": NotReadyResponse | CatalogUnavailableResponse | StateUnavailableResponse
+            },
+            500: {"model": InternalErrorResponse},
+        },
+    )
+    def list_strategy_instance_states() -> StrategyInstanceStateListResponse | JSONResponse:
+        if not app.state.ready or app.state.list_trading_states is None:
+            return JSONResponse(status_code=503, content=NotReadyResponse().model_dump())
+
+        try:
+            states = app.state.list_trading_states()
+        except CatalogUnavailable:
+            return JSONResponse(status_code=503, content=CatalogUnavailableResponse().model_dump())
+        except StateUnavailable:
+            return JSONResponse(status_code=503, content=StateUnavailableResponse().model_dump())
+        except Exception:
+            app.state.logger.exception("Failed to read strategy instance states")
+            return JSONResponse(status_code=500, content=InternalErrorResponse().model_dump())
+
+        return StrategyInstanceStateListResponse(
+            strategy_instances=[
+                StrategyInstanceStateItem(
+                    strategy_instance_id=item.strategy_instance_id,
+                    trade_state=item.trade_state,
+                    trade_cycle_id=item.trade_cycle_id,
+                    side=item.side,
+                    first_fill_at_ms=item.first_fill_at_ms,
+                    recovery_pending=item.recovery_pending,
+                )
+                for item in states
+            ]
+        )
+
     @app.put(
         "/v1/strategy-instances/{strategy_instance_id}/enabled",
         response_model=EnabledChangedResponse,
@@ -279,6 +340,71 @@ def create_http_app(
         return EnabledChangedResponse(
             strategy_instance_id=result.strategy_instance_id,
             enabled=result.enabled,
+            cancelled_entry_order=result.cancelled_entry_order,
+        )
+
+    @app.post(
+        "/v1/strategy-instances/{strategy_instance_id}/close-position",
+        response_model=ClosePositionResponse,
+        responses={
+            404: {"model": EnabledChangeRefusedResponse},
+            409: {"model": EnabledChangeRefusedResponse},
+            500: {"model": EnabledChangeRefusedResponse | InternalErrorResponse},
+            502: {"model": EnabledChangeRefusedResponse},
+            503: {"model": NotReadyResponse | EnabledChangeRefusedResponse},
+        },
+    )
+    def close_strategy_position(strategy_instance_id: str) -> ClosePositionResponse | JSONResponse:
+        if not app.state.ready or app.state.close_position is None:
+            return JSONResponse(status_code=503, content=NotReadyResponse().model_dump())
+
+        try:
+            result = app.state.close_position(strategy_instance_id)
+        except EnabledControlRefused as exc:
+            return JSONResponse(
+                status_code=exc.status_code,
+                content=EnabledChangeRefusedResponse(reason=exc.reason).model_dump(),
+            )
+        except Exception:
+            app.state.logger.exception("Failed to close strategy position")
+            return JSONResponse(status_code=500, content=InternalErrorResponse().model_dump())
+
+        return ClosePositionResponse(
+            strategy_instance_id=result.strategy_instance_id,
+            trade_cycle_id=result.trade_cycle_id,
+            closure_reason=result.closure_reason,
+        )
+
+    @app.post(
+        "/v1/strategy-instances/{strategy_instance_id}/cancel-entry-orders",
+        response_model=CancelEntryOrdersResponse,
+        responses={
+            404: {"model": EnabledChangeRefusedResponse},
+            409: {"model": EnabledChangeRefusedResponse},
+            500: {"model": EnabledChangeRefusedResponse | InternalErrorResponse},
+            502: {"model": EnabledChangeRefusedResponse},
+            503: {"model": NotReadyResponse | EnabledChangeRefusedResponse},
+        },
+    )
+    def cancel_strategy_entry_orders(
+        strategy_instance_id: str,
+    ) -> CancelEntryOrdersResponse | JSONResponse:
+        if not app.state.ready or app.state.cancel_entry_orders is None:
+            return JSONResponse(status_code=503, content=NotReadyResponse().model_dump())
+
+        try:
+            result = app.state.cancel_entry_orders(strategy_instance_id)
+        except EnabledControlRefused as exc:
+            return JSONResponse(
+                status_code=exc.status_code,
+                content=EnabledChangeRefusedResponse(reason=exc.reason).model_dump(),
+            )
+        except Exception:
+            app.state.logger.exception("Failed to cancel strategy entry orders")
+            return JSONResponse(status_code=500, content=InternalErrorResponse().model_dump())
+
+        return CancelEntryOrdersResponse(
+            strategy_instance_id=result.strategy_instance_id,
             cancelled_entry_order=result.cancelled_entry_order,
         )
 

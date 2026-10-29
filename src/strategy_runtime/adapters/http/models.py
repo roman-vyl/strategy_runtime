@@ -146,3 +146,33 @@ class ChartLayersRefusedResponse(BaseModel):
     reason: str
     engine_code: str | None = None
     engine_message: str | None = None
+
+
+class StrategyInstanceStateItem(BaseModel):
+    strategy_instance_id: str
+    trade_state: Literal["flat", "entry_pending", "in_position"]
+    trade_cycle_id: str | None
+    side: Literal["long", "short"] | None
+    first_fill_at_ms: int | None
+    recovery_pending: Literal["entry", "close"] | None
+
+
+class StrategyInstanceStateListResponse(BaseModel):
+    strategy_instances: list[StrategyInstanceStateItem]
+
+
+class StateUnavailableResponse(BaseModel):
+    status: Literal["state_unavailable"] = "state_unavailable"
+
+
+class ClosePositionResponse(BaseModel):
+    strategy_instance_id: str
+    trade_cycle_id: str
+    enabled: Literal[False] = False
+    closure_reason: str | None
+
+
+class CancelEntryOrdersResponse(BaseModel):
+    strategy_instance_id: str
+    enabled: Literal[False] = False
+    cancelled_entry_order: bool
