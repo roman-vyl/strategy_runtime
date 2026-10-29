@@ -311,6 +311,11 @@ Config file (optional):
   missing or invalid value in `touch_trigger` stops Runtime at start. The order is live `N + 1` bars: it expires on the
   bar whose close reaches `signal bar open + (N + 2) × timeframe`; then Runtime cancels it (Engine returned nothing) or
   replaces it with the plan the Engine returned for that bar.
+  A partially filled `touch_trigger` order keeps the same boundary, frozen at the first fill
+  (`entry_order_expires_at_bar`): from that bar on Runtime asks ABI
+  `POST .../entry-remainder/cancel` once per bar until ABI confirms, then sets `entry_remainder_cancelled` and never
+  asks again. A failed call is journaled (`entry_remainder_cancel_failed`) and position management continues; a
+  confirmed one is journaled `entry_remainder_cancelled`. Durable state is `schema_version = 4`; v1–v3 lines still load.
 
 Все base URLs и timeouts обязательны для ready application. Host, port, specs path, journal path и state path имеют локальные defaults; queue capacity обязательна.
 

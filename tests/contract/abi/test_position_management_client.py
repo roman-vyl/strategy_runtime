@@ -17,6 +17,7 @@ from strategy_runtime.runtime.position_management_execution.errors import (
 from strategy_runtime.runtime.position_management_execution.models import (
     ApplyProtectionCommand,
     ClosePositionCommand,
+    EntryRemainderCancelConfirmation,
     PositionClosedConfirmation,
     ProtectionAppliedConfirmation,
     ProtectionOrder,
@@ -660,3 +661,143 @@ def json_response(status_code: int, body: object) -> httpx.Response:
         json=body,
         headers={"content-type": "application/json; charset=utf-8"},
     )
+
+
+# -- cancel_entry_remainder (runtime-touch-trigger-remainder-cancel-v1) -------
+
+
+def cancel_entry_remainder(
+    fake: FakeAbi, strategy_instance_id: str = "instance-1", trade_cycle_id: str = "cycle-1"
+) -> EntryRemainderCancelConfirmation:
+    with HttpxAbiPositionManagementAdapter(
+        base_url="http://abi.test", timeout_seconds=0.25, transport=fake.transport
+    ) as adapter:
+        return adapter.cancel_entry_remainder(strategy_instance_id, trade_cycle_id)
+
+
+def remainder_body(
+    *,
+    trade_cycle_id: str = "cycle-1",
+    status: str = "entry_remainder_cancelled",
+    executed_quantity: object = "0.004",
+) -> dict[str, object]:
+    return {
+        "strategy_instance_id": "instance-1",
+        "trade_cycle_id": trade_cycle_id,
+        "status": status,
+        "executed_quantity": executed_quantity,
+    }
+
+
+def test_cancel_entry_remainder_sends_the_exact_narrow_request() -> None:
+    fake = FakeAbi(lambda _: json_response(200, remainder_body()))
+
+    result = cancel_entry_remainder(fake)
+
+    assert result == EntryRemainderCancelConfirmation(
+        "instance-1", "cycle-1", "entry_remainder_cancelled", "0.004"
+    )
+    assert len(fake.requests) == 1
+    sent = fake.requests[0]
+    assert sent.method == "POST"
+    assert (
+        sent.url.raw_path
+        == b"/v1/strategy-instances/instance-1/trade-cycles/cycle-1/entry-remainder/cancel"
+    )
+    assert sent.headers["content-type"] == "application/json"
+    assert json.loads(sent.content) == {}
+
+
+@pytest.mark.parametrize("executed_quantity", ["0.010", None])
+def test_cancel_entry_remainder_accepts_already_terminal_with_or_without_quantity(
+    executed_quantity: object,
+) -> None:
+    fake = FakeAbi(
+        lambda _: json_response(
+            200,
+            remainder_body(
+                status="entry_order_already_terminal", executed_quantity=executed_quantity
+            ),
+        )
+    )
+
+    result = cancel_entry_remainder(fake)
+
+    assert result.status == "entry_order_already_terminal"
+    assert result.executed_quantity == executed_quantity
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        remainder_body(trade_cycle_id="cycle-2"),
+        remainder_body(status="trade_cycle_closed"),
+        remainder_body(executed_quantity="0"),
+        remainder_body(executed_quantity=0.004),
+        {**remainder_body(), "extra": 1},
+        {k: v for k, v in remainder_body().items() if k != "executed_quantity"},
+    ],
+)
+def test_cancel_entry_remainder_rejects_any_other_success_body(body: object) -> None:
+    fake = FakeAbi(lambda _: json_response(200, body))
+
+    with pytest.raises(PositionManagementExecutionProtocolError):
+        cancel_entry_remainder(fake)
+
+
+@pytest.mark.parametrize(
+    ("status_code", "code"),
+    [
+        (422, "entry_not_filled"),
+        (422, "unknown_trade_cycle_binding"),
+        (400, "malformed_json"),
+        (415, "unsupported_media_type"),
+    ],
+)
+def test_cancel_entry_remainder_documented_rejections_are_public_errors(
+    status_code: int, code: str
+) -> None:
+    fake = FakeAbi(
+        lambda _: json_response(status_code, {"error": {"code": code, "message": "rejected"}})
+    )
+
+    with pytest.raises(PositionManagementExecutionPublicError) as raised:
+        cancel_entry_remainder(fake)
+
+    assert raised.value.code == code
+
+
+def test_cancel_entry_remainder_internal_error_is_unavailable() -> None:
+    fake = FakeAbi(
+        lambda _: json_response(500, {"error": {"code": "internal_error", "message": "x"}})
+    )
+
+    with pytest.raises(PositionManagementExecutionUnavailable):
+        cancel_entry_remainder(fake)
+
+
+def test_cancel_entry_remainder_undocumented_code_fails_closed() -> None:
+    fake = FakeAbi(
+        lambda _: json_response(422, {"error": {"code": "position_not_open", "message": "x"}})
+    )
+
+    with pytest.raises(PositionManagementExecutionProtocolError):
+        cancel_entry_remainder(fake)
+
+
+def test_cancel_entry_remainder_timeout_and_network_failure_are_typed_and_not_retried() -> None:
+    def timeout(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("slow", request=request)
+
+    def network_failure(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("unavailable", request=request)
+
+    slow = FakeAbi(timeout)
+    with pytest.raises(PositionManagementExecutionTimeout):
+        cancel_entry_remainder(slow)
+    assert len(slow.requests) == 1
+
+    down = FakeAbi(network_failure)
+    with pytest.raises(PositionManagementExecutionNetworkFailure):
+        cancel_entry_remainder(down)
+    assert len(down.requests) == 1

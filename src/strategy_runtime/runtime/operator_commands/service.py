@@ -28,11 +28,11 @@ from strategy_runtime.runtime.enabled_control.errors import (
     StrategyInstanceNotFound,
     WriteFailed,
 )
+from strategy_runtime.runtime.first_fill.freezer import FirstFillFreezer
 from strategy_runtime.runtime.first_fill.journal import (
     TradeCycleOpenedJournalPort,
     journal_trade_cycle_opened,
 )
-from strategy_runtime.runtime.first_fill.state_applier import apply_first_fill
 from strategy_runtime.runtime.open_position.errors import OpenPositionResolutionError
 from strategy_runtime.runtime.open_position.ports import OpenPositionResolverPort
 from strategy_runtime.runtime.operator_commands.errors import NoPosition
@@ -86,6 +86,7 @@ class StrategyOperatorCommandsService:
         mutex_wait_seconds: float = DEFAULT_MUTEX_WAIT_SECONDS,
         trade_cycle_closed_journal: TradeCycleClosedJournalPort | None = None,
         trade_cycle_opened_journal: TradeCycleOpenedJournalPort | None = None,
+        first_fill_freezer: FirstFillFreezer | None = None,
     ) -> None:
         self._load_snapshot = load_snapshot
         self._enabled_writer = enabled_writer
@@ -97,6 +98,7 @@ class StrategyOperatorCommandsService:
         self._mutex_wait_seconds = mutex_wait_seconds
         self._trade_cycle_closed_journal = trade_cycle_closed_journal
         self._trade_cycle_opened_journal = trade_cycle_opened_journal
+        self._first_fill_freezer = first_fill_freezer or FirstFillFreezer()
 
     def close_position(self, strategy_instance_id: str) -> ClosePositionResult:
         self._require_in_catalog(strategy_instance_id)
@@ -144,7 +146,9 @@ class StrategyOperatorCommandsService:
         if cycle.frozen_entry_context is None:
             # ABI shows the fill the bar has not frozen yet: freeze it as bar processing does
             assert resolved.first_fill_at_ms is not None
-            frozen = apply_first_fill(state, cycle.trade_cycle_id, resolved.first_fill_at_ms)
+            frozen = self._first_fill_freezer.freeze(
+                state, cycle.trade_cycle_id, resolved.first_fill_at_ms
+            )
             state = self._state_repository.save(frozen)
             if (
                 resolved.average_entry_price is not None

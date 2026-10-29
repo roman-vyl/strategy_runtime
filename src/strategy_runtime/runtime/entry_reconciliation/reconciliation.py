@@ -1,5 +1,9 @@
 """Pure desired-entry equivalence and decision selection."""
 
+from strategy_runtime.runtime.entry_order_lifetime import (
+    entry_order_expiration_ms,
+    is_entry_order_expired,
+)
 from strategy_runtime.runtime.entry_reconciliation.errors import (
     EntryReconciliationInvariantError,
 )
@@ -92,10 +96,10 @@ def touch_trigger_entry_reconciliation(
 
     assert current_trade_cycle is not None
     # The lifetime is counted from the held plan only; later signals never extend it.
-    expiration_ms = (
-        held_desired_entry.source_plan_bar_open_time_ms + (order_lifetime_bars + 2) * timeframe_ms
+    expiration_ms = entry_order_expiration_ms(
+        held_desired_entry.source_plan_bar_open_time_ms, timeframe_ms, order_lifetime_bars
     )
-    if current_bar_open_time_ms + timeframe_ms < expiration_ms:
+    if not is_entry_order_expired(current_bar_open_time_ms, timeframe_ms, expiration_ms):
         return NoOp()
     if (
         new_desired_entry is None

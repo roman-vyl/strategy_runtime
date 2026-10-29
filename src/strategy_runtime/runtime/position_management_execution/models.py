@@ -120,6 +120,31 @@ class PositionClosedConfirmation:
                 raise ValueError("closure identity does not match the confirmation")
 
 
+ENTRY_REMAINDER_CANCELLED = "entry_remainder_cancelled"
+ENTRY_ORDER_ALREADY_TERMINAL = "entry_order_already_terminal"
+ENTRY_REMAINDER_CANCEL_STATUSES = frozenset(
+    {ENTRY_REMAINDER_CANCELLED, ENTRY_ORDER_ALREADY_TERMINAL}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class EntryRemainderCancelConfirmation:
+    """ABI's confirmation that the cycle's entry order has no live remainder."""
+
+    strategy_instance_id: str
+    trade_cycle_id: str
+    status: str
+    executed_quantity: str | None
+
+    def __post_init__(self) -> None:
+        _require_non_empty_string(self.strategy_instance_id, "strategy_instance_id")
+        _require_non_empty_string(self.trade_cycle_id, "trade_cycle_id")
+        if self.status not in ENTRY_REMAINDER_CANCEL_STATUSES:
+            raise ValueError("status must be an entry-remainder cancel status")
+        if self.executed_quantity is not None:
+            _require_positive_exact_decimal_text(self.executed_quantity, "executed_quantity")
+
+
 PositionManagementExecutionCommand = ApplyProtectionCommand | ClosePositionCommand
 PositionManagementExecutionConfirmation = ProtectionAppliedConfirmation | PositionClosedConfirmation
 

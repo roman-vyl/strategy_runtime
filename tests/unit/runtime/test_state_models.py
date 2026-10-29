@@ -63,7 +63,9 @@ def test_current_cycle_has_only_minimal_i2_fields_plus_frozen_context() -> None:
         "applied_entry_package",
         "frozen_entry_context",
         "latest_confirmed_management_protection",
+        "entry_remainder_cancelled",
     )
+    assert cycle.entry_remainder_cancelled is False
     assert cycle.trade_cycle_id == " cycle-owned-by-runtime "
     assert cycle.frozen_entry_context is None
     assert cycle.latest_confirmed_management_protection is None
@@ -106,14 +108,16 @@ def frozen_context(
     )
 
 
-def test_frozen_context_has_only_three_agreed_fields() -> None:
+def test_frozen_context_has_only_four_agreed_fields() -> None:
     context = frozen_context()
 
     assert tuple(field.name for field in fields(context)) == (
         "desired_entry",
         "first_fill_at_ms",
         "entry_bar_open_time_ms",
+        "entry_order_expires_at_bar",
     )
+    assert context.entry_order_expires_at_bar is None
     assert not hasattr(context, "average_entry_price")
     assert not hasattr(context, "filled_quantity")
     assert not hasattr(context, "remaining_quantity")

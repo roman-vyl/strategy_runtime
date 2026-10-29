@@ -17,6 +17,8 @@ def test_entry_reconciliation_has_only_approved_pure_dependencies() -> None:
 
     allowed_prefixes = (
         "dataclasses",
+        # Pure lifetime boundary shared with the first-fill freeze.
+        "strategy_runtime.runtime.entry_order_lifetime",
         "strategy_runtime.runtime.entry_reconciliation",
         "strategy_runtime.runtime.recipes.entry",
         "strategy_runtime.runtime.state.models",

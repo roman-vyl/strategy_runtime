@@ -47,6 +47,7 @@ from strategy_runtime.runtime.entry_reconciliation_bridge import (
 from strategy_runtime.runtime.entry_reconciliation_orchestrator import (
     EntryReconciliationOrchestrator,
 )
+from strategy_runtime.runtime.first_fill.freezer import FirstFillFreezer
 from strategy_runtime.runtime.open_position.resolver import OpenPositionResolver
 from strategy_runtime.runtime.operator_commands import StrategyOperatorCommandsService
 from strategy_runtime.runtime.orchestrator.orchestrator import StrategyRuntimeOrchestrator
@@ -199,6 +200,12 @@ def build_application(
             )
         )
 
+        # One freezer for every path that observes a first fill; it alone applies the
+        # entry-order lifetime policy.
+        first_fill_freezer = FirstFillFreezer(
+            live_entry_mode=config.live_entry_mode,
+            order_lifetime_bars=config.order_lifetime_bars,
+        )
         open_position_resolver = OpenPositionResolver(open_position_client)
         use_case_router = StrategyUseCaseRouter(
             live_entry_engine=live_entry_client,
@@ -229,6 +236,7 @@ def build_application(
             trade_cycle_closed_journal=journal,
             trade_cycle_opened_journal=journal,
             entry_cycle_ended_journal=journal,
+            first_fill_freezer=first_fill_freezer,
         )
         strategy_runtime_orchestrator = StrategyRuntimeOrchestrator(
             state_repository=state_repository,
@@ -242,6 +250,9 @@ def build_application(
             trade_cycle_opened_journal=journal,
             open_trade_journal=journal,
             entry_cycle_ended_journal=journal,
+            first_fill_freezer=first_fill_freezer,
+            entry_remainder_cancel_port=position_management_client,
+            entry_remainder_cancel_journal=journal,
         )
         enabled_control_service = StrategyEnabledControlService(
             load_snapshot=catalog.load_snapshot,
@@ -277,6 +288,7 @@ def build_application(
             keyed_mutex_registry=keyed_mutex_registry,
             trade_cycle_closed_journal=journal,
             trade_cycle_opened_journal=journal,
+            first_fill_freezer=first_fill_freezer,
         )
         chart_layers_service = StrategyChartLayersService(
             load_snapshot=catalog.load_snapshot,
@@ -285,6 +297,7 @@ def build_application(
         abi_execution_event_orchestrator = AbiExecutionEventOrchestrator(
             state_repository=state_repository,
             keyed_mutex_registry=keyed_mutex_registry,
+            first_fill_freezer=first_fill_freezer,
         )
 
         def process_first_fill(

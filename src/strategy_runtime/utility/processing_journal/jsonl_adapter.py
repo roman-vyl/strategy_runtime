@@ -244,6 +244,46 @@ class JsonlProcessingJournal:
             },
         )
 
+    def entry_remainder_cancelled(
+        self,
+        *,
+        strategy_instance_id: str,
+        trade_cycle_id: str,
+        bar_open_time_ms: int,
+        status: str,
+        executed_quantity: str | None,
+    ) -> None:
+        self._record(
+            event_type=ProcessingJournalEventType.ENTRY_REMAINDER_CANCELLED,
+            severity="info",
+            strategy_instance_id=strategy_instance_id,
+            payload={
+                "trade_cycle_id": trade_cycle_id,
+                "bar_open_time_ms": bar_open_time_ms,
+                "status": status,
+                "executed_quantity": executed_quantity,
+            },
+        )
+
+    def entry_remainder_cancel_failed(
+        self,
+        *,
+        strategy_instance_id: str,
+        trade_cycle_id: str,
+        bar_open_time_ms: int,
+        error: str,
+    ) -> None:
+        self._record(
+            event_type=ProcessingJournalEventType.ENTRY_REMAINDER_CANCEL_FAILED,
+            severity="warning",
+            strategy_instance_id=strategy_instance_id,
+            payload={
+                "trade_cycle_id": trade_cycle_id,
+                "bar_open_time_ms": bar_open_time_ms,
+                "error": error,
+            },
+        )
+
     def trade_cycle_opened(
         self,
         *,

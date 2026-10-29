@@ -21,7 +21,8 @@ def _imported_modules() -> set[str]:
 
 def test_orchestrator_depends_on_first_fill_transition_but_no_sibling_workflow() -> None:
     imported = _imported_modules()
-    assert "strategy_runtime.runtime.first_fill.state_applier" in imported
+    # The transition comes through the shared first-fill freezer.
+    assert "strategy_runtime.runtime.first_fill.freezer" in imported
 
     forbidden_prefixes = (
         "httpx",

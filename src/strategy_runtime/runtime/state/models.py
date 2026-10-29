@@ -46,6 +46,8 @@ class FrozenExecutedEntryContext:
     desired_entry: DesiredEntry
     first_fill_at_ms: int
     entry_bar_open_time_ms: int
+    # touch_trigger only: close time of the entry order's last bar, frozen at the first fill.
+    entry_order_expires_at_bar: int | None = None
 
     def __post_init__(self) -> None:
         if type(self.desired_entry) is not DesiredEntry:
@@ -56,6 +58,12 @@ class FrozenExecutedEntryContext:
             raise ValueError("entry_bar_open_time_ms must be a non-negative integer")
         if self.entry_bar_open_time_ms > self.first_fill_at_ms:
             raise ValueError("entry_bar_open_time_ms must not be after first_fill_at_ms")
+        if self.entry_order_expires_at_bar is not None and (
+            type(self.entry_order_expires_at_bar) is not int or self.entry_order_expires_at_bar <= 0
+        ):
+            raise ValueError(
+                "entry_order_expires_at_bar must be a strictly positive integer or None"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +72,8 @@ class CurrentTradeCycle:
     applied_entry_package: AppliedEntryPackage
     frozen_entry_context: FrozenExecutedEntryContext | None = None
     latest_confirmed_management_protection: DesiredProtection | None = None
+    # ABI confirmed the entry order has no live remainder; never reset for this cycle.
+    entry_remainder_cancelled: bool = False
 
     def __post_init__(self) -> None:
         if type(self.trade_cycle_id) is not str or len(self.trade_cycle_id) == 0:
@@ -82,6 +92,8 @@ class CurrentTradeCycle:
             raise TypeError(
                 "latest_confirmed_management_protection must be DesiredProtection or None"
             )
+        if type(self.entry_remainder_cancelled) is not bool:
+            raise TypeError("entry_remainder_cancelled must be bool")
 
     @property
     def desired_entry(self) -> DesiredEntry:

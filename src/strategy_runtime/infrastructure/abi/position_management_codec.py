@@ -15,6 +15,7 @@ from strategy_runtime.runtime.position_management_execution.errors import (
 from strategy_runtime.runtime.position_management_execution.models import (
     ApplyProtectionCommand,
     ClosePositionCommand,
+    EntryRemainderCancelConfirmation,
     PositionClosedConfirmation,
     ProtectionAppliedConfirmation,
     ProtectionOrder,
@@ -40,6 +41,9 @@ _PROTECTION_ORDER_FIELDS = frozenset({"order_id", "trigger_price"})
 _CLOSE_SUCCESS_FIELDS = frozenset({"strategy_instance_id", "trade_cycle_id", "status"})
 # ABI adds `closure` with abi-trade-cycle-closure-confirmation-v1; both shapes are accepted.
 _CLOSE_SUCCESS_FIELDS_WITH_CLOSURE = _CLOSE_SUCCESS_FIELDS | {CLOSURE_FIELD}
+_ENTRY_REMAINDER_SUCCESS_FIELDS = frozenset(
+    {"strategy_instance_id", "trade_cycle_id", "status", "executed_quantity"}
+)
 _ERROR_ENVELOPE_FIELDS = frozenset({"error"})
 _ERROR_FIELDS_WITHOUT_DETAILS = frozenset({"code", "message"})
 _ERROR_FIELDS_WITH_DETAILS = frozenset({"code", "message", "details"})
@@ -107,6 +111,61 @@ def decode_close_position_response(
         _raise_public_error(status_code, payload, _CLOSE_POSITION_PUBLIC_CODES[status_code])
     raise PositionManagementExecutionProtocolError(
         f"undocumented ABI close_position HTTP status: {status_code}"
+    )
+
+
+_ENTRY_REMAINDER_PUBLIC_CODES = {
+    400: frozenset({"malformed_json"}),
+    415: frozenset({"unsupported_media_type"}),
+    422: frozenset({"validation_failed", "unknown_trade_cycle_binding", "entry_not_filled"}),
+}
+
+
+def decode_cancel_entry_remainder_response(
+    *,
+    status_code: int,
+    content_type: str | None,
+    content: bytes,
+    strategy_instance_id: str,
+    trade_cycle_id: str,
+) -> EntryRemainderCancelConfirmation:
+    """Decode one entry-remainder cancel response or fail closed with a typed failure."""
+    payload = _load_payload(content_type, content)
+
+    if status_code == 200:
+        try:
+            body = _closed_object(payload, _ENTRY_REMAINDER_SUCCESS_FIELDS, "success response")
+            confirmation = EntryRemainderCancelConfirmation(
+                strategy_instance_id=_non_empty_string(
+                    body["strategy_instance_id"], "strategy_instance_id"
+                ),
+                trade_cycle_id=_non_empty_string(body["trade_cycle_id"], "trade_cycle_id"),
+                status=_string(body["status"], "status"),
+                executed_quantity=_optional_positive_exact_decimal_string(
+                    body["executed_quantity"], "executed_quantity"
+                ),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise PositionManagementExecutionProtocolError(
+                f"invalid ABI entry-remainder cancel success response: {exc}"
+            ) from exc
+        if (
+            confirmation.strategy_instance_id != strategy_instance_id
+            or confirmation.trade_cycle_id != trade_cycle_id
+        ):
+            raise PositionManagementExecutionProtocolError(
+                "ABI entry-remainder cancel success response does not match the request"
+            )
+        return confirmation
+    if status_code == 500:
+        _decode_internal_error_envelope(payload)
+        raise PositionManagementExecutionUnavailable(
+            "ABI position-management unavailable: HTTP 500"
+        )
+    if status_code in _ENTRY_REMAINDER_PUBLIC_CODES:
+        _raise_public_error(status_code, payload, _ENTRY_REMAINDER_PUBLIC_CODES[status_code])
+    raise PositionManagementExecutionProtocolError(
+        f"undocumented ABI entry-remainder cancel HTTP status: {status_code}"
     )
 
 

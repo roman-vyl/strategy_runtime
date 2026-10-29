@@ -11,12 +11,17 @@ from strategy_runtime.runtime.entry_cycle_ended import (
 from strategy_runtime.runtime.entry_reconciliation_orchestrator import (
     EntryReconciliationOrchestrator,
 )
+from strategy_runtime.runtime.entry_remainder_cancel import (
+    EntryRemainderCancelJournalPort,
+    EntryRemainderCancelPort,
+    cancel_expired_entry_remainder,
+)
 from strategy_runtime.runtime.first_fill.errors import FirstFillInvariantError
+from strategy_runtime.runtime.first_fill.freezer import FirstFillFreezer
 from strategy_runtime.runtime.first_fill.journal import (
     TradeCycleOpenedJournalPort,
     journal_trade_cycle_opened,
 )
-from strategy_runtime.runtime.first_fill.state_applier import apply_first_fill
 from strategy_runtime.runtime.open_position.models import (
     PositionResolvedStrategyInstanceRuntimeState,
 )
@@ -70,6 +75,9 @@ class StrategyRuntimeOrchestrator:
         trade_cycle_opened_journal: TradeCycleOpenedJournalPort | None = None,
         open_trade_journal: OpenTradeEvaluationJournalPort | None = None,
         entry_cycle_ended_journal: EntryCycleEndedJournalPort | None = None,
+        first_fill_freezer: FirstFillFreezer | None = None,
+        entry_remainder_cancel_port: EntryRemainderCancelPort | None = None,
+        entry_remainder_cancel_journal: EntryRemainderCancelJournalPort | None = None,
     ) -> None:
         self._state_repository = state_repository
         self._open_position_resolver = open_position_resolver
@@ -82,6 +90,9 @@ class StrategyRuntimeOrchestrator:
         self._trade_cycle_opened_journal = trade_cycle_opened_journal
         self._open_trade_journal = open_trade_journal
         self._entry_cycle_ended_journal = entry_cycle_ended_journal
+        self._first_fill_freezer = first_fill_freezer or FirstFillFreezer()
+        self._entry_remainder_cancel_port = entry_remainder_cancel_port
+        self._entry_remainder_cancel_journal = entry_remainder_cancel_journal
 
     def process(
         self, unit: StrategyBarProcessingUnit[DeploymentSpecification]
@@ -120,6 +131,17 @@ class StrategyRuntimeOrchestrator:
                 assert frozen_context is not None
                 if frozen_context.entry_bar_open_time_ms > unit.committed_bar.open_time_ms:
                     return resolved.runtime_state
+                if self._entry_remainder_cancel_port is not None:
+                    resolved = replace(
+                        resolved,
+                        runtime_state=cancel_expired_entry_remainder(
+                            resolved.runtime_state,
+                            bar_open_time_ms=unit.committed_bar.open_time_ms,
+                            cancel_port=self._entry_remainder_cancel_port,
+                            state_repository=self._state_repository,
+                            journal=self._entry_remainder_cancel_journal,
+                        ),
+                    )
             projection = self._use_case_router.route(
                 PositionResolvedStrategyInstance(unit, resolved)
             )
@@ -227,7 +249,7 @@ class StrategyRuntimeOrchestrator:
                 "apply_first_fill requires an existing current trade cycle"
             )
         assert resolved.first_fill_at_ms is not None
-        resulting_state = apply_first_fill(
+        resulting_state = self._first_fill_freezer.freeze(
             state, current_cycle.trade_cycle_id, resolved.first_fill_at_ms
         )
         if resulting_state is state:
