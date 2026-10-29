@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from unit.runtime.enabled_control.test_service import (
+from enabled_control.test_service import (
     CYCLE_ID,
     SID,
     Env,
