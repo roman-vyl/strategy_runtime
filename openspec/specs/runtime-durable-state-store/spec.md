@@ -281,9 +281,9 @@ repository.
   against the same path (as happens on process restart) replays the file
   from scratch and is not poisoned by a prior instance's poison state
 
-### Requirement: Decoding dispatches by schema_version, supporting exactly versions 1, 2, and 3
+### Requirement: Decoding dispatches by schema_version, supporting exactly versions 1, 2, 3, and 4
 `JsonlStrategyInstanceRuntimeStateRepository`'s codec SHALL accept exactly
-three values of the envelope's `schema_version` field: `1`, `2`, and `3`. A
+four values of the envelope's `schema_version` field: `1`, `2`, `3`, and `4`. A
 `schema_version = 1` line decodes without a `pending_entry_recovery` or
 `pending_close_recovery` field, both of which SHALL be treated as `None` on
 the decoded aggregate. A `schema_version = 2` line requires the
@@ -293,8 +293,14 @@ field, which SHALL be treated as `None`. A `schema_version = 3` line requires
 both the `pending_entry_recovery` and `pending_close_recovery` keys to be
 present, each holding either `null` or its complete object
 (`PendingCloseRecovery` has `trade_cycle_id` only — no timestamp field, no
-action discriminator). Every new write (`save`, and the creation path of
-`get_or_create`) SHALL encode `schema_version = 3`. Any other
+action discriminator). A `schema_version = 4` line has the same envelope as
+version 3 and additionally requires `current_trade_cycle.entry_remainder_cancelled`
+(boolean) and, on a non-null `frozen_entry_context`, the
+`entry_order_expires_at_bar` key (integer or `null`). Lines of versions 1–3
+decode with `entry_remainder_cancelled = false` and
+`entry_order_expires_at_bar = null`, and SHALL reject those keys if present.
+Every new write (`save`, and the creation path of `get_or_create`) SHALL
+encode `schema_version = 4`. Any other
 `schema_version` value SHALL fail closed exactly like any other
 schema/domain validation failure.
 
@@ -341,14 +347,15 @@ schema/domain validation failure.
 #### Scenario: Every new write is schema_version 3
 - **WHEN** `save(...)` or the creation path of `get_or_create(...)` encodes a
   line
-- **THEN** the encoded envelope's `schema_version` is `3`
+- **THEN** the encoded envelope's `schema_version` is `4` (this scenario keeps
+  its historical name; version 4 superseded version 3 for new writes)
 - **AND** it includes both the `pending_entry_recovery` and
   `pending_close_recovery` keys, each `null` or a complete object, never
   omitted
 
 #### Scenario: An unsupported schema_version fails closed
 - **WHEN** replay encounters a line whose `schema_version` is not one of
-  `1`, `2`, or `3`, or is missing
+  `1`, `2`, `3`, or `4`, or is missing
 - **THEN** decoding raises a schema/domain validation failure, with the same
   fail-closed replay handling as any other invalid record
 
@@ -361,5 +368,19 @@ schema/domain validation failure.
   `pending_entry_recovery`) as `None`
 - **AND** no migration, rewrite, or compaction of those lines occurs — they
   remain at their original `schema_version` until that instance's next
-  `save()` writes a fresh `schema_version = 3` line
+  `save()` writes a fresh `schema_version = 4` line
+
+#### Scenario: A schema_version 4 line carries the remainder fields
+- **WHEN** replay encounters a `schema_version: 4` line whose current trade cycle has
+  `entry_remainder_cancelled` and whose frozen context has `entry_order_expires_at_bar`
+- **THEN** decoding succeeds with those exact values
+
+#### Scenario: A schema_version 4 line missing a remainder key fails closed
+- **WHEN** a `schema_version: 4` line's current trade cycle omits `entry_remainder_cancelled`,
+  or its non-null frozen context omits `entry_order_expires_at_bar`
+- **THEN** decoding raises a schema/domain validation failure
+
+#### Scenario: Older lines decode with remainder defaults
+- **WHEN** replay encounters a `schema_version` 1, 2 or 3 line with a frozen cycle
+- **THEN** the decoded cycle has `entry_remainder_cancelled = false` and `entry_order_expires_at_bar = null`
 

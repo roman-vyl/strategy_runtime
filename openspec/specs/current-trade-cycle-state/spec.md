@@ -32,7 +32,13 @@ latest confirmed management protection:
 means Runtime has not yet acknowledged any post-entry management change;
 the initial protection remains available from
 `frozen_entry_context.desired_entry` regardless. Runtime SHALL store only
-this single latest confirmed value, never a history.
+this single latest confirmed value, never a history. `CurrentTradeCycle`
+SHALL also contain one required boolean `entry_remainder_cancelled`, `false`
+on construction, which becomes `true` only when ABI confirmed that the
+cycle's entry order has no live remainder (entry-remainder-cancel
+capability) and never returns to `false` for that cycle. It is open-trade
+execution state, not part of the frozen recipe, and carries no quantity,
+phase, or exchange identifier.
 
 #### Scenario: Require an acknowledged applied package
 - **WHEN** `CurrentTradeCycle` is constructed
@@ -74,6 +80,14 @@ this single latest confirmed value, never a history.
 - **THEN** it holds exactly one `DesiredProtection` value
 - **AND** no prior acknowledged protection, pending change, or diagnostics
   value is retained alongside it
+
+#### Scenario: A new cycle has no confirmed remainder cancel
+- **WHEN** a `CurrentTradeCycle` is constructed by Apply
+- **THEN** `entry_remainder_cancelled` is `false`
+
+#### Scenario: The remainder mark is a boolean only
+- **WHEN** `entry_remainder_cancelled` is not a boolean
+- **THEN** cycle construction fails before the value can enter aggregate or repository state
 
 ### Requirement: Applied entry package is one indivisible nested value
 `AppliedEntryPackage` SHALL contain exactly `applied_desired_entry` and
@@ -212,7 +226,10 @@ its own matching confirmation.
 `FrozenExecutedEntryContext` SHALL contain exactly `desired_entry:
 DesiredEntry`, a strictly positive integer `first_fill_at_ms` (type checked,
 `> 0`), and a non-negative integer `entry_bar_open_time_ms` (type checked,
-`>= 0`) where `entry_bar_open_time_ms <= first_fill_at_ms`.
+`>= 0`) where `entry_bar_open_time_ms <= first_fill_at_ms`, and
+`entry_order_expires_at_bar`: a non-negative integer or `null`, the immutable
+entry-order expiry boundary set by the first-fill transition (`null` in
+`ema_anchor`).
 
 #### Scenario: Preserve one singular desired entry
 - **WHEN** a frozen executed entry context is constructed
@@ -223,6 +240,7 @@ DesiredEntry`, a strictly positive integer `first_fill_at_ms` (type checked,
 #### Scenario: Reject invalid context fields
 - **WHEN** `desired_entry` has the wrong type, `first_fill_at_ms` is not a
   strictly positive integer, `entry_bar_open_time_ms` is not a
+  non-negative integer, `entry_order_expires_at_bar` is neither `null` nor a
   non-negative integer, or `entry_bar_open_time_ms > first_fill_at_ms`
 - **THEN** context construction fails before the value can enter aggregate
   or repository state
@@ -232,8 +250,8 @@ DesiredEntry`, a strictly positive integer `first_fill_at_ms` (type checked,
 - **THEN** it contains no average execution price, filled quantity,
   remaining quantity, fill ledger entry, execution phase, or any
   execution-lifecycle state
-- **AND** it contains exactly the three required fields: `desired_entry`,
-  `first_fill_at_ms`, `entry_bar_open_time_ms`
+- **AND** it contains exactly the four required fields: `desired_entry`,
+  `first_fill_at_ms`, `entry_bar_open_time_ms`, `entry_order_expires_at_bar`
 
 ### Requirement: The current trade cycle gains its frozen executed entry context only through the first-fill transition
 `CurrentTradeCycle.frozen_entry_context` SHALL remain null until the
