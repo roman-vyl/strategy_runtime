@@ -10,6 +10,7 @@ from strategy_runtime.infrastructure.abi._http_transport import (
 )
 from strategy_runtime.infrastructure.abi.position_management_codec import (
     decode_apply_protection_response,
+    decode_cancel_entry_remainder_response,
     decode_close_position_response,
 )
 from strategy_runtime.runtime.position_management_execution.errors import (
@@ -19,6 +20,7 @@ from strategy_runtime.runtime.position_management_execution.errors import (
 from strategy_runtime.runtime.position_management_execution.models import (
     ApplyProtectionCommand,
     ClosePositionCommand,
+    EntryRemainderCancelConfirmation,
     PositionClosedConfirmation,
     ProtectionAppliedConfirmation,
 )
@@ -95,6 +97,36 @@ class HttpxAbiPositionManagementAdapter:
             command=command,
         )
 
+    def cancel_entry_remainder(
+        self, strategy_instance_id: str, trade_cycle_id: str
+    ) -> EntryRemainderCancelConfirmation:
+        path = _entry_remainder_cancel_path(strategy_instance_id, trade_cycle_id)
+        try:
+            response = self._client.post(
+                path,
+                json={},
+                headers={
+                    "accept": "application/json",
+                    "content-type": "application/json",
+                },
+            )
+        except httpx.TimeoutException as exc:
+            raise PositionManagementExecutionTimeout(
+                "ABI cancel_entry_remainder request timed out"
+            ) from exc
+        except httpx.TransportError as exc:
+            raise PositionManagementExecutionNetworkFailure(
+                "ABI cancel_entry_remainder network transport failed"
+            ) from exc
+
+        return decode_cancel_entry_remainder_response(
+            status_code=response.status_code,
+            content_type=response.headers.get("content-type"),
+            content=response.content,
+            strategy_instance_id=strategy_instance_id,
+            trade_cycle_id=trade_cycle_id,
+        )
+
     def close(self) -> None:
         self._client.close()
 
@@ -120,3 +152,12 @@ def _close_path(strategy_instance_id: str, trade_cycle_id: str) -> str:
     strategy_segment = encode_opaque_path_segment(strategy_instance_id)
     cycle_segment = encode_opaque_path_segment(trade_cycle_id)
     return f"/v1/strategy-instances/{strategy_segment}/trade-cycles/{cycle_segment}/close"
+
+
+def _entry_remainder_cancel_path(strategy_instance_id: str, trade_cycle_id: str) -> str:
+    strategy_segment = encode_opaque_path_segment(strategy_instance_id)
+    cycle_segment = encode_opaque_path_segment(trade_cycle_id)
+    return (
+        f"/v1/strategy-instances/{strategy_segment}/trade-cycles/{cycle_segment}"
+        "/entry-remainder/cancel"
+    )

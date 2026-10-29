@@ -86,6 +86,7 @@ class StrategyOperatorCommandsService:
         mutex_wait_seconds: float = DEFAULT_MUTEX_WAIT_SECONDS,
         trade_cycle_closed_journal: TradeCycleClosedJournalPort | None = None,
         trade_cycle_opened_journal: TradeCycleOpenedJournalPort | None = None,
+        entry_order_lifetime_bars: int | None = None,
     ) -> None:
         self._load_snapshot = load_snapshot
         self._enabled_writer = enabled_writer
@@ -97,6 +98,7 @@ class StrategyOperatorCommandsService:
         self._mutex_wait_seconds = mutex_wait_seconds
         self._trade_cycle_closed_journal = trade_cycle_closed_journal
         self._trade_cycle_opened_journal = trade_cycle_opened_journal
+        self._entry_order_lifetime_bars = entry_order_lifetime_bars
 
     def close_position(self, strategy_instance_id: str) -> ClosePositionResult:
         self._require_in_catalog(strategy_instance_id)
@@ -144,7 +146,12 @@ class StrategyOperatorCommandsService:
         if cycle.frozen_entry_context is None:
             # ABI shows the fill the bar has not frozen yet: freeze it as bar processing does
             assert resolved.first_fill_at_ms is not None
-            frozen = apply_first_fill(state, cycle.trade_cycle_id, resolved.first_fill_at_ms)
+            frozen = apply_first_fill(
+                state,
+                cycle.trade_cycle_id,
+                resolved.first_fill_at_ms,
+                order_lifetime_bars=self._entry_order_lifetime_bars,
+            )
             state = self._state_repository.save(frozen)
             if (
                 resolved.average_entry_price is not None

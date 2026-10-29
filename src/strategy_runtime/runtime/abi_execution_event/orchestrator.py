@@ -14,9 +14,11 @@ class AbiExecutionEventOrchestrator:
         *,
         state_repository: StrategyInstanceRuntimeStateRepository,
         keyed_mutex_registry: StrategyInstanceKeyedMutexRegistry,
+        entry_order_lifetime_bars: int | None = None,
     ) -> None:
         self._state_repository = state_repository
         self._keyed_mutex_registry = keyed_mutex_registry
+        self._entry_order_lifetime_bars = entry_order_lifetime_bars
 
     def process(self, event: AbiFirstFillExecutionEvent) -> StrategyInstanceRuntimeState:
         with self._keyed_mutex_registry.hold(event.strategy_instance_id):
@@ -24,7 +26,12 @@ class AbiExecutionEventOrchestrator:
             if state is None:
                 raise StrategyInstanceStateNotFound(event.strategy_instance_id)
 
-            resulting_state = apply_first_fill(state, event.trade_cycle_id, event.first_fill_at_ms)
+            resulting_state = apply_first_fill(
+                state,
+                event.trade_cycle_id,
+                event.first_fill_at_ms,
+                order_lifetime_bars=self._entry_order_lifetime_bars,
+            )
             if resulting_state is state:
                 return state
 

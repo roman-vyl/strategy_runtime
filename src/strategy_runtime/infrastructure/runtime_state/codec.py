@@ -37,7 +37,7 @@ from strategy_runtime.runtime.state.models import (
     StrategyInstanceRuntimeState,
 )
 
-_SCHEMA_VERSION: Final = 3
+_SCHEMA_VERSION: Final = 4
 
 _ENVELOPE_KEYS_V1: Final = frozenset(
     {
@@ -54,7 +54,7 @@ _ENVELOPE_KEYS_V3: Final = _ENVELOPE_KEYS_V2 | {"pending_close_recovery"}
 _PENDING_ENTRY_RECOVERY_KEYS: Final = frozenset({"trade_cycle_id"})
 _PENDING_CLOSE_RECOVERY_KEYS: Final = frozenset({"trade_cycle_id"})
 _SNAPSHOT_KEYS: Final = frozenset({"instrument", "base_timeframe", "raw_spec", "source_path"})
-_CYCLE_KEYS: Final = frozenset(
+_CYCLE_KEYS_V1: Final = frozenset(
     {
         "trade_cycle_id",
         "applied_entry_package",
@@ -62,6 +62,8 @@ _CYCLE_KEYS: Final = frozenset(
         "latest_confirmed_management_protection",
     }
 )
+# v4 (runtime-touch-trigger-remainder-cancel-v1): the entry-remainder mark.
+_CYCLE_KEYS_V4: Final = _CYCLE_KEYS_V1 | {"entry_remainder_cancelled"}
 _APPLIED_ENTRY_PACKAGE_KEYS: Final = frozenset({"applied_desired_entry", "calculated_quantity"})
 _DESIRED_ENTRY_KEYS: Final = frozenset(
     {
@@ -73,9 +75,12 @@ _DESIRED_ENTRY_KEYS: Final = frozenset(
         "locked_exit_profile",
     }
 )
-_FROZEN_ENTRY_CONTEXT_KEYS: Final = frozenset(
+_FROZEN_ENTRY_CONTEXT_KEYS_V1: Final = frozenset(
     {"desired_entry", "first_fill_at_ms", "entry_bar_open_time_ms"}
 )
+_FROZEN_ENTRY_CONTEXT_KEYS_V4: Final = _FROZEN_ENTRY_CONTEXT_KEYS_V1 | {
+    "entry_order_expires_at_bar"
+}
 _DESIRED_PROTECTION_KEYS: Final = frozenset({"stop_price", "take_price"})
 
 
@@ -164,6 +169,7 @@ def _encode_cycle(cycle: CurrentTradeCycle) -> dict[str, Any]:
             if cycle.latest_confirmed_management_protection is not None
             else None
         ),
+        "entry_remainder_cancelled": cycle.entry_remainder_cancelled,
     }
 
 
@@ -190,6 +196,7 @@ def _encode_frozen_entry_context(context: FrozenExecutedEntryContext) -> dict[st
         "desired_entry": _encode_desired_entry(context.desired_entry),
         "first_fill_at_ms": context.first_fill_at_ms,
         "entry_bar_open_time_ms": context.entry_bar_open_time_ms,
+        "entry_order_expires_at_bar": context.entry_order_expires_at_bar,
     }
 
 
@@ -217,7 +224,9 @@ def _decode_envelope(envelope: Any) -> StrategyInstanceRuntimeState:
     schema_version = envelope.get("schema_version")
     if schema_version == 1:
         _reject_unknown_keys(envelope, _ENVELOPE_KEYS_V1, where="envelope")
-        return _decode_aggregate(envelope, pending_entry_recovery=None, pending_close_recovery=None)
+        return _decode_aggregate(
+            envelope, pending_entry_recovery=None, pending_close_recovery=None, v4=False
+        )
     if schema_version == 2:
         _reject_unknown_keys(envelope, _ENVELOPE_KEYS_V2, where="envelope")
         pending_entry_recovery_data = envelope["pending_entry_recovery"]
@@ -229,8 +238,10 @@ def _decode_envelope(envelope: Any) -> StrategyInstanceRuntimeState:
                 else None
             ),
             pending_close_recovery=None,
+            v4=False,
         )
-    if schema_version == 3:
+    if schema_version in (3, 4):
+        # v4 keeps the v3 envelope; only the cycle and frozen context gain keys.
         _reject_unknown_keys(envelope, _ENVELOPE_KEYS_V3, where="envelope")
         pending_entry_recovery_data = envelope["pending_entry_recovery"]
         pending_close_recovery_data = envelope["pending_close_recovery"]
@@ -246,6 +257,7 @@ def _decode_envelope(envelope: Any) -> StrategyInstanceRuntimeState:
                 if pending_close_recovery_data is not None
                 else None
             ),
+            v4=schema_version == 4,
         )
     raise ValueError("unsupported or missing schema_version")
 
@@ -255,6 +267,7 @@ def _decode_aggregate(
     *,
     pending_entry_recovery: PendingEntryRecovery | None,
     pending_close_recovery: PendingCloseRecovery | None,
+    v4: bool,
 ) -> StrategyInstanceRuntimeState:
     current_trade_cycle_data = data["current_trade_cycle"]
     return StrategyInstanceRuntimeState(
@@ -263,7 +276,7 @@ def _decode_aggregate(
         registered_spec_snapshot=_decode_snapshot(data["registered_spec_snapshot"]),
         risk_multiplier=data["risk_multiplier"],
         current_trade_cycle=(
-            _decode_cycle(current_trade_cycle_data)
+            _decode_cycle(current_trade_cycle_data, v4=v4)
             if current_trade_cycle_data is not None
             else None
         ),
@@ -298,23 +311,27 @@ def _decode_snapshot(data: Any) -> RegisteredSpecSnapshot:
     )
 
 
-def _decode_cycle(data: Any) -> CurrentTradeCycle:
+def _decode_cycle(data: Any, *, v4: bool) -> CurrentTradeCycle:
     if not isinstance(data, dict):
         raise TypeError("current_trade_cycle must be a JSON object")
-    _reject_unknown_keys(data, _CYCLE_KEYS, where="current_trade_cycle")
+    _reject_unknown_keys(
+        data, _CYCLE_KEYS_V4 if v4 else _CYCLE_KEYS_V1, where="current_trade_cycle"
+    )
     frozen_entry_context_data = data["frozen_entry_context"]
     protection_data = data["latest_confirmed_management_protection"]
     return CurrentTradeCycle(
         trade_cycle_id=data["trade_cycle_id"],
         applied_entry_package=_decode_applied_entry_package(data["applied_entry_package"]),
         frozen_entry_context=(
-            _decode_frozen_entry_context(frozen_entry_context_data)
+            _decode_frozen_entry_context(frozen_entry_context_data, v4=v4)
             if frozen_entry_context_data is not None
             else None
         ),
         latest_confirmed_management_protection=(
             _decode_desired_protection(protection_data) if protection_data is not None else None
         ),
+        # Versions 1-3 predate the mark: no remainder was ever cancelled.
+        entry_remainder_cancelled=data["entry_remainder_cancelled"] if v4 else False,
     )
 
 
@@ -342,14 +359,19 @@ def _decode_desired_entry(data: Any) -> DesiredEntry:
     )
 
 
-def _decode_frozen_entry_context(data: Any) -> FrozenExecutedEntryContext:
+def _decode_frozen_entry_context(data: Any, *, v4: bool) -> FrozenExecutedEntryContext:
     if not isinstance(data, dict):
         raise TypeError("frozen_entry_context must be a JSON object")
-    _reject_unknown_keys(data, _FROZEN_ENTRY_CONTEXT_KEYS, where="frozen_entry_context")
+    _reject_unknown_keys(
+        data,
+        _FROZEN_ENTRY_CONTEXT_KEYS_V4 if v4 else _FROZEN_ENTRY_CONTEXT_KEYS_V1,
+        where="frozen_entry_context",
+    )
     return FrozenExecutedEntryContext(
         desired_entry=_decode_desired_entry(data["desired_entry"]),
         first_fill_at_ms=data["first_fill_at_ms"],
         entry_bar_open_time_ms=data["entry_bar_open_time_ms"],
+        entry_order_expires_at_bar=data["entry_order_expires_at_bar"] if v4 else None,
     )
 
 

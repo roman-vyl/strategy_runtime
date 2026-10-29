@@ -399,13 +399,21 @@ class TestMutexRelease:
 # ---------------------------------------------------------------------------
 
 
-def test_constructor_accepts_exactly_state_repository_and_keyed_mutex_registry() -> None:
+def test_constructor_accepts_exactly_its_keyword_collaborators() -> None:
     signature = inspect.signature(AbiExecutionEventOrchestrator.__init__)
     param_names = list(signature.parameters)
 
-    assert param_names == ["self", "state_repository", "keyed_mutex_registry"]
-    for name in ("state_repository", "keyed_mutex_registry"):
+    # entry_order_lifetime_bars: touch_trigger lifetime frozen into the first fill
+    # (runtime-touch-trigger-remainder-cancel-v1).
+    assert param_names == [
+        "self",
+        "state_repository",
+        "keyed_mutex_registry",
+        "entry_order_lifetime_bars",
+    ]
+    for name in ("state_repository", "keyed_mutex_registry", "entry_order_lifetime_bars"):
         assert signature.parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
+    assert signature.parameters["entry_order_lifetime_bars"].default is None
 
 
 def test_constructor_rejects_an_unknown_collaborator() -> None:

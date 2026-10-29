@@ -253,10 +253,10 @@ def test_decode_accepts_explicit_null_take_price() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_every_new_write_encodes_schema_version_3_with_both_pending_marker_keys() -> None:
+def test_every_new_write_encodes_schema_version_4_with_both_pending_marker_keys() -> None:
     envelope = json.loads(encode_state_line(_bare_state()))
 
-    assert envelope["schema_version"] == 3
+    assert envelope["schema_version"] == 4
     assert envelope["pending_entry_recovery"] is None
     assert envelope["pending_close_recovery"] is None
 
@@ -329,7 +329,7 @@ def test_schema_version_3_line_decodes_a_present_pending_close_recovery_marker()
         pending_close_recovery=PendingCloseRecovery("cycle-9"),
     )
     envelope = json.loads(encode_state_line(state))
-    assert envelope["schema_version"] == 3
+    assert envelope["schema_version"] == 4
 
     decoded = decode_state_line(json.dumps(envelope))
 
@@ -355,7 +355,7 @@ def test_round_trip_with_pending_close_recovery_set() -> None:
 def test_schema_version_3_line_decodes_a_present_pending_entry_recovery_marker() -> None:
     state = replace(_bare_state(), pending_entry_recovery=PendingEntryRecovery("cycle-7"))
     envelope = json.loads(encode_state_line(state))
-    assert envelope["schema_version"] == 3
+    assert envelope["schema_version"] == 4
 
     decoded = decode_state_line(json.dumps(envelope))
 
@@ -385,6 +385,105 @@ def test_schema_version_3_line_fails_closed_when_both_pending_markers_are_set() 
     )
     envelope = json.loads(encode_state_line(state))
     envelope["pending_entry_recovery"] = {"trade_cycle_id": "cycle-1"}
+
+    with pytest.raises(StateRecordDecodeError):
+        decode_state_line(json.dumps(envelope))
+
+
+# ---------------------------------------------------------------------------
+# schema_version 4: entry_remainder_cancelled + entry_order_expires_at_bar
+# (runtime-touch-trigger-remainder-cancel-v1).
+# ---------------------------------------------------------------------------
+
+
+def _touch_trigger_state(*, cancelled: bool) -> StrategyInstanceRuntimeState:
+    state = _complete_state()
+    cycle = state.current_trade_cycle
+    assert cycle is not None and cycle.frozen_entry_context is not None
+    return replace(
+        state,
+        current_trade_cycle=replace(
+            cycle,
+            frozen_entry_context=replace(
+                cycle.frozen_entry_context, entry_order_expires_at_bar=1_500_000
+            ),
+            entry_remainder_cancelled=cancelled,
+        ),
+    )
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_schema_version_4_round_trip_keeps_boundary_and_mark(cancelled: bool) -> None:
+    state = _touch_trigger_state(cancelled=cancelled)
+    envelope = json.loads(encode_state_line(state))
+
+    assert envelope["schema_version"] == 4
+    assert envelope["current_trade_cycle"]["entry_remainder_cancelled"] is cancelled
+    assert envelope["current_trade_cycle"]["frozen_entry_context"][
+        "entry_order_expires_at_bar"
+    ] == (1_500_000)
+    assert decode_state_line(json.dumps(envelope)) == state
+
+
+def test_schema_version_4_encodes_null_boundary_for_ema_anchor() -> None:
+    envelope = json.loads(encode_state_line(_complete_state()))
+
+    cycle = envelope["current_trade_cycle"]
+    assert cycle["entry_remainder_cancelled"] is False
+    assert cycle["frozen_entry_context"]["entry_order_expires_at_bar"] is None
+
+
+def _as_v3_line(state: StrategyInstanceRuntimeState) -> str:
+    envelope = json.loads(encode_state_line(state))
+    envelope["schema_version"] = 3
+    cycle = envelope["current_trade_cycle"]
+    del cycle["entry_remainder_cancelled"]
+    del cycle["frozen_entry_context"]["entry_order_expires_at_bar"]
+    return json.dumps(envelope)
+
+
+@pytest.mark.parametrize("version", [1, 2, 3])
+def test_older_lines_decode_with_null_boundary_and_false_mark(version: int) -> None:
+    envelope = json.loads(_as_v3_line(_complete_state()))
+    envelope["schema_version"] = version
+    if version < 3:
+        del envelope["pending_close_recovery"]
+    if version < 2:
+        del envelope["pending_entry_recovery"]
+
+    decoded = decode_state_line(json.dumps(envelope))
+
+    assert decoded == _complete_state()
+    assert decoded.current_trade_cycle is not None
+    assert decoded.current_trade_cycle.entry_remainder_cancelled is False
+    assert decoded.current_trade_cycle.frozen_entry_context is not None
+    assert decoded.current_trade_cycle.frozen_entry_context.entry_order_expires_at_bar is None
+
+
+def test_schema_version_3_line_rejects_the_new_keys() -> None:
+    envelope = json.loads(encode_state_line(_touch_trigger_state(cancelled=True)))
+    envelope["schema_version"] = 3
+
+    with pytest.raises(StateRecordDecodeError):
+        decode_state_line(json.dumps(envelope))
+
+
+@pytest.mark.parametrize("missing", ["entry_remainder_cancelled", "entry_order_expires_at_bar"])
+def test_schema_version_4_line_missing_a_new_key_fails_closed(missing: str) -> None:
+    envelope = json.loads(encode_state_line(_touch_trigger_state(cancelled=False)))
+    cycle = envelope["current_trade_cycle"]
+    if missing == "entry_remainder_cancelled":
+        del cycle[missing]
+    else:
+        del cycle["frozen_entry_context"][missing]
+
+    with pytest.raises(StateRecordDecodeError):
+        decode_state_line(json.dumps(envelope))
+
+
+def test_schema_version_4_line_rejects_a_non_bool_mark() -> None:
+    envelope = json.loads(encode_state_line(_touch_trigger_state(cancelled=False)))
+    envelope["current_trade_cycle"]["entry_remainder_cancelled"] = 1
 
     with pytest.raises(StateRecordDecodeError):
         decode_state_line(json.dumps(envelope))

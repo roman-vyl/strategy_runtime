@@ -199,6 +199,10 @@ def build_application(
             )
         )
 
+        # touch_trigger freezes the entry order's lifetime into the first fill; ema_anchor never.
+        entry_order_lifetime_bars = (
+            config.order_lifetime_bars if config.live_entry_mode == "touch_trigger" else None
+        )
         open_position_resolver = OpenPositionResolver(open_position_client)
         use_case_router = StrategyUseCaseRouter(
             live_entry_engine=live_entry_client,
@@ -229,6 +233,7 @@ def build_application(
             trade_cycle_closed_journal=journal,
             trade_cycle_opened_journal=journal,
             entry_cycle_ended_journal=journal,
+            entry_order_lifetime_bars=entry_order_lifetime_bars,
         )
         strategy_runtime_orchestrator = StrategyRuntimeOrchestrator(
             state_repository=state_repository,
@@ -242,6 +247,9 @@ def build_application(
             trade_cycle_opened_journal=journal,
             open_trade_journal=journal,
             entry_cycle_ended_journal=journal,
+            entry_order_lifetime_bars=entry_order_lifetime_bars,
+            entry_remainder_cancel_port=position_management_client,
+            entry_remainder_cancel_journal=journal,
         )
         enabled_control_service = StrategyEnabledControlService(
             load_snapshot=catalog.load_snapshot,
@@ -277,6 +285,7 @@ def build_application(
             keyed_mutex_registry=keyed_mutex_registry,
             trade_cycle_closed_journal=journal,
             trade_cycle_opened_journal=journal,
+            entry_order_lifetime_bars=entry_order_lifetime_bars,
         )
         chart_layers_service = StrategyChartLayersService(
             load_snapshot=catalog.load_snapshot,
@@ -285,6 +294,7 @@ def build_application(
         abi_execution_event_orchestrator = AbiExecutionEventOrchestrator(
             state_repository=state_repository,
             keyed_mutex_registry=keyed_mutex_registry,
+            entry_order_lifetime_bars=entry_order_lifetime_bars,
         )
 
         def process_first_fill(

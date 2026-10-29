@@ -166,3 +166,68 @@ def test_entry_bar_before_desired_entry_source_plan_bar_fails_closed() -> None:
         apply_first_fill(state, TRADE_CYCLE_ID, 899_999)
 
     assert state.current_trade_cycle.frozen_entry_context is None  # type: ignore[union-attr]
+
+
+# runtime-touch-trigger-remainder-cancel-v1: the entry order's lifetime boundary.
+
+_T0 = 1_785_000_000_000  # signal bar 12:00 on a 5m grid
+_FIVE_MINUTES = 300_000
+
+
+def test_touch_trigger_freezes_the_boundary_from_the_signal_bar() -> None:
+    state = runtime_state(
+        base_timeframe="5m", entry=desired_entry(source_plan_bar_open_time_ms=_T0)
+    )
+
+    frozen = apply_first_fill(state, TRADE_CYCLE_ID, _T0 + 1_000, order_lifetime_bars=3)
+
+    cycle = frozen.current_trade_cycle
+    assert cycle is not None and cycle.frozen_entry_context is not None
+    # 12:00 signal, N = 3: the order ends on the bar that closes at 12:25.
+    assert cycle.frozen_entry_context.entry_order_expires_at_bar == _T0 + 5 * _FIVE_MINUTES
+    assert cycle.entry_remainder_cancelled is False
+
+
+def test_ema_anchor_leaves_the_boundary_unset() -> None:
+    state = runtime_state(
+        base_timeframe="5m", entry=desired_entry(source_plan_bar_open_time_ms=_T0)
+    )
+
+    frozen = apply_first_fill(state, TRADE_CYCLE_ID, _T0 + 1_000)
+
+    cycle = frozen.current_trade_cycle
+    assert cycle is not None and cycle.frozen_entry_context is not None
+    assert cycle.frozen_entry_context.entry_order_expires_at_bar is None
+
+
+def test_a_late_fill_does_not_move_the_boundary() -> None:
+    state = runtime_state(
+        base_timeframe="5m", entry=desired_entry(source_plan_bar_open_time_ms=_T0)
+    )
+    late_fill = _T0 + 7 * _FIVE_MINUTES + 42
+
+    frozen = apply_first_fill(state, TRADE_CYCLE_ID, late_fill, order_lifetime_bars=3)
+
+    cycle = frozen.current_trade_cycle
+    assert cycle is not None and cycle.frozen_entry_context is not None
+    assert cycle.frozen_entry_context.entry_order_expires_at_bar == _T0 + 5 * _FIVE_MINUTES
+
+
+def test_a_repeated_fill_observation_keeps_the_frozen_boundary() -> None:
+    state = runtime_state(
+        base_timeframe="5m", entry=desired_entry(source_plan_bar_open_time_ms=_T0)
+    )
+    frozen = apply_first_fill(state, TRADE_CYCLE_ID, _T0 + 1_000, order_lifetime_bars=3)
+
+    again = apply_first_fill(frozen, TRADE_CYCLE_ID, _T0 + 1_000, order_lifetime_bars=10)
+
+    assert again is frozen
+
+
+@pytest.mark.parametrize("bad", [-1, 1.5, "3", True])
+def test_invalid_order_lifetime_bars_is_rejected(bad: object) -> None:
+    state = runtime_state(
+        base_timeframe="5m", entry=desired_entry(source_plan_bar_open_time_ms=_T0)
+    )
+    with pytest.raises(ValueError):
+        apply_first_fill(state, TRADE_CYCLE_ID, _T0 + 1_000, order_lifetime_bars=bad)  # type: ignore[arg-type]

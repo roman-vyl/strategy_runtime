@@ -82,6 +82,7 @@ class UncertainExchangeStateResolver:
         trade_cycle_closed_journal: TradeCycleClosedJournalPort | None = None,
         trade_cycle_opened_journal: TradeCycleOpenedJournalPort | None = None,
         entry_cycle_ended_journal: EntryCycleEndedJournalPort | None = None,
+        entry_order_lifetime_bars: int | None = None,
     ) -> None:
         self._state_repository = state_repository
         self._keyed_mutex_registry = keyed_mutex_registry
@@ -90,6 +91,7 @@ class UncertainExchangeStateResolver:
         self._trade_cycle_closed_journal = trade_cycle_closed_journal
         self._trade_cycle_opened_journal = trade_cycle_opened_journal
         self._entry_cycle_ended_journal = entry_cycle_ended_journal
+        self._entry_order_lifetime_bars = entry_order_lifetime_bars
 
     def attempt(self, strategy_instance_id: str) -> None:
         """Resolve, or leave untouched, the one instance's pending recovery marker."""
@@ -166,7 +168,10 @@ class UncertainExchangeStateResolver:
             )
             if isinstance(response, PositionOpenRecoveryState):
                 reconstructed = apply_first_fill(
-                    reconstructed, trade_cycle_id, response.first_fill_at_ms
+                    reconstructed,
+                    trade_cycle_id,
+                    response.first_fill_at_ms,
+                    order_lifetime_bars=self._entry_order_lifetime_bars,
                 )
             self._state_repository.save(reconstructed)
             if isinstance(response, PositionOpenRecoveryState):
