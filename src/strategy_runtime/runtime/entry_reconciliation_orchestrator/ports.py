@@ -9,6 +9,10 @@ from strategy_runtime.runtime.entry_reconciliation.models import (
 from strategy_runtime.runtime.state.models import StrategyInstanceRuntimeState
 
 
+class EntryExecutionNotReady(RuntimeError):
+    """The execution boundary rejected this attempt before any side effects."""
+
+
 class EntryReconciliationExecutionPort(Protocol):
     """Execute one reconciliation command against its exact source snapshot."""
 

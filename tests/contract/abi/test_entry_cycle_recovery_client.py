@@ -7,6 +7,7 @@ from strategy_runtime.infrastructure.abi.http_entry_cycle_recovery import (
     HttpxAbiEntryCycleRecoveryAdapter,
 )
 from strategy_runtime.runtime.abi.entry_cycle_recovery_errors import (
+    AbiEntryCycleRecoveryExecutionNotReady,
     AbiEntryCycleRecoveryNetworkFailure,
     AbiEntryCycleRecoveryProtocolError,
     AbiEntryCycleRecoveryTimeout,
@@ -519,3 +520,15 @@ def json_response(status_code: int, body: object) -> httpx.Response:
         json=body,
         headers={"content-type": "application/json; charset=utf-8"},
     )
+
+
+def test_503_execution_not_ready_is_an_existing_recovery_unavailable_error() -> None:
+    fake = FakeAbi(
+        lambda _: json_response(
+            503, {"error": {"code": "execution_not_ready", "message": "locked"}}
+        )
+    )
+    with pytest.raises(AbiEntryCycleRecoveryExecutionNotReady):
+        query(fake, strategy_instance_id="instance", trade_cycle_id="cycle")
+    assert len(fake.requests) == 1
+    assert issubclass(AbiEntryCycleRecoveryExecutionNotReady, AbiEntryCycleRecoveryUnavailable)

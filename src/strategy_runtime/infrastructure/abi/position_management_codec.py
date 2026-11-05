@@ -8,6 +8,7 @@ from strategy_runtime.infrastructure.abi.trade_cycle_closure_codec import (
     decode_optional_closure,
 )
 from strategy_runtime.runtime.position_management_execution.errors import (
+    PositionManagementExecutionNotReady,
     PositionManagementExecutionProtocolError,
     PositionManagementExecutionPublicError,
     PositionManagementExecutionUnavailable,
@@ -82,6 +83,9 @@ def decode_apply_protection_response(
 
     if status_code == 200:
         return _decode_protection_success(payload, command)
+    if status_code == 503:
+        _decode_internal_error_envelope(payload, expected_code="execution_not_ready")
+        raise PositionManagementExecutionNotReady("ABI execution is not ready")
     if status_code == 500:
         _decode_internal_error_envelope(payload)
         raise PositionManagementExecutionUnavailable(
@@ -102,6 +106,9 @@ def decode_close_position_response(
 
     if status_code == 200:
         return _decode_close_success(payload, command)
+    if status_code == 503:
+        _decode_internal_error_envelope(payload, expected_code="execution_not_ready")
+        raise PositionManagementExecutionNotReady("ABI execution is not ready")
     if status_code == 500:
         _decode_internal_error_envelope(payload)
         raise PositionManagementExecutionUnavailable(
@@ -157,6 +164,9 @@ def decode_cancel_entry_remainder_response(
                 "ABI entry-remainder cancel success response does not match the request"
             )
         return confirmation
+    if status_code == 503:
+        _decode_internal_error_envelope(payload, expected_code="execution_not_ready")
+        raise PositionManagementExecutionNotReady("ABI execution is not ready")
     if status_code == 500:
         _decode_internal_error_envelope(payload)
         raise PositionManagementExecutionUnavailable(
@@ -304,13 +314,15 @@ def _decode_validation_details(value: object) -> FrozenJsonValue:
     return freeze_json(items)
 
 
-def _decode_internal_error_envelope(payload: object) -> None:
+def _decode_internal_error_envelope(
+    payload: object, *, expected_code: str = _INTERNAL_ERROR_CODE
+) -> None:
     try:
         envelope = _closed_object(payload, _ERROR_ENVELOPE_FIELDS, "error envelope")
         error = _closed_object(envelope["error"], _ERROR_FIELDS_WITHOUT_DETAILS, "error")
         code = _non_empty_string(error["code"], "error.code")
-        if code != _INTERNAL_ERROR_CODE:
-            raise ValueError(f"undocumented 500 error code: {code!r}")
+        if code != expected_code:
+            raise ValueError(f"expected error code {expected_code!r}, got {code!r}")
         _non_empty_string(error["message"], "error.message")
     except (KeyError, TypeError, ValueError) as exc:
         raise PositionManagementExecutionProtocolError(

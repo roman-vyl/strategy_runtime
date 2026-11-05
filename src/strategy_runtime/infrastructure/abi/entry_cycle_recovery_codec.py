@@ -4,6 +4,7 @@ import json
 from typing import Literal, NoReturn, cast
 
 from strategy_runtime.runtime.abi.entry_cycle_recovery_errors import (
+    AbiEntryCycleRecoveryExecutionNotReady,
     AbiEntryCycleRecoveryProtocolError,
     AbiEntryCycleRecoveryUnavailable,
     AbiEntryCycleRecoveryUnknownTradeCycleBinding,
@@ -59,6 +60,9 @@ def decode_recovery_state_response(
     if status_code == 422:
         message = _decode_error_envelope(payload, expected_code=_UNKNOWN_BINDING_CODE)
         raise AbiEntryCycleRecoveryUnknownTradeCycleBinding(message)
+    if status_code == 503:
+        message = _decode_error_envelope(payload, expected_code="execution_not_ready")
+        raise AbiEntryCycleRecoveryExecutionNotReady(message)
     if status_code == 500:
         _decode_error_envelope(payload, expected_code=_INTERNAL_ERROR_CODE)
         raise AbiEntryCycleRecoveryUnavailable(

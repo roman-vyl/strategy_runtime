@@ -8,6 +8,7 @@ from strategy_runtime.runtime.abi.entry_package_models import (
     EntryPackageAbsent,
     EntryPackageApplied,
     EntryPackageDeclined,
+    EntryPackageExecutionNotReady,
     EntryPackageInternalError,
     EntryPackageMalformedJson,
     EntryPackageRequest,
@@ -51,6 +52,7 @@ _PUBLIC_ERROR_CODES = {
     415: "unsupported_media_type",
     422: "validation_failed",
     500: "internal_error",
+    503: "execution_not_ready",
 }
 
 
@@ -186,6 +188,8 @@ def _decode_public_error(status_code: int, payload: object) -> EntryPackageResul
             return EntryPackageMalformedJson(message=message)
         if expected_code == "unsupported_media_type":
             return EntryPackageUnsupportedMediaType(message=message)
+        if expected_code == "execution_not_ready":
+            return EntryPackageExecutionNotReady(message=message)
         if expected_code == "internal_error":
             return EntryPackageInternalError(message=message)
         return EntryPackageValidationFailed(

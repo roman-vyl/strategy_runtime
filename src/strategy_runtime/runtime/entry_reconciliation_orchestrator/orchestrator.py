@@ -22,6 +22,7 @@ from strategy_runtime.runtime.entry_reconciliation import (
 from strategy_runtime.runtime.entry_reconciliation_orchestrator.ports import (
     EntryAppliedJournalPort,
     EntryDeclinedJournalPort,
+    EntryExecutionNotReady,
     EntryReconciliationExecutionPort,
 )
 from strategy_runtime.runtime.routing.models import LiveEntryProjectedStrategyInstance
@@ -131,6 +132,9 @@ class EntryReconciliationOrchestrator:
                 "command-bearing reconciliation decision must produce a command"
             )
 
+        if state.pending_entry_recovery is not None:
+            raise EntryReconciliationInvariantError("cannot overwrite an existing recovery marker")
+
         pending_state = self._state_repository.save(
             replace(
                 state,
@@ -138,7 +142,18 @@ class EntryReconciliationOrchestrator:
             )
         )
 
-        confirmation = self._execution_port.execute(command, state)
+        try:
+            confirmation = self._execution_port.execute(command, state)
+        except EntryExecutionNotReady as error:
+            current = self._state_repository.get(command.strategy_instance_id)
+            if current != pending_state:
+                raise EntryReconciliationInvariantError(
+                    "cannot clear a recovery marker after its state changed"
+                ) from error
+            self._state_repository.save(replace(current, pending_entry_recovery=None))
+            # Abort this attempt, including the second leg of a Replace.
+            # The next ordinary reconciliation uses fresh state.
+            raise
         if isinstance(confirmation, EntryDeclinedOutcome):
             return self._end_declined_apply(
                 projection, pending_state, decision, command, confirmation

@@ -194,11 +194,24 @@ class EntryPackageInternalError:
         _require_non_empty_string(self.message, "message")
 
 
+@dataclass(frozen=True, slots=True)
+class EntryPackageExecutionNotReady:
+    """HTTP 503 guarantees that this attempt had no execution side effects."""
+
+    message: str
+
+    code: ClassVar[Literal["execution_not_ready"]] = "execution_not_ready"
+
+    def __post_init__(self) -> None:
+        _require_non_empty_string(self.message, "message")
+
+
 EntryPackagePublicError = (
     EntryPackageMalformedJson
     | EntryPackageUnsupportedMediaType
     | EntryPackageValidationFailed
     | EntryPackageInternalError
+    | EntryPackageExecutionNotReady
 )
 EntryPackageResult = (
     EntryPackageApplied | EntryPackageAbsent | EntryPackageDeclined | EntryPackagePublicError

@@ -42,7 +42,7 @@ def test_authoritative_abi_openapi_matches_runtime_apply_protection_contract() -
         "strategy_instance_id": {"type": "string", "minLength": 1},
         "trade_cycle_id": {"type": "string", "minLength": 1},
     }
-    assert set(operation["responses"]) == {"200", "400", "415", "422", "500"}
+    assert set(operation["responses"]) == {"200", "400", "415", "422", "500", "503"}
 
     price_format = {"type": "string", "format": "positive-exact-decimal"}
     nullable_price_format = {"oneOf": [price_format, {"type": "null"}]}
@@ -144,7 +144,7 @@ def test_authoritative_abi_openapi_matches_runtime_close_position_contract() -> 
         "strategy_instance_id": {"type": "string", "minLength": 1},
         "trade_cycle_id": {"type": "string", "minLength": 1},
     }
-    assert set(operation["responses"]) == {"200", "400", "415", "422", "500"}
+    assert set(operation["responses"]) == {"200", "400", "415", "422", "500", "503"}
 
     request_schema = operation["requestBody"]["content"]["application/json"]["schema"]
     assert request_schema == {"$ref": "#/components/schemas/CloseRequest"}

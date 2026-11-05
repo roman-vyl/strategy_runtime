@@ -39,3 +39,9 @@ class AbiEntryCycleRecoveryUnknownTradeCycleBinding(AbiEntryCycleRecoveryClientE
     recovery_state, and never inferred as terminal_without_fill."""
 
     code = "abi_entry_cycle_recovery_unknown_trade_cycle_binding"
+
+
+class AbiEntryCycleRecoveryExecutionNotReady(AbiEntryCycleRecoveryUnavailable):
+    """ABI rejected this request before execution because it is not ready."""
+
+    code = "execution_not_ready"

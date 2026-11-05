@@ -6,6 +6,7 @@ from dataclasses import replace
 import pytest
 
 from strategy_runtime.runtime.abi.entry_cycle_recovery_errors import (
+    AbiEntryCycleRecoveryExecutionNotReady,
     AbiEntryCycleRecoveryUnavailable,
     AbiEntryCycleRecoveryUnknownTradeCycleBinding,
 )
@@ -657,6 +658,7 @@ def test_corrective_cancel_identity_mismatch_fails_closed(
     "error",
     [
         AbiEntryCycleRecoveryUnavailable("boom"),
+        AbiEntryCycleRecoveryExecutionNotReady("locked"),
         AbiEntryCycleRecoveryUnknownTradeCycleBinding("no correlation record"),
     ],
 )

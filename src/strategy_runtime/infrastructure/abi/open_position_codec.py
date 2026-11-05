@@ -8,6 +8,7 @@ from strategy_runtime.infrastructure.abi.trade_cycle_closure_codec import (
     decode_optional_closure,
 )
 from strategy_runtime.runtime.open_position.errors import (
+    OpenPositionLookupExecutionNotReady,
     OpenPositionLookupProtocolError,
     OpenPositionLookupPublicError,
     OpenPositionLookupUnavailable,
@@ -48,6 +49,9 @@ def decode_open_position_response(
         raise OpenPositionLookupPublicError(
             status_code=status_code, code=code, message=message, details=details
         )
+    if status_code == 503:
+        _decode_internal_error_envelope(payload, expected_code="execution_not_ready")
+        raise OpenPositionLookupExecutionNotReady("ABI execution is not ready")
     if status_code == 500:
         _decode_internal_error_envelope(payload)
         raise OpenPositionLookupUnavailable("ABI open-position lookup unavailable: HTTP 500")
@@ -142,7 +146,9 @@ def _decode_validation_details(value: object) -> FrozenJsonValue:
     return frozen
 
 
-def _decode_internal_error_envelope(payload: object) -> None:
+def _decode_internal_error_envelope(
+    payload: object, *, expected_code: str = _INTERNAL_ERROR_CODE
+) -> None:
     try:
         envelope = _closed_object(payload, _ERROR_ENVELOPE_FIELDS, "error envelope")
         error = envelope["error"]
@@ -151,8 +157,8 @@ def _decode_internal_error_envelope(payload: object) -> None:
         error_object = cast("dict[str, object]", error)
         fields = _closed_object(error_object, _ERROR_OBJECT_FIELDS_WITHOUT_DETAILS, "error")
         code = _non_empty_string(fields["code"], "error.code")
-        if code != _INTERNAL_ERROR_CODE:
-            raise ValueError(f"undocumented 500 error code: {code!r}")
+        if code != expected_code:
+            raise ValueError(f"expected error code {expected_code!r}, got {code!r}")
         _non_empty_string(fields["message"], "error.message")
     except (KeyError, TypeError, ValueError) as exc:
         raise OpenPositionLookupProtocolError(

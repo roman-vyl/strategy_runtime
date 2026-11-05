@@ -22,7 +22,7 @@ def test_authoritative_abi_openapi_matches_runtime_client_contract() -> None:
         "strategy_instance_id": {"type": "string", "minLength": 1},
         "trade_cycle_id": {"type": "string", "minLength": 1},
     }
-    assert set(operation["responses"]) == {"200", "400", "415", "422", "500"}
+    assert set(operation["responses"]) == {"200", "400", "415", "422", "500", "503"}
 
     assert schemas["EntryPackageRequest"] == {
         "oneOf": [

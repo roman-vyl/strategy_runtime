@@ -41,7 +41,7 @@ def test_authoritative_abi_openapi_matches_runtime_client_contract() -> None:
         "strategy_instance_id": {"type": "string", "minLength": 1},
         "trade_cycle_id": {"type": "string", "minLength": 1},
     }
-    assert set(operation["responses"]) == {"200", "422", "500"}
+    assert set(operation["responses"]) == {"200", "422", "500", "503"}
 
     success = operation["responses"]["200"]["content"]["application/json"]["schema"]
     assert success == {"$ref": "#/components/schemas/RecoveryStateResponse"}
