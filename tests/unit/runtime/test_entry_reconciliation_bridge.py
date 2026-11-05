@@ -12,6 +12,7 @@ from strategy_runtime.runtime.abi.entry_package_models import (
     EntryPackageAbsent,
     EntryPackageApplied,
     EntryPackageDeclined,
+    EntryPackageExecutionNotReady,
     EntryPackageInternalError,
     EntryPackageRequest,
     EntryPackageResult,
@@ -29,6 +30,7 @@ from strategy_runtime.runtime.entry_reconciliation_bridge.bridge import (
 from strategy_runtime.runtime.entry_reconciliation_bridge.errors import (
     EntryReconciliationExecutionError,
 )
+from strategy_runtime.runtime.entry_reconciliation_orchestrator.ports import EntryExecutionNotReady
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
 from strategy_runtime.runtime.state.models import (
     RegisteredSpecSnapshot,
@@ -290,4 +292,14 @@ def test_declined_result_maps_to_declined_outcome_without_raising() -> None:
         decline_reason="margin_mode_not_supported",
         decline_message="marginMode ISOLATED_MARGIN",
     )
+    assert len(fake.requests) == 1
+
+
+def test_not_ready_maps_to_a_typed_port_refusal() -> None:
+    fake = FakeAbiEntryPackagePort(
+        result_factory=lambda _: EntryPackageExecutionNotReady(message="locked")
+    )
+    bridge = AbiEntryPackageExecutionBridge(fake)
+    with pytest.raises(EntryExecutionNotReady):
+        bridge.execute(make_command(desired_entry=make_desired_entry()), make_source_state())
     assert len(fake.requests) == 1

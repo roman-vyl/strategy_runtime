@@ -53,3 +53,9 @@ class PositionManagementExecutionPublicError(PositionManagementExecutionError):
         self.code = code
         self.message = message
         self.details = details
+
+
+class PositionManagementExecutionNotReady(PositionManagementExecutionUnavailable):
+    """ABI rejected this request before execution because it is not ready."""
+
+    code = "execution_not_ready"

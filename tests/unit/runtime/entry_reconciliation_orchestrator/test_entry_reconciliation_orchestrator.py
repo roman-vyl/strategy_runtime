@@ -21,6 +21,7 @@ from strategy_runtime.runtime.entry_reconciliation import (
 from strategy_runtime.runtime.entry_reconciliation_orchestrator import (
     EntryReconciliationOrchestrator,
 )
+from strategy_runtime.runtime.entry_reconciliation_orchestrator.ports import EntryExecutionNotReady
 from strategy_runtime.runtime.open_position.models import (
     PositionResolvedStrategyInstanceRuntimeState,
 )
@@ -1293,3 +1294,141 @@ def test_touch_trigger_requires_a_valid_lifetime_at_construction(lifetime: Any) 
             live_entry_mode="touch_trigger",
             order_lifetime_bars=lifetime,
         )
+
+
+@pytest.mark.parametrize("existing_entry", [None, desired_entry()])
+def test_not_ready_clears_only_this_attempt_and_preserves_its_source_state(
+    existing_entry: DesiredEntry | None,
+) -> None:
+    repository, state = seeded_repository(applied_entry=existing_entry)
+    port = ScriptedExecutionPort(EntryExecutionNotReady("locked"))
+    orchestrator = EntryReconciliationOrchestrator(RecordingIdFactory(), port, repository)
+
+    with pytest.raises(EntryExecutionNotReady):
+        orchestrator.execute(projection(state, None if existing_entry else desired_entry()))
+
+    assert repository.get("instance") == state
+    assert len(port.calls) == 1
+
+
+def test_not_ready_after_confirmed_replace_cancel_keeps_confirmed_absence() -> None:
+    repository, state = seeded_repository(applied_entry=desired_entry())
+    port = ScriptedExecutionPort(
+        EntryAbsentConfirmation("instance", "cycle-1"), EntryExecutionNotReady("locked")
+    )
+    orchestrator = EntryReconciliationOrchestrator(RecordingIdFactory(), port, repository)
+
+    with pytest.raises(EntryExecutionNotReady):
+        orchestrator.execute(projection(state, desired_entry(price="101")))
+
+    saved = repository.get("instance")
+    assert saved is not None
+    assert saved.current_trade_cycle is None
+    assert saved.pending_entry_recovery is None
+    assert len(port.calls) == 2
+
+
+def test_not_ready_on_replace_cancel_does_not_attempt_apply() -> None:
+    repository, state = seeded_repository(applied_entry=desired_entry())
+    port = ScriptedExecutionPort(EntryExecutionNotReady("locked"))
+    orchestrator = EntryReconciliationOrchestrator(RecordingIdFactory(), port, repository)
+
+    with pytest.raises(EntryExecutionNotReady):
+        orchestrator.execute(projection(state, desired_entry(price="101")))
+
+    assert repository.get("instance") == state
+    assert len(port.calls) == 1
+
+
+def test_timeout_keeps_pending_marker_for_the_existing_resolver() -> None:
+    repository, state = seeded_repository()
+    port = ScriptedExecutionPort(TimeoutError("lost response"))
+    orchestrator = EntryReconciliationOrchestrator(RecordingIdFactory(), port, repository)
+
+    with pytest.raises(TimeoutError):
+        orchestrator.execute(projection(state, desired_entry()))
+
+    saved = repository.get("instance")
+    assert saved is not None
+    assert saved.pending_entry_recovery == PendingEntryRecovery("cycle-new")
+
+
+def test_existing_pending_marker_cannot_be_overwritten() -> None:
+    repository, state = seeded_repository()
+    state = repository.save(replace(state, pending_entry_recovery=PendingEntryRecovery("old")))
+    port = ScriptedExecutionPort(EntryExecutionNotReady("locked"))
+    orchestrator = EntryReconciliationOrchestrator(RecordingIdFactory(), port, repository)
+
+    with pytest.raises(EntryReconciliationInvariantError):
+        orchestrator.execute(projection(state, desired_entry()))
+
+    assert repository.get("instance") == state
+    assert port.calls == []
+
+
+def test_not_ready_does_not_clear_a_marker_if_the_repository_changed() -> None:
+    repository, state = seeded_repository()
+    port = ScriptedExecutionPort(EntryExecutionNotReady("locked"))
+    original_execute = port.execute
+
+    def change_then_reject(
+        command: EntryReconciliationCommand, source_state: StrategyInstanceRuntimeState
+    ) -> SuccessfulEntryConfirmation:
+        repository.save(replace(state, pending_entry_recovery=PendingEntryRecovery("other")))
+        return original_execute(command, source_state)
+
+    port.execute = change_then_reject  # type: ignore[method-assign]
+    orchestrator = EntryReconciliationOrchestrator(RecordingIdFactory(), port, repository)
+    with pytest.raises(EntryReconciliationInvariantError):
+        orchestrator.execute(projection(state, desired_entry()))
+
+    saved = repository.get("instance")
+    assert saved is not None
+    assert saved.pending_entry_recovery == PendingEntryRecovery("other")
+
+
+def test_failed_marker_cleanup_is_not_reported_as_a_successful_refusal() -> None:
+    repository, state = seeded_repository()
+    original_save = repository.save
+    saves = 0
+
+    def fail_on_cleanup(value: StrategyInstanceRuntimeState) -> StrategyInstanceRuntimeState:
+        nonlocal saves
+        saves += 1
+        if saves == 2:
+            raise OSError("state write failed")
+        return original_save(value)
+
+    port = ScriptedExecutionPort(EntryExecutionNotReady("locked"))
+    orchestrator = EntryReconciliationOrchestrator(RecordingIdFactory(), port, repository)
+    with (
+        patch.object(repository, "save", side_effect=fail_on_cleanup),
+        pytest.raises(OSError, match="state write failed"),
+    ):
+        orchestrator.execute(projection(state, desired_entry()))
+
+    saved = repository.get("instance")
+    assert saved is not None
+    assert saved.pending_entry_recovery == PendingEntryRecovery("cycle-new")
+
+
+def test_next_reconciliation_uses_fresh_desired_state_after_not_ready() -> None:
+    repository, state = seeded_repository()
+    first = ScriptedExecutionPort(EntryExecutionNotReady("locked"))
+    with pytest.raises(EntryExecutionNotReady):
+        EntryReconciliationOrchestrator(
+            RecordingIdFactory("rejected-cycle"), first, repository
+        ).execute(projection(state, desired_entry()))
+
+    fresh = repository.get("instance")
+    assert fresh is not None
+    updated_entry = desired_entry(price="101")
+    second = ScriptedExecutionPort(replace_applied_confirmation(updated_entry, "fresh-cycle"))
+    result = EntryReconciliationOrchestrator(
+        RecordingIdFactory("fresh-cycle"), second, repository
+    ).execute(projection(fresh, updated_entry))
+
+    assert len(first.calls) == len(second.calls) == 1
+    assert second.calls[0][0].trade_cycle_id == "fresh-cycle"
+    assert second.calls[0][0].desired_entry == updated_entry
+    assert result.pending_entry_recovery is None

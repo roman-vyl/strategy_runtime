@@ -9,6 +9,7 @@ from strategy_runtime.runtime.abi.entry_package_models import (
     EntryPackageAbsent,
     EntryPackageApplied,
     EntryPackageDeclined,
+    EntryPackageExecutionNotReady,
     EntryPackagePublicError,
     EntryPackageRequest,
     EntryPackageWireDesiredEntry,
@@ -24,6 +25,7 @@ from strategy_runtime.runtime.entry_reconciliation.models import (
 from strategy_runtime.runtime.entry_reconciliation_bridge.errors import (
     EntryReconciliationExecutionError,
 )
+from strategy_runtime.runtime.entry_reconciliation_orchestrator.ports import EntryExecutionNotReady
 from strategy_runtime.runtime.recipes.entry import DesiredEntry
 from strategy_runtime.runtime.state.models import StrategyInstanceRuntimeState
 
@@ -85,6 +87,8 @@ class AbiEntryPackageExecutionBridge:
                 decline_reason=result.decline_reason,
                 decline_message=result.decline_message,
             )
+        if isinstance(result, EntryPackageExecutionNotReady):
+            raise EntryExecutionNotReady(result.message)
         if isinstance(result, EntryPackagePublicError):
             raise EntryReconciliationExecutionError(public_error=result)
         raise EntryReconciliationExecutionError(

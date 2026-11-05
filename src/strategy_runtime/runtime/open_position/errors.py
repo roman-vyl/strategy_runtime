@@ -43,3 +43,9 @@ class OpenPositionLookupPublicError(OpenPositionResolutionError):
         self.code = code
         self.message = message
         self.details = details
+
+
+class OpenPositionLookupExecutionNotReady(OpenPositionLookupUnavailable):
+    """ABI rejected this request before execution because it is not ready."""
+
+    code = "execution_not_ready"

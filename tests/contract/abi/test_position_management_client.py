@@ -9,6 +9,7 @@ from strategy_runtime.infrastructure.abi.http_position_management import (
 )
 from strategy_runtime.runtime.position_management_execution.errors import (
     PositionManagementExecutionNetworkFailure,
+    PositionManagementExecutionNotReady,
     PositionManagementExecutionProtocolError,
     PositionManagementExecutionPublicError,
     PositionManagementExecutionTimeout,
@@ -801,3 +802,21 @@ def test_cancel_entry_remainder_timeout_and_network_failure_are_typed_and_not_re
     with pytest.raises(PositionManagementExecutionNetworkFailure):
         cancel_entry_remainder(down)
     assert len(down.requests) == 1
+
+
+@pytest.mark.parametrize("operation", ["protection", "close", "remainder"])
+def test_503_execution_not_ready_never_confirms_position_management(operation: str) -> None:
+    fake = FakeAbi(
+        lambda _: json_response(
+            503, {"error": {"code": "execution_not_ready", "message": "locked"}}
+        )
+    )
+    with pytest.raises(PositionManagementExecutionNotReady):
+        if operation == "protection":
+            apply_protection(fake, make_protection_command())
+        elif operation == "close":
+            close_position(fake, make_close_command())
+        else:
+            cancel_entry_remainder(fake)
+    assert len(fake.requests) == 1
+    assert issubclass(PositionManagementExecutionNotReady, PositionManagementExecutionUnavailable)

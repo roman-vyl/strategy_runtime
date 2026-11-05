@@ -17,6 +17,7 @@ from strategy_runtime.runtime.abi.entry_package_models import (
     EntryPackageAbsent,
     EntryPackageApplied,
     EntryPackageDeclined,
+    EntryPackageExecutionNotReady,
     EntryPackageInternalError,
     EntryPackageMalformedJson,
     EntryPackageRequest,
@@ -697,3 +698,29 @@ def test_declined_with_undocumented_2xx_does_not_acknowledge() -> None:
 
     with pytest.raises(AbiEntryPackageProtocolError):
         send(fake, request)
+
+
+def test_503_execution_not_ready_is_a_definite_pre_execution_refusal() -> None:
+    fake = FakeAbi(
+        lambda _: json_response(
+            503, {"error": {"code": "execution_not_ready", "message": "ABI is locked"}}
+        )
+    )
+    result = send(fake, make_request())
+    assert result == EntryPackageExecutionNotReady(message="ABI is locked")
+    assert len(fake.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"error": {"code": "internal_error", "message": "locked"}},
+        {"error": {"code": "execution_not_ready", "message": ""}},
+        {"error": {"code": "execution_not_ready", "message": "locked", "details": []}},
+        {"error": {"code": "execution_not_ready", "message": "locked"}, "extra": True},
+    ],
+)
+def test_503_requires_the_exact_definite_refusal_envelope(body: object) -> None:
+    fake = FakeAbi(lambda _: json_response(503, body))
+    with pytest.raises(AbiEntryPackageProtocolError):
+        send(fake, make_request())

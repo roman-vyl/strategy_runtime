@@ -7,6 +7,7 @@ from strategy_runtime.infrastructure.abi.http_open_position import (
     HttpxAbiOpenPositionLookupAdapter,
 )
 from strategy_runtime.runtime.open_position.errors import (
+    OpenPositionLookupExecutionNotReady,
     OpenPositionLookupNetworkFailure,
     OpenPositionLookupProtocolError,
     OpenPositionLookupPublicError,
@@ -636,3 +637,15 @@ def json_response(status_code: int, body: object) -> httpx.Response:
         json=body,
         headers={"content-type": "application/json; charset=utf-8"},
     )
+
+
+def test_503_execution_not_ready_is_lookup_unavailability_not_a_closed_position() -> None:
+    fake = FakeAbi(
+        lambda _: json_response(
+            503, {"error": {"code": "execution_not_ready", "message": "locked"}}
+        )
+    )
+    with pytest.raises(OpenPositionLookupExecutionNotReady):
+        lookup(fake, make_request())
+    assert len(fake.requests) == 1
+    assert issubclass(OpenPositionLookupExecutionNotReady, OpenPositionLookupUnavailable)
